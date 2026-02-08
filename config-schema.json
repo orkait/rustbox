@@ -1,0 +1,640 @@
+{
+	"$schema": "http://json-schema.org/draft-04/schema#",
+	"type": "object",
+	"properties": {
+		"isolate": {
+			"type": "object",
+			"properties": {
+				"box_dir": {
+					"type": "string"
+				},
+				"run_dir": {
+					"type": "string"
+				},
+				"user": {
+					"type": "string"
+				},
+				"group": {
+					"type": "string"
+				},
+				"preserve_env": {
+					"type": "array",
+					"items": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "string"
+						},
+						{
+							"type": "string"
+						}
+					]
+				}
+			},
+			"required": ["box_dir", "run_dir", "user", "group", "preserve_env"]
+		},
+		"syscalls": {
+			"type": "object",
+			"properties": {
+				"allow_fork": {
+					"type": "boolean"
+				},
+				"allow_exec": {
+					"type": "boolean"
+				},
+				"allow_clone": {
+					"type": "boolean"
+				},
+				"allow_network": {
+					"type": "boolean"
+				},
+				"allow_filesystem_write": {
+					"type": "boolean"
+				},
+				"allow_ptrace": {
+					"type": "boolean"
+				},
+				"allow_mount": {
+					"type": "boolean"
+				},
+				"blocked_syscalls": {
+					"type": "array",
+					"items": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "string"
+						},
+						{
+							"type": "string"
+						},
+						{
+							"type": "string"
+						},
+						{
+							"type": "string"
+						}
+					]
+				}
+			},
+			"required": [
+				"allow_fork",
+				"allow_exec",
+				"allow_clone",
+				"allow_network",
+				"allow_filesystem_write",
+				"allow_ptrace",
+				"allow_mount",
+				"blocked_syscalls"
+			]
+		},
+		"security": {
+			"type": "object",
+			"properties": {
+				"drop_capabilities": {
+					"type": "boolean"
+				},
+				"use_seccomp": {
+					"type": "boolean"
+				},
+				"use_namespaces": {
+					"type": "boolean"
+				},
+				"use_cgroups": {
+					"type": "boolean"
+				},
+				"no_new_privileges": {
+					"type": "boolean"
+				},
+				"chroot_jail": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"drop_capabilities",
+				"use_seccomp",
+				"use_namespaces",
+				"use_cgroups",
+				"no_new_privileges",
+				"chroot_jail"
+			]
+		},
+		"languages": {
+			"type": "object",
+			"properties": {
+				"python": {
+					"type": "object",
+					"properties": {
+						"memory": {
+							"type": "object",
+							"properties": {
+								"limit_mb": {
+									"type": "integer"
+								},
+								"limit_kb": {
+									"type": "integer"
+								}
+							},
+							"required": ["limit_mb", "limit_kb"]
+						},
+						"time": {
+							"type": "object",
+							"properties": {
+								"cpu_time_seconds": {
+									"type": "integer"
+								},
+								"wall_time_seconds": {
+									"type": "integer"
+								}
+							},
+							"required": ["cpu_time_seconds", "wall_time_seconds"]
+						},
+						"processes": {
+							"type": "object",
+							"properties": {
+								"max_processes": {
+									"type": "integer"
+								},
+								"max_forks": {
+									"type": "integer"
+								}
+							},
+							"required": ["max_processes", "max_forks"]
+						},
+						"filesystem": {
+							"type": "object",
+							"properties": {
+								"max_file_size_kb": {
+									"type": "integer"
+								},
+								"max_open_files": {
+									"type": "integer"
+								},
+								"additional_read_only_paths": {
+									"type": "array",
+									"items": [
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										}
+									]
+								},
+								"required_binaries": {
+									"type": "array",
+									"items": [
+										{
+											"type": "string"
+										}
+									]
+								}
+							},
+							"required": [
+								"max_file_size_kb",
+								"max_open_files",
+								"additional_read_only_paths",
+								"required_binaries"
+							]
+						},
+						"syscalls": {
+							"type": "object",
+							"properties": {
+								"allow_exec": {
+									"type": "boolean"
+								},
+								"additional_blocked_syscalls": {
+									"type": "array",
+									"items": [
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										}
+									]
+								}
+							},
+							"required": ["allow_exec", "additional_blocked_syscalls"]
+						},
+						"environment": {
+							"type": "object",
+							"properties": {
+								"PYTHONPATH": {
+									"type": "string"
+								},
+								"PYTHONDONTWRITEBYTECODE": {
+									"type": "string"
+								},
+								"PYTHONUNBUFFERED": {
+									"type": "string"
+								}
+							},
+							"required": [
+								"PYTHONPATH",
+								"PYTHONDONTWRITEBYTECODE",
+								"PYTHONUNBUFFERED"
+							]
+						},
+						"compilation": {
+							"type": "object",
+							"properties": {
+								"enabled": {
+									"type": "boolean"
+								},
+								"compiler": {
+									"type": "string"
+								},
+								"compiler_args": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								},
+								"max_compilation_time": {
+									"type": "integer"
+								},
+								"max_compilation_memory_mb": {
+									"type": "integer"
+								}
+							},
+							"required": [
+								"enabled",
+								"compiler",
+								"compiler_args",
+								"max_compilation_time",
+								"max_compilation_memory_mb"
+							]
+						}
+					},
+					"required": [
+						"memory",
+						"time",
+						"processes",
+						"filesystem",
+						"syscalls",
+						"environment",
+						"compilation"
+					]
+				},
+				"java": {
+					"type": "object",
+					"properties": {
+						"memory": {
+							"type": "object",
+							"properties": {
+								"limit_mb": {
+									"type": "integer"
+								},
+								"limit_kb": {
+									"type": "integer"
+								}
+							},
+							"required": ["limit_mb", "limit_kb"]
+						},
+						"time": {
+							"type": "object",
+							"properties": {
+								"cpu_time_seconds": {
+									"type": "integer"
+								},
+								"wall_time_seconds": {
+									"type": "integer"
+								}
+							},
+							"required": ["cpu_time_seconds", "wall_time_seconds"]
+						},
+						"processes": {
+							"type": "object",
+							"properties": {
+								"max_processes": {
+									"type": "integer"
+								},
+								"max_threads": {
+									"type": "integer"
+								},
+								"max_forks": {
+									"type": "integer"
+								}
+							},
+							"required": ["max_processes", "max_threads", "max_forks"]
+						},
+						"filesystem": {
+							"type": "object",
+							"properties": {
+								"max_file_size_kb": {
+									"type": "integer"
+								},
+								"max_open_files": {
+									"type": "integer"
+								},
+								"additional_read_only_paths": {
+									"type": "array",
+									"items": [
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										}
+									]
+								},
+								"required_binaries": {
+									"type": "array",
+									"items": [
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										}
+									]
+								}
+							},
+							"required": [
+								"max_file_size_kb",
+								"max_open_files",
+								"additional_read_only_paths",
+								"required_binaries"
+							]
+						},
+						"syscalls": {
+							"type": "object",
+							"properties": {
+								"allow_exec": {
+									"type": "boolean"
+								},
+								"allow_clone": {
+									"type": "boolean"
+								},
+								"additional_allowed_syscalls": {
+									"type": "array",
+									"items": [
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										}
+									]
+								}
+							},
+							"required": ["allow_exec", "allow_clone", "additional_allowed_syscalls"]
+						},
+						"environment": {
+							"type": "object",
+							"properties": {
+								"JAVA_HOME": {
+									"type": "string"
+								},
+								"CLASSPATH": {
+									"type": "string"
+								},
+								"JAVA_TOOL_OPTIONS": {
+									"type": "string"
+								}
+							},
+							"required": ["JAVA_HOME", "CLASSPATH", "JAVA_TOOL_OPTIONS"]
+						},
+						"compilation": {
+							"type": "object",
+							"properties": {
+								"enabled": {
+									"type": "boolean"
+								},
+								"compiler": {
+									"type": "string"
+								},
+								"compiler_args": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								},
+								"max_compilation_time": {
+									"type": "integer"
+								},
+								"max_compilation_memory_mb": {
+									"type": "integer"
+								}
+							},
+							"required": [
+								"enabled",
+								"compiler",
+								"compiler_args",
+								"max_compilation_time",
+								"max_compilation_memory_mb"
+							]
+						}
+					},
+					"required": [
+						"memory",
+						"time",
+						"processes",
+						"filesystem",
+						"syscalls",
+						"environment",
+						"compilation"
+					]
+				},
+				"cpp": {
+					"type": "object",
+					"properties": {
+						"memory": {
+							"type": "object",
+							"properties": {
+								"limit_mb": {
+									"type": "integer"
+								},
+								"limit_kb": {
+									"type": "integer"
+								}
+							},
+							"required": ["limit_mb", "limit_kb"]
+						},
+						"time": {
+							"type": "object",
+							"properties": {
+								"cpu_time_seconds": {
+									"type": "integer"
+								},
+								"wall_time_seconds": {
+									"type": "integer"
+								},
+								"compilation_time_seconds": {
+									"type": "integer"
+								}
+							},
+							"required": [
+								"cpu_time_seconds",
+								"wall_time_seconds",
+								"compilation_time_seconds"
+							]
+						},
+						"processes": {
+							"type": "object",
+							"properties": {
+								"max_processes": {
+									"type": "integer"
+								},
+								"max_forks": {
+									"type": "integer"
+								}
+							},
+							"required": ["max_processes", "max_forks"]
+						},
+						"filesystem": {
+							"type": "object",
+							"properties": {
+								"max_file_size_kb": {
+									"type": "integer"
+								},
+								"max_open_files": {
+									"type": "integer"
+								},
+								"additional_read_only_paths": {
+									"type": "array",
+									"items": [
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										}
+									]
+								},
+								"required_binaries": {
+									"type": "array",
+									"items": [
+										{
+											"type": "string"
+										},
+										{
+											"type": "string"
+										}
+									]
+								},
+								"compilation_output_limit_kb": {
+									"type": "integer"
+								}
+							},
+							"required": [
+								"max_file_size_kb",
+								"max_open_files",
+								"additional_read_only_paths",
+								"required_binaries",
+								"compilation_output_limit_kb"
+							]
+						},
+						"syscalls": {
+							"type": "object",
+							"properties": {
+								"allow_exec": {
+									"type": "boolean"
+								},
+								"compilation_syscalls": {
+									"type": "object",
+									"properties": {
+										"allow_fork": {
+											"type": "boolean"
+										},
+										"allow_exec": {
+											"type": "boolean"
+										},
+										"additional_allowed_syscalls": {
+											"type": "array",
+											"items": [
+												{
+													"type": "string"
+												},
+												{
+													"type": "string"
+												},
+												{
+													"type": "string"
+												}
+											]
+										}
+									},
+									"required": [
+										"allow_fork",
+										"allow_exec",
+										"additional_allowed_syscalls"
+									]
+								}
+							},
+							"required": ["allow_exec", "compilation_syscalls"]
+						},
+						"environment": {
+							"type": "object",
+							"properties": {
+								"PATH": {
+									"type": "string"
+								},
+								"CFLAGS": {
+									"type": "string"
+								},
+								"CXXFLAGS": {
+									"type": "string"
+								}
+							},
+							"required": ["PATH", "CFLAGS", "CXXFLAGS"]
+						},
+						"compilation": {
+							"type": "object",
+							"properties": {
+								"enabled": {
+									"type": "boolean"
+								},
+								"compiler": {
+									"type": "string"
+								},
+								"compiler_args": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									}
+								},
+								"max_compilation_time": {
+									"type": "integer"
+								},
+								"max_compilation_memory_mb": {
+									"type": "integer"
+								}
+							},
+							"required": [
+								"enabled",
+								"compiler",
+								"compiler_args",
+								"max_compilation_time",
+								"max_compilation_memory_mb"
+							]
+						}
+					},
+					"required": [
+						"memory",
+						"time",
+						"processes",
+						"filesystem",
+						"syscalls",
+						"environment",
+						"compilation"
+					]
+				}
+			},
+			"required": ["python", "java", "cpp"]
+		}
+	},
+	"required": ["isolate", "syscalls", "security", "languages"]
+}
