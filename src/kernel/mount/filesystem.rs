@@ -471,6 +471,8 @@ impl FilesystemSecurity {
     #[cfg(unix)]
     fn mount_hardened_procfs(&self, proc_path: &Path) -> Result<()> {
         let mount_flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
+        let hidepid_opts = std::ffi::CString::new("hidepid=2")
+            .map_err(|e| IsolateError::Config(format!("Invalid proc mount options: {}", e)))?;
 
         let source_cstr = std::ffi::CString::new("proc")
             .map_err(|e| IsolateError::Config(format!("Invalid source string: {}", e)))?;
@@ -485,7 +487,7 @@ impl FilesystemSecurity {
                 target_cstr.as_ptr(),
                 fstype_cstr.as_ptr(),
                 mount_flags,
-                std::ptr::null(),
+                hidepid_opts.as_ptr() as *const libc::c_void,
             )
         };
 
@@ -493,14 +495,36 @@ impl FilesystemSecurity {
             let errno = unsafe { *libc::__errno_location() };
             if self.strict_mode {
                 return Err(IsolateError::Config(format!(
-                    "Failed to mount hardened procfs: errno {}",
+                    "Failed to mount hardened procfs with hidepid=2: errno {}",
                     errno
                 )));
             } else {
-                log::warn!("Failed to mount hardened procfs: errno {}", errno);
+                log::warn!(
+                    "Failed to mount hardened procfs with hidepid=2 (permissive mode): errno {}. Retrying without hidepid.",
+                    errno
+                );
+                let fallback = unsafe {
+                    libc::mount(
+                        source_cstr.as_ptr(),
+                        target_cstr.as_ptr(),
+                        fstype_cstr.as_ptr(),
+                        mount_flags,
+                        std::ptr::null(),
+                    )
+                };
+                if fallback != 0 {
+                    let fallback_errno = unsafe { *libc::__errno_location() };
+                    log::warn!(
+                        "Failed to mount fallback procfs in permissive mode: errno {}",
+                        fallback_errno
+                    );
+                }
             }
         } else {
-            log::info!("Mounted hardened procfs at {}", proc_path.display());
+            log::info!(
+                "Mounted hardened procfs with hidepid=2 at {}",
+                proc_path.display()
+            );
         }
 
         Ok(())
