@@ -389,7 +389,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                     let output_config =
                         build_overridden_config(isolate.config(), cpu, mem, time, wall_time, None, processes);
                     let launch_evidence = isolate.take_last_launch_evidence();
-                    emit_judge_json(
+                    let reported_status = emit_judge_json(
                         &result,
                         &output_config,
                         Some("python"),
@@ -427,7 +427,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                         Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
                     }
 
-                    if !result.success {
+                    if reported_status != crate::config::types::ExecutionStatus::Ok {
                         std::process::exit(1);
                     }
                 } else {
@@ -538,7 +538,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                     let output_config =
                         build_overridden_config(isolate.config(), cpu, mem, time, wall_time, None, processes);
                     let launch_evidence = isolate.take_last_launch_evidence();
-                    emit_judge_json(
+                    let reported_status = emit_judge_json(
                         &result,
                         &output_config,
                         Some(language),
@@ -576,7 +576,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                         Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
                     }
 
-                    if !result.success {
+                    if reported_status != crate::config::types::ExecutionStatus::Ok {
                         std::process::exit(1);
                     }
                 } else if std::path::Path::new(command_arg).exists() {
@@ -608,7 +608,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                     let output_config =
                         build_overridden_config(isolate.config(), cpu, mem, time, wall_time, None, processes);
                     let launch_evidence = isolate.take_last_launch_evidence();
-                    emit_judge_json(
+                    let reported_status = emit_judge_json(
                         &result,
                         &output_config,
                         Some(language),
@@ -646,7 +646,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                         Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
                     }
 
-                    if !result.success {
+                    if reported_status != crate::config::types::ExecutionStatus::Ok {
                         std::process::exit(1);
                     }
                 } else {
@@ -672,7 +672,8 @@ pub fn run(mode: CliMode) -> Result<()> {
                 let output_config =
                     build_overridden_config(isolate.config(), cpu, mem, time, wall_time, None, processes);
                 let launch_evidence = isolate.take_last_launch_evidence();
-                emit_judge_json(&result, &output_config, None, launch_evidence.as_ref())?;
+                let reported_status =
+                    emit_judge_json(&result, &output_config, None, launch_evidence.as_ref())?;
 
                 // Automatic cleanup after execution (multiple arguments path)
                 let cleanup_result = isolate.cleanup();
@@ -705,7 +706,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                     Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
                 }
 
-                if !result.success {
+                if reported_status != crate::config::types::ExecutionStatus::Ok {
                     std::process::exit(1);
                 }
             }
@@ -850,14 +851,14 @@ pub fn run(mode: CliMode) -> Result<()> {
             );
 
             let launch_evidence = isolate.take_last_launch_evidence();
-            emit_judge_json(
+            let reported_status = emit_judge_json(
                 &result,
                 &output_config,
                 Some(&language),
                 launch_evidence.as_ref(),
             )?;
 
-            if !result.success {
+            if reported_status != crate::config::types::ExecutionStatus::Ok {
                 std::process::exit(1);
             }
 
@@ -973,7 +974,7 @@ fn emit_judge_json(
     config: &crate::config::types::IsolateConfig,
     language_runtime_envelope: Option<&str>,
     launch_evidence: Option<&crate::core::types::LaunchEvidence>,
-) -> Result<()> {
+) -> Result<crate::config::types::ExecutionStatus> {
     let evidence = launch_evidence.ok_or_else(|| {
         anyhow::anyhow!(
             "Missing runtime launch evidence; refusing to emit static capability claims"
@@ -985,13 +986,14 @@ fn emit_judge_json(
     let judge_result = crate::utils::json_schema::JudgeResultV1::from_execution_result(
         result,
         config,
+        evidence,
         capability_report,
         envelope_id,
         language_runtime_envelope.map(|s| s.to_string()),
     );
 
     println!("{}", judge_result.to_json()?);
-    Ok(())
+    Ok(judge_result.status)
 }
 
 /// Perform comprehensive security subsystem checks

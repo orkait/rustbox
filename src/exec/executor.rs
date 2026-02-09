@@ -1,11 +1,12 @@
+use crate::config::types::{ExecutionResult, IsolateConfig, IsolateError, Result};
+use crate::config::validator::validate_config;
+use crate::core::types::{LaunchEvidence, SandboxLaunchRequest};
 /// Process execution and monitoring with reliable resource limits
 use crate::kernel::cgroup::backend::{self, CgroupBackend};
 use crate::kernel::mount::filesystem::FilesystemSecurity;
 use crate::legacy::security::command_validation;
 use crate::observability::audit::events;
-use crate::config::validator::validate_config;
-use crate::config::types::{ExecutionResult, IsolateConfig, IsolateError, Result};
-use crate::core::types::{LaunchEvidence, SandboxLaunchRequest};
+use crate::safety::cleanup::BaselineChecker;
 use std::path::PathBuf;
 
 /// Process executor that handles isolation and monitoring with focus on reliability
@@ -13,6 +14,8 @@ pub struct ProcessExecutor {
     config: IsolateConfig,
     cgroup: Option<Box<dyn CgroupBackend>>,
     last_launch_evidence: Option<LaunchEvidence>,
+    baseline_checker: Option<BaselineChecker>,
+    baseline_capture_error: Option<String>,
 }
 
 impl ProcessExecutor {
@@ -35,13 +38,18 @@ impl ProcessExecutor {
         // Syscall filtering is explicit opt-in and currently fail-closed until
         // seccomp-bpf installation is fully implemented.
         if config.enable_syscall_filtering {
-            let msg =
-                "Syscall filtering requested but seccomp-bpf installation is not implemented";
+            let msg = "Syscall filtering requested but seccomp-bpf installation is not implemented";
             if config.strict_mode {
                 return Err(IsolateError::Privilege(msg.to_string()));
             }
             return Err(IsolateError::Config(format!("{} (permissive mode)", msg)));
         }
+
+        // Capture host-clean baseline before creating execution-time resources.
+        let (baseline_checker, baseline_capture_error) = match BaselineChecker::capture_baseline() {
+            Ok(checker) => (Some(checker), None),
+            Err(err) => (None, Some(err.to_string())),
+        };
 
         let cgroup = match backend::create_cgroup_backend(
             config.force_cgroup_v1,
@@ -50,7 +58,10 @@ impl ProcessExecutor {
         ) {
             Ok(cgroup) => {
                 if let Err(e) = cgroup.create(&config.instance_id) {
-                    eprintln!("Failed to create cgroup instance '{}': {:?}", config.instance_id, e);
+                    eprintln!(
+                        "Failed to create cgroup instance '{}': {:?}",
+                        config.instance_id, e
+                    );
                     if config.strict_mode {
                         return Err(e);
                     }
@@ -92,6 +103,8 @@ impl ProcessExecutor {
             config,
             cgroup,
             last_launch_evidence: None,
+            baseline_checker,
+            baseline_capture_error,
         })
     }
 
@@ -192,11 +205,44 @@ impl ProcessExecutor {
                 .map(|cg| cg.get_cgroup_path(&self.config.instance_id)),
         );
 
-        let outcome = crate::core::supervisor::launch_with_supervisor(
-            request,
-            self.cgroup.as_deref(),
-        )?;
-        self.last_launch_evidence = Some(outcome.evidence.clone());
+        let outcome =
+            crate::core::supervisor::launch_with_supervisor(request, self.cgroup.as_deref())?;
+        let mut evidence = outcome.evidence.clone();
+        let mut cleanup_verified = true;
+
+        if let Some(err) = self.baseline_capture_error.take() {
+            cleanup_verified = false;
+            evidence
+                .evidence_collection_errors
+                .push(format!("baseline_capture: {err}"));
+        }
+
+        if let Err(err) = self.cleanup() {
+            cleanup_verified = false;
+            evidence
+                .evidence_collection_errors
+                .push(format!("executor_cleanup: {err}"));
+        }
+
+        match self.baseline_checker.take() {
+            Some(checker) => {
+                if let Err(err) = checker.verify_baseline() {
+                    cleanup_verified = false;
+                    evidence
+                        .evidence_collection_errors
+                        .push(format!("baseline_verification: {err}"));
+                }
+            }
+            None => cleanup_verified = false,
+        }
+
+        evidence.cleanup_verified = cleanup_verified;
+        if !cleanup_verified {
+            evidence.process_lifecycle.descendant_containment =
+                "baseline_verification_failed".to_string();
+        }
+
+        self.last_launch_evidence = Some(evidence);
         Ok(outcome.result)
     }
 

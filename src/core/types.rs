@@ -1,5 +1,6 @@
 use crate::config::types::{
-    CapabilityReport, ExecutionResult, JudgeAction, PidfdMode, SecurityMode, SyscallFilterSource,
+    CapabilityReport, CgroupEvidence, ExecutionResult, JudgeAction, PidfdMode,
+    ProcessLifecycleEvidence, SecurityMode, SyscallFilterSource,
 };
 use crate::config::types::{ExecutionStatus, IsolateConfig};
 use serde::{Deserialize, Serialize};
@@ -32,7 +33,11 @@ pub struct ExecutionProfile {
 }
 
 impl ExecutionProfile {
-    pub fn from_config(config: &IsolateConfig, command: &[String], stdin_data: Option<&str>) -> Self {
+    pub fn from_config(
+        config: &IsolateConfig,
+        command: &[String],
+        stdin_data: Option<&str>,
+    ) -> Self {
         Self {
             command: command.to_vec(),
             stdin_data: stdin_data.map(str::to_string),
@@ -117,6 +122,9 @@ pub struct LaunchEvidence {
     pub syscall_filtering_source: SyscallFilterSource,
     pub syscall_filtering_profile_id: Option<String>,
     pub judge_actions: Vec<JudgeAction>,
+    pub cgroup_evidence: Option<CgroupEvidence>,
+    pub process_lifecycle: ProcessLifecycleEvidence,
+    pub evidence_collection_errors: Vec<String>,
     pub cleanup_verified: bool,
 }
 

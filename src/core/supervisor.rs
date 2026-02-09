@@ -1,9 +1,12 @@
-use crate::config::types::{ExecutionStatus, IsolateError, JudgeAction, JudgeActionType, Result};
-use crate::kernel::cgroup::backend::CgroupBackend;
+use crate::config::types::{
+    CgroupEvidence, ExecutionStatus, IsolateError, JudgeAction, JudgeActionType,
+    ProcessLifecycleEvidence, Result,
+};
 use crate::core::proxy::{read_proxy_status_from_fd, run_proxy_main_from_fds, write_request_to_fd};
 use crate::core::types::{
     KillReport, LaunchEvidence, ProxyStatus, SandboxLaunchOutcome, SandboxLaunchRequest,
 };
+use crate::kernel::cgroup::backend::CgroupBackend;
 use nix::sched::{clone, CloneFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, pipe, Pid};
@@ -21,15 +24,17 @@ fn detect_pidfd_mode() -> crate::config::types::PidfdMode {
         const SYS_PIDFD_OPEN: libc::c_long = 434;
         let self_pid = std::process::id() as i32;
         let pidfd = unsafe { libc::syscall(SYS_PIDFD_OPEN, self_pid, 0) as i32 };
-        
+
         if pidfd >= 0 {
-            unsafe { libc::close(pidfd); }
+            unsafe {
+                libc::close(pidfd);
+            }
             crate::config::types::PidfdMode::Native
         } else {
             crate::config::types::PidfdMode::Fallback
         }
     }
-    
+
     #[cfg(not(target_os = "linux"))]
     {
         crate::config::types::PidfdMode::Fallback
@@ -69,6 +74,10 @@ fn build_launch_evidence(
     cgroup_enforced: bool,
     timed_out: bool,
     kill_report: Option<&KillReport>,
+    proxy_status: &ProxyStatus,
+    cgroup_evidence: Option<CgroupEvidence>,
+    evidence_collection_errors: Vec<String>,
+    cleanup_verified: bool,
 ) -> LaunchEvidence {
     let configured = build_configured_controls(req);
     let mut applied = Vec::new();
@@ -95,6 +104,20 @@ fn build_launch_evidence(
         applied.push("process_lifecycle".to_string());
     }
 
+    let process_lifecycle = ProcessLifecycleEvidence {
+        reap_summary: if proxy_status.reaped_descendants == 0 {
+            "clean".to_string()
+        } else {
+            format!("reaped_{}_descendants", proxy_status.reaped_descendants)
+        },
+        descendant_containment: if cleanup_verified {
+            "ok".to_string()
+        } else {
+            "baseline_verification_failed".to_string()
+        },
+        zombie_count: 0,
+    };
+
     let mode_decision_reason = if req.profile.strict_mode && !missing.is_empty() {
         format!(
             "Strict mode requested but mandatory controls missing: {}",
@@ -103,7 +126,10 @@ fn build_launch_evidence(
     } else if missing.is_empty() {
         "All configured controls applied".to_string()
     } else {
-        format!("Execution degraded; missing controls: {}", missing.join(", "))
+        format!(
+            "Execution degraded; missing controls: {}",
+            missing.join(", ")
+        )
     };
 
     let unsafe_execution_reason = if missing.is_empty() {
@@ -160,7 +186,10 @@ fn build_launch_evidence(
             None
         },
         judge_actions,
-        cleanup_verified: true,
+        cgroup_evidence,
+        process_lifecycle,
+        evidence_collection_errors,
+        cleanup_verified,
     }
 }
 
@@ -207,11 +236,16 @@ pub fn launch_with_supervisor(
         return Err(IsolateError::Config("empty command".to_string()));
     }
 
-    if req.profile.strict_mode && req.profile.enable_pid_namespace && unsafe { libc::geteuid() } != 0 {
+    if req.profile.strict_mode
+        && req.profile.enable_pid_namespace
+        && unsafe { libc::geteuid() } != 0
+    {
         return Err(IsolateError::Privilege(
             "strict pid namespace launch requires root".to_string(),
         ));
     }
+
+    let mut evidence_collection_errors = Vec::new();
 
     let (launch_read, launch_write) = pipe().map_err(|e| to_process_error("pipe(launch)", e))?;
     let (status_read, status_write) = pipe().map_err(|e| to_process_error("pipe(status)", e))?;
@@ -247,7 +281,9 @@ pub fn launch_with_supervisor(
                 return Err(e);
             }
         }
-    } else if req.profile.strict_mode && (req.profile.memory_limit.is_some() || req.profile.process_limit.is_some()) {
+    } else if req.profile.strict_mode
+        && (req.profile.memory_limit.is_some() || req.profile.process_limit.is_some())
+    {
         let _ = terminate_proxy_group(proxy_pid);
         return Err(IsolateError::Cgroup(
             "strict mode requires cgroup limits for configured memory/process controls".to_string(),
@@ -313,6 +349,7 @@ pub fn launch_with_supervisor(
         result.success = false;
     }
 
+    let mut cgroup_evidence = None;
     if let Some(controller) = cgroup {
         if let Ok(cpu_usec) = controller.get_cpu_usage() {
             result.cpu_time = cpu_usec as f64 / 1_000_000.0;
@@ -320,11 +357,25 @@ pub fn launch_with_supervisor(
         if let Ok(mem_peak) = controller.get_memory_peak() {
             result.memory_peak = mem_peak;
         }
+        match controller.collect_evidence(&req.instance_id) {
+            Ok(evidence) => cgroup_evidence = Some(evidence),
+            Err(err) => evidence_collection_errors.push(format!("cgroup_evidence: {}", err)),
+        }
     }
 
     let running_as_root = unsafe { libc::geteuid() } == 0;
     let cgroup_enforced = cgroup.is_some();
-    let evidence = build_launch_evidence(&req, running_as_root, cgroup_enforced, timed_out, kill_report.as_ref());
+    let evidence = build_launch_evidence(
+        &req,
+        running_as_root,
+        cgroup_enforced,
+        timed_out,
+        kill_report.as_ref(),
+        &status,
+        cgroup_evidence,
+        evidence_collection_errors,
+        true,
+    );
 
     Ok(SandboxLaunchOutcome {
         proxy_host_pid: proxy_pid.as_raw(),

@@ -247,3 +247,35 @@ Runtime smoke check status (timeout/fork-bomb containment):
 - Blocked in this environment due missing root privileges and non-interactive sudo (`clone(proxy): EPERM`).
 - Strict containment smoke requires root-capable run context; current runner is non-root and cannot provide passwordless sudo.
 - Added root-required harness: `scripts/smoke/phase2_containment_smoke.sh`.
+
+## 11) Phase-3 Verdict/Evidence Truthfulness Progress (2026-02-09)
+
+Phase 3 implementation updates:
+
+1. Runtime verdict now derives from `VerdictClassifier`.
+- `src/utils/json_schema.rs` no longer maps status heuristically.
+- `JudgeResultV1::from_execution_result(...)` now builds `EvidenceBundle` and calls `VerdictClassifier::classify(...)`.
+- CLI exit code paths were aligned to emitted judge status rather than `result.success` shortcut.
+
+2. `EvidenceBundle` now uses runtime artifacts end-to-end.
+- Wait outcome comes from actual proxy/payload termination (`exit_code`, `signal`).
+- Judge actions come from launch evidence.
+- Cgroup evidence is collected from active backend (`collect_evidence`) in `src/core/supervisor.rs`.
+- Process lifecycle evidence is carried through launch evidence and consumed by JSON classification path.
+
+3. Cleanup verification now drives IE escalation from runtime evidence.
+- `src/exec/executor.rs` captures host baseline before execution resources are created.
+- Post-run, executor performs cgroup cleanup first, then baseline verification.
+- Launch evidence is updated with:
+  - `cleanup_verified`
+  - `process_lifecycle.descendant_containment = baseline_verification_failed` on mismatch
+  - explicit evidence collection errors (`baseline_capture`, `executor_cleanup`, `baseline_verification`)
+- `src/verdict/verdict.rs` classifies non-`ok` descendant containment as `IE` with `ie_cleanup_failure`.
+
+WSL validation after Phase-3 updates:
+- `cargo build -q` -> PASS
+- `cargo test --all -q` -> PASS (143 tests)
+- `bash scripts/smoke/phase2_containment_smoke.sh` -> exits `2` (root required; expected in current non-root runner)
+
+Known runtime limitation in current WSL session:
+- Non-root permissive runtime still cannot execute strict namespace clone path (`clone(proxy): EPERM`), so full end-to-end runtime execution requires root-capable invocation.
