@@ -24,10 +24,15 @@ impl VerdictClassifier {
             return Self::classify_internal_error(evidence, limits, "Evidence collection failed");
         }
 
-        // Check for normal exit first
+        // Judge actions take precedence over derived exit code because
+        // forced kills may surface as non-zero exits (e.g., 143) in wrappers.
+        if Self::has_judge_kill(&evidence.judge_actions) {
+            return Self::classify_judge_termination(evidence, limits);
+        }
+
+        // Check for normal/runtime exit
         if let Some(exit_code) = evidence.wait_outcome.exit_code {
             if exit_code == 0
-                && evidence.judge_actions.is_empty()
                 && !Self::has_kernel_limit_event(evidence)
             {
                 // Normal successful exit
@@ -36,11 +41,6 @@ impl VerdictClassifier {
                 // Non-zero exit is runtime error
                 return Self::classify_runtime_error(evidence, limits, exit_code);
             }
-        }
-
-        // Check for judge-initiated termination
-        if Self::has_judge_kill(&evidence.judge_actions) {
-            return Self::classify_judge_termination(evidence, limits);
         }
 
         // Check for signal termination
@@ -463,6 +463,50 @@ mod tests {
         assert_eq!(status, ExecutionStatus::TimeLimit);
         assert_eq!(provenance.verdict_actor, VerdictActor::Judge);
         assert_eq!(provenance.verdict_cause, VerdictCause::TleCpuJudge);
+    }
+
+    #[test]
+    fn test_judge_kill_precedes_nonzero_exit_code() {
+        let evidence = EvidenceBundle {
+            wait_outcome: WaitOutcome {
+                exit_code: Some(143),
+                terminating_signal: None,
+                stopped: false,
+                continued: false,
+            },
+            judge_actions: vec![
+                JudgeAction {
+                    timestamp: SystemTime::now(),
+                    action_type: JudgeActionType::TimerExpiry,
+                    details: "wall timeout".to_string(),
+                },
+                JudgeAction {
+                    timestamp: SystemTime::now(),
+                    action_type: JudgeActionType::ForcedKill,
+                    details: "SIGKILL".to_string(),
+                },
+            ],
+            cgroup_evidence: None,
+            timing_evidence: TimingEvidence {
+                wall_elapsed_ms: 21000,
+                cpu_time_ms: 2000,
+                cpu_wall_ratio: 0.1,
+                divergence_class: Some(DivergenceClass::SleepOrBlockBound),
+            },
+            process_lifecycle: ProcessLifecycleEvidence {
+                reap_summary: "forced".to_string(),
+                descendant_containment: "ok".to_string(),
+                zombie_count: 0,
+            },
+            evidence_collection_errors: vec![],
+        };
+
+        let limits = create_test_limits();
+        let (status, provenance) = VerdictClassifier::classify(&evidence, &limits);
+
+        assert_eq!(status, ExecutionStatus::TimeLimit);
+        assert_eq!(provenance.verdict_actor, VerdictActor::Judge);
+        assert_eq!(provenance.verdict_cause, VerdictCause::TleWallJudge);
     }
 
     #[test]
