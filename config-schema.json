@@ -34,69 +34,10 @@
 			},
 			"required": ["box_dir", "run_dir", "user", "group", "preserve_env"]
 		},
-		"syscalls": {
-			"type": "object",
-			"properties": {
-				"allow_fork": {
-					"type": "boolean"
-				},
-				"allow_exec": {
-					"type": "boolean"
-				},
-				"allow_clone": {
-					"type": "boolean"
-				},
-				"allow_network": {
-					"type": "boolean"
-				},
-				"allow_filesystem_write": {
-					"type": "boolean"
-				},
-				"allow_ptrace": {
-					"type": "boolean"
-				},
-				"allow_mount": {
-					"type": "boolean"
-				},
-				"blocked_syscalls": {
-					"type": "array",
-					"items": [
-						{
-							"type": "string"
-						},
-						{
-							"type": "string"
-						},
-						{
-							"type": "string"
-						},
-						{
-							"type": "string"
-						},
-						{
-							"type": "string"
-						}
-					]
-				}
-			},
-			"required": [
-				"allow_fork",
-				"allow_exec",
-				"allow_clone",
-				"allow_network",
-				"allow_filesystem_write",
-				"allow_ptrace",
-				"allow_mount",
-				"blocked_syscalls"
-			]
-		},
-		"security": {
-			"type": "object",
-			"properties": {
+			"security": {
+				"type": "object",
+				"properties": {
 				"drop_capabilities": {
-					"type": "boolean"
-				},
-				"use_seccomp": {
 					"type": "boolean"
 				},
 				"use_namespaces": {
@@ -114,7 +55,6 @@
 			},
 			"required": [
 				"drop_capabilities",
-				"use_seccomp",
 				"use_namespaces",
 				"use_cgroups",
 				"no_new_privileges",
@@ -199,30 +139,7 @@
 								"required_binaries"
 							]
 						},
-						"syscalls": {
-							"type": "object",
-							"properties": {
-								"allow_exec": {
-									"type": "boolean"
-								},
-								"additional_blocked_syscalls": {
-									"type": "array",
-									"items": [
-										{
-											"type": "string"
-										},
-										{
-											"type": "string"
-										},
-										{
-											"type": "string"
-										}
-									]
-								}
-							},
-							"required": ["allow_exec", "additional_blocked_syscalls"]
-						},
-						"environment": {
+							"environment": {
 							"type": "object",
 							"properties": {
 								"PYTHONPATH": {
@@ -272,16 +189,15 @@
 							]
 						}
 					},
-					"required": [
-						"memory",
-						"time",
-						"processes",
-						"filesystem",
-						"syscalls",
-						"environment",
-						"compilation"
-					]
-				},
+						"required": [
+							"memory",
+							"time",
+							"processes",
+							"filesystem",
+							"environment",
+							"compilation"
+						]
+					},
 				"java": {
 					"type": "object",
 					"properties": {
@@ -363,36 +279,7 @@
 								"required_binaries"
 							]
 						},
-						"syscalls": {
-							"type": "object",
-							"properties": {
-								"allow_exec": {
-									"type": "boolean"
-								},
-								"allow_clone": {
-									"type": "boolean"
-								},
-								"additional_allowed_syscalls": {
-									"type": "array",
-									"items": [
-										{
-											"type": "string"
-										},
-										{
-											"type": "string"
-										},
-										{
-											"type": "string"
-										},
-										{
-											"type": "string"
-										}
-									]
-								}
-							},
-							"required": ["allow_exec", "allow_clone", "additional_allowed_syscalls"]
-						},
-						"environment": {
+							"environment": {
 							"type": "object",
 							"properties": {
 								"JAVA_HOME": {
@@ -438,16 +325,15 @@
 							]
 						}
 					},
-					"required": [
-						"memory",
-						"time",
-						"processes",
-						"filesystem",
-						"syscalls",
-						"environment",
-						"compilation"
-					]
-				},
+						"required": [
+							"memory",
+							"time",
+							"processes",
+							"filesystem",
+							"environment",
+							"compilation"
+						]
+					},
 				"cpp": {
 					"type": "object",
 					"properties": {
@@ -537,46 +423,7 @@
 								"compilation_output_limit_kb"
 							]
 						},
-						"syscalls": {
-							"type": "object",
-							"properties": {
-								"allow_exec": {
-									"type": "boolean"
-								},
-								"compilation_syscalls": {
-									"type": "object",
-									"properties": {
-										"allow_fork": {
-											"type": "boolean"
-										},
-										"allow_exec": {
-											"type": "boolean"
-										},
-										"additional_allowed_syscalls": {
-											"type": "array",
-											"items": [
-												{
-													"type": "string"
-												},
-												{
-													"type": "string"
-												},
-												{
-													"type": "string"
-												}
-											]
-										}
-									},
-									"required": [
-										"allow_fork",
-										"allow_exec",
-										"additional_allowed_syscalls"
-									]
-								}
-							},
-							"required": ["allow_exec", "compilation_syscalls"]
-						},
-						"environment": {
+							"environment": {
 							"type": "object",
 							"properties": {
 								"PATH": {
@@ -622,19 +469,18 @@
 							]
 						}
 					},
-					"required": [
-						"memory",
-						"time",
-						"processes",
-						"filesystem",
-						"syscalls",
-						"environment",
-						"compilation"
-					]
+						"required": [
+							"memory",
+							"time",
+							"processes",
+							"filesystem",
+							"environment",
+							"compilation"
+						]
 				}
 			},
 			"required": ["python", "java", "cpp"]
 		}
 	},
-	"required": ["isolate", "syscalls", "security", "languages"]
+	"required": ["isolate", "security", "languages"]
 }

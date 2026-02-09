@@ -64,16 +64,102 @@ fn drop_ambient_capabilities() -> Result<()> {
     Ok(())
 }
 
-/// Drop effective, permitted, and inheritable capabilities
+/// C5: Drop effective, permitted, and inheritable capabilities via raw SYS_capset.
 fn drop_process_capabilities() -> Result<()> {
-    // Use capset syscall to drop all capabilities
-    // This requires CAP_SETPCAP which we should have before dropping
+    #[cfg(target_os = "linux")]
+    {
+        // Linux capability header version 3 (covers caps 0-63, two data entries).
+        #[repr(C)]
+        struct CapUserHeader {
+            version: u32,
+            pid: i32,
+        }
 
-    // For now, we rely on the other drops and setuid
-    // Full capset implementation requires libcap bindings
-    // The combination of bounding set drop + setuid is sufficient
+        #[repr(C)]
+        struct CapUserData {
+            effective: u32,
+            permitted: u32,
+            inheritable: u32,
+        }
+
+        let header = CapUserHeader {
+            version: 0x20080522, // _LINUX_CAPABILITY_VERSION_3
+            pid: 0,              // current process
+        };
+
+        // Two data entries: caps 0-31 and caps 32-63. All zeroed.
+        let data = [
+            CapUserData {
+                effective: 0,
+                permitted: 0,
+                inheritable: 0,
+            },
+            CapUserData {
+                effective: 0,
+                permitted: 0,
+                inheritable: 0,
+            },
+        ];
+
+        #[cfg(target_arch = "x86_64")]
+        const SYS_CAPSET: libc::c_long = 325;
+        #[cfg(target_arch = "aarch64")]
+        const SYS_CAPSET: libc::c_long = 184;
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        compile_error!("SYS_capset number not defined for this architecture");
+
+        let rc = unsafe {
+            libc::syscall(
+                SYS_CAPSET,
+                &header as *const CapUserHeader,
+                data.as_ptr() as *const CapUserData,
+            )
+        };
+
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            // Non-fatal on EPERM — expected after setresuid to non-root
+            if err.raw_os_error() == Some(libc::EPERM) {
+                log::debug!(
+                    "capset returned EPERM (expected after credential drop): {}",
+                    err
+                );
+            } else {
+                log::warn!("capset failed: {}", err);
+            }
+        } else {
+            log::info!("Zeroed all capability sets via capset(2)");
+        }
+    }
+
+    // Verify capabilities were actually zeroed.
+    verify_capabilities_zeroed();
 
     Ok(())
+}
+
+/// Verify that capability sets are all zero by reading /proc/self/status.
+fn verify_capabilities_zeroed() {
+    let Ok(status) = fs::read_to_string("/proc/self/status") else {
+        log::warn!("Cannot read /proc/self/status for capability verification");
+        return;
+    };
+
+    for line in status.lines() {
+        let is_cap_line = line.starts_with("CapInh:")
+            || line.starts_with("CapPrm:")
+            || line.starts_with("CapEff:");
+
+        if is_cap_line {
+            let value = line.split_whitespace().nth(1).unwrap_or("");
+            if value != "0000000000000000" {
+                log::warn!(
+                    "Capability not zeroed after drop: {} (bounding set + no_new_privs still protect)",
+                    line.trim()
+                );
+            }
+        }
+    }
 }
 
 /// Set no_new_privs flag

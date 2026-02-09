@@ -12,7 +12,6 @@ pub struct LanguageConfig {
     pub time: TimeConfig,
     pub processes: ProcessConfig,
     pub filesystem: FilesystemConfig,
-    pub syscalls: SyscallConfig,
     pub environment: HashMap<String, String>,
     pub compilation: CompilationConfig,
 }
@@ -45,14 +44,6 @@ pub struct FilesystemConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyscallConfig {
-    pub allow_exec: bool,
-    pub allow_clone: Option<bool>,
-    pub additional_blocked_syscalls: Option<Vec<String>>,
-    pub additional_allowed_syscalls: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompilationConfig {
     pub enabled: bool,
     pub compiler: String,
@@ -65,7 +56,6 @@ pub struct CompilationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RustBoxConfig {
     pub isolate: IsolateGlobalConfig,
-    pub syscalls: GlobalSyscallConfig,
     pub security: SecurityConfig,
     pub languages: HashMap<String, LanguageConfig>,
 }
@@ -80,21 +70,8 @@ pub struct IsolateGlobalConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GlobalSyscallConfig {
-    pub allow_fork: bool,
-    pub allow_exec: bool,
-    pub allow_clone: bool,
-    pub allow_network: bool,
-    pub allow_filesystem_write: bool,
-    pub allow_ptrace: bool,
-    pub allow_mount: bool,
-    pub blocked_syscalls: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
     pub drop_capabilities: bool,
-    pub use_seccomp: bool,
     pub use_namespaces: bool,
     pub use_cgroups: bool,
     pub no_new_privileges: bool,

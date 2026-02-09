@@ -299,18 +299,7 @@ impl RustboxLockManager {
 
         // Step 2: Try to acquire exclusive lock (non-blocking)
         #[cfg(unix)]
-        let flock_result = unsafe {
-            use std::os::unix::io::AsRawFd;
-            flock(lock_file.as_raw_fd(), LOCK_EX | LOCK_NB)
-        };
-
-        #[cfg(not(unix))]
-        let flock_result = {
-            // Windows doesn't support flock, return error
-            return Err(LockError::SystemError {
-                message: "flock not supported on this platform".to_string(),
-            });
-        };
+        let flock_result = unsafe { flock(lock_file.as_raw_fd(), LOCK_EX | LOCK_NB) };
 
         if flock_result != 0 {
             let errno = std::io::Error::last_os_error();

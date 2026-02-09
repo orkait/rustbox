@@ -647,7 +647,26 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
     }
 
     fn set_cpu_limit(&self, _instance_id: &str, _limit_usec: u64) -> Result<()> {
-        // CPU time limit is enforced via other mechanisms in v1
+        // C2: Use CFS bandwidth control via cpu.cfs_period_us / cpu.cfs_quota_us.
+        // 100000 / 100000 = 1 full CPU core per 100ms period.
+        if !self.has_cgroup_support || !self.available_controllers.contains("cpu") {
+            return Ok(());
+        }
+
+        let cpu_path = self
+            .cgroup_paths
+            .get("cpu")
+            .ok_or_else(|| IsolateError::Cgroup("CPU controller path not available".to_string()))?;
+
+        let period_file = cpu_path.join("cpu.cfs_period_us");
+        fs::write(&period_file, "100000")
+            .map_err(|e| IsolateError::Cgroup(format!("Failed to set cpu.cfs_period_us: {}", e)))?;
+
+        let quota_file = cpu_path.join("cpu.cfs_quota_us");
+        fs::write(&quota_file, "100000")
+            .map_err(|e| IsolateError::Cgroup(format!("Failed to set cpu.cfs_quota_us: {}", e)))?;
+
+        log::info!("Set CFS bandwidth: period=100000us, quota=100000us (1 CPU core cap)");
         Ok(())
     }
 

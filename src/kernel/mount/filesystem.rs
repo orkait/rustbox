@@ -27,10 +27,21 @@ impl FilesystemSecurity {
         }
     }
 
-    /// Setup filesystem isolation including chroot jail if specified
-    pub fn setup_isolation(&self) -> Result<()> {
+    /// Setup filesystem isolation including chroot jail if specified.
+    /// In strict mode with no chroot_dir, auto-creates a tmpfs root and
+    /// bind-mounts a minimal standard set of directories read-only.
+    pub fn setup_isolation(&mut self) -> Result<()> {
+        // C1: In strict mode, if no chroot_dir was explicitly provided,
+        // auto-create a tmpfs root so the payload never runs on the host FS.
+        #[cfg(unix)]
+        if self.strict_mode && self.chroot_dir.is_none() {
+            let tmpfs_root = self.auto_create_tmpfs_root()?;
+            self.chroot_dir = Some(tmpfs_root);
+        }
+
         if let Some(ref chroot_path) = self.chroot_dir {
             self.setup_chroot_jail(chroot_path)?;
+            self.mount_standard_bind_set(chroot_path)?;
             self.setup_hardened_mounts(chroot_path)?;
         }
 
@@ -166,16 +177,6 @@ impl FilesystemSecurity {
         Ok(())
     }
 
-    #[cfg(not(unix))]
-    fn setup_single_binding(
-        &self,
-        _binding: &crate::config::types::DirectoryBinding,
-    ) -> Result<()> {
-        Err(IsolateError::Config(
-            "Directory binding is only supported on Unix systems".to_string(),
-        ))
-    }
-
     /// Copy directory contents as fallback when bind mounting fails
     fn copy_directory_contents(&self, source: &Path, target: &Path) -> Result<()> {
         use std::fs;
@@ -216,6 +217,189 @@ impl FilesystemSecurity {
         Ok(())
     }
 
+    /// Auto-create a tmpfs root for strict mode isolation.
+    /// Mounts a 256MB tmpfs at a unique path under /tmp and returns it.
+    #[cfg(unix)]
+    fn auto_create_tmpfs_root(&self) -> Result<PathBuf> {
+        let tmpfs_root =
+            std::env::temp_dir().join(format!("rustbox-strict-root-{}", std::process::id()));
+
+        fs::create_dir_all(&tmpfs_root)
+            .map_err(|e| IsolateError::Config(format!("Failed to create tmpfs root dir: {}", e)))?;
+
+        let target_cstr = std::ffi::CString::new(tmpfs_root.to_string_lossy().as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid tmpfs root path: {}", e)))?;
+        let fstype_cstr = std::ffi::CString::new("tmpfs").unwrap();
+        let source_cstr = std::ffi::CString::new("tmpfs").unwrap();
+        let opts_cstr = std::ffi::CString::new("size=256m,mode=755").unwrap();
+
+        let flags = libc::MS_NOSUID | libc::MS_NODEV;
+        let result = unsafe {
+            libc::mount(
+                source_cstr.as_ptr(),
+                target_cstr.as_ptr(),
+                fstype_cstr.as_ptr(),
+                flags,
+                opts_cstr.as_ptr() as *const libc::c_void,
+            )
+        };
+
+        if result != 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            return Err(IsolateError::Config(format!(
+                "Failed to mount tmpfs at {}: errno {}",
+                tmpfs_root.display(),
+                errno
+            )));
+        }
+
+        log::info!(
+            "Auto-created tmpfs root for strict mode at {}",
+            tmpfs_root.display()
+        );
+
+        // Bind-mount workspace into tmpfs root so payload can write there
+        let ws_in_root = tmpfs_root.join(self.workdir.strip_prefix("/").unwrap_or(&self.workdir));
+        fs::create_dir_all(&ws_in_root).map_err(|e| {
+            IsolateError::Config(format!("Failed to create workspace in tmpfs root: {}", e))
+        })?;
+
+        if self.workdir.exists() {
+            let src_cstr = std::ffi::CString::new(self.workdir.to_string_lossy().as_bytes())
+                .map_err(|e| IsolateError::Config(format!("Invalid workspace path: {}", e)))?;
+            let dst_cstr = std::ffi::CString::new(ws_in_root.to_string_lossy().as_bytes())
+                .map_err(|e| IsolateError::Config(format!("Invalid ws root path: {}", e)))?;
+
+            let bind_result = unsafe {
+                libc::mount(
+                    src_cstr.as_ptr(),
+                    dst_cstr.as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND,
+                    std::ptr::null(),
+                )
+            };
+
+            if bind_result != 0 {
+                let errno = unsafe { *libc::__errno_location() };
+                return Err(IsolateError::Config(format!(
+                    "Failed to bind-mount workspace into tmpfs root: errno {}",
+                    errno
+                )));
+            }
+            log::info!(
+                "Bind-mounted workspace {} into tmpfs root",
+                self.workdir.display()
+            );
+        }
+
+        Ok(tmpfs_root)
+    }
+
+    /// Bind-mount the standard host directories (read-only) into the chroot.
+    /// This provides /bin, /lib, /lib64, /usr so interpreters/compilers work.
+    #[cfg(unix)]
+    fn mount_standard_bind_set(&self, chroot_path: &Path) -> Result<()> {
+        let ro_dirs = ["/bin", "/lib", "/lib64", "/usr"];
+
+        for dir in &ro_dirs {
+            let src = Path::new(dir);
+            if !src.exists() {
+                log::debug!("Skipping non-existent standard dir: {}", dir);
+                continue;
+            }
+
+            let target = chroot_path.join(dir.strip_prefix('/').unwrap_or(dir));
+            if !target.exists() {
+                fs::create_dir_all(&target).map_err(|e| {
+                    IsolateError::Config(format!(
+                        "Failed to create bind target {}: {}",
+                        target.display(),
+                        e
+                    ))
+                })?;
+            }
+
+            self.bind_mount_readonly(src, &target)?;
+        }
+
+        Ok(())
+    }
+
+    /// Two-pass bind mount: first MS_BIND, then MS_BIND|MS_REMOUNT|MS_RDONLY.
+    #[cfg(unix)]
+    fn bind_mount_readonly(&self, source: &Path, target: &Path) -> Result<()> {
+        let src_cstr = std::ffi::CString::new(source.to_string_lossy().as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid source path: {}", e)))?;
+        let tgt_cstr = std::ffi::CString::new(target.to_string_lossy().as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid target path: {}", e)))?;
+
+        // Pass 1: bind mount
+        let result = unsafe {
+            libc::mount(
+                src_cstr.as_ptr(),
+                tgt_cstr.as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND,
+                std::ptr::null(),
+            )
+        };
+        if result != 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            if self.strict_mode {
+                return Err(IsolateError::Config(format!(
+                    "Failed to bind mount {} -> {}: errno {}",
+                    source.display(),
+                    target.display(),
+                    errno
+                )));
+            }
+            log::warn!(
+                "Failed to bind mount {} -> {}: errno {}",
+                source.display(),
+                target.display(),
+                errno
+            );
+            return Ok(());
+        }
+
+        // Pass 2: remount read-only
+        let ro_flags =
+            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV;
+        let result = unsafe {
+            libc::mount(
+                std::ptr::null(),
+                tgt_cstr.as_ptr(),
+                std::ptr::null(),
+                ro_flags,
+                std::ptr::null(),
+            )
+        };
+        if result != 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            if self.strict_mode {
+                return Err(IsolateError::Config(format!(
+                    "Failed to remount {} read-only: errno {}",
+                    target.display(),
+                    errno
+                )));
+            }
+            log::warn!(
+                "Failed to remount {} read-only: errno {}",
+                target.display(),
+                errno
+            );
+        } else {
+            log::info!(
+                "Bind-mounted {} -> {} (read-only)",
+                source.display(),
+                target.display()
+            );
+        }
+
+        Ok(())
+    }
+
     /// Setup chroot jail for filesystem isolation
     #[cfg(unix)]
     fn setup_chroot_jail(&self, chroot_path: &Path) -> Result<()> {
@@ -233,13 +417,6 @@ impl FilesystemSecurity {
         self.apply_mount_security_flags(chroot_path)?;
 
         Ok(())
-    }
-
-    #[cfg(not(unix))]
-    fn setup_chroot_jail(&self, _chroot_path: &Path) -> Result<()> {
-        Err(IsolateError::Config(
-            "Chroot isolation is only supported on Unix systems".to_string(),
-        ))
     }
 
     /// Create essential directory structure within chroot
@@ -376,12 +553,6 @@ impl FilesystemSecurity {
             self.mount_hardened_procfs(&proc_path)?;
         }
 
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    fn setup_hardened_mounts(&self, _chroot_path: &Path) -> Result<()> {
-        // No-op on non-Unix systems
         Ok(())
     }
 
@@ -589,16 +760,6 @@ impl FilesystemSecurity {
             std::env::set_current_dir("/").map_err(|e| {
                 IsolateError::Config(format!("Failed to change to chroot root: {}", e))
             })?;
-        }
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    pub fn apply_chroot(&self) -> Result<()> {
-        if self.chroot_dir.is_some() {
-            return Err(IsolateError::Config(
-                "Chroot is only supported on Unix systems".to_string(),
-            ));
         }
         Ok(())
     }

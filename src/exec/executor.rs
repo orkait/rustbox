@@ -3,8 +3,8 @@ use crate::config::validator::validate_config;
 use crate::core::types::{LaunchEvidence, SandboxLaunchRequest};
 /// Process execution and monitoring with reliable resource limits
 use crate::kernel::cgroup::backend::{self, CgroupBackend};
-use crate::legacy::security::command_validation;
 use crate::observability::audit::events;
+use crate::runtime::security::command_validation;
 use crate::safety::cleanup::BaselineChecker;
 use std::path::PathBuf;
 
@@ -32,16 +32,6 @@ impl ProcessExecutor {
         let validation = validate_config(&config)?;
         for warning in validation.warnings {
             log::warn!("Configuration warning: {}", warning);
-        }
-
-        // Syscall filtering is explicit opt-in and currently fail-closed until
-        // seccomp-bpf installation is fully implemented.
-        if config.enable_syscall_filtering {
-            let msg = "Syscall filtering requested but seccomp-bpf installation is not implemented";
-            if config.strict_mode {
-                return Err(IsolateError::Privilege(msg.to_string()));
-            }
-            return Err(IsolateError::Config(format!("{} (permissive mode)", msg)));
         }
 
         // Capture host-clean baseline before creating execution-time resources.

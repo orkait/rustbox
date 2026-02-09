@@ -7,5 +7,4 @@ pub mod capabilities;
 pub mod cgroup;
 pub mod mount;
 pub mod namespace;
-pub mod seccomp;
 pub mod signal;

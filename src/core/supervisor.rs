@@ -62,9 +62,6 @@ fn build_configured_controls(req: &SandboxLaunchRequest) -> Vec<String> {
         controls.push("process_limit".to_string());
     }
     controls.push("no_new_privileges".to_string());
-    if req.profile.enable_syscall_filtering {
-        controls.push("syscall_filtering".to_string());
-    }
     controls
 }
 
@@ -83,6 +80,9 @@ fn build_launch_evidence(
     let configured = build_configured_controls(req);
     let mut applied = Vec::new();
     let mut missing = Vec::new();
+    // Namespace/no_new_privs setup is performed in proxy pre-exec.
+    // Do not claim these controls when proxy reports setup failure.
+    let setup_controls_applied = req.profile.strict_mode && proxy_status.internal_error.is_none();
 
     for control in &configured {
         match control.as_str() {
@@ -93,13 +93,9 @@ fn build_launch_evidence(
                     missing.push(control.clone());
                 }
             }
-            "syscall_filtering" => {
-                // Filtering remains explicit opt-in and unsupported in strict mode.
-                missing.push(control.clone());
-            }
             "pid_namespace" | "mount_namespace" | "network_namespace" | "user_namespace"
             | "no_new_privileges" => {
-                if req.profile.strict_mode {
+                if setup_controls_applied {
                     applied.push(control.clone());
                 } else {
                     // In permissive mode these controls may log-and-continue on failure.
@@ -166,6 +162,16 @@ fn build_launch_evidence(
             });
         }
     }
+    if timed_out && kill_report.is_none() {
+        // Degraded launch timeout path kills the direct child via Command::kill()
+        // and has no KillReport. Emit a forced-kill action so verdict logic
+        // classifies this as judge-enforced timeout instead of internal error.
+        judge_actions.push(JudgeAction {
+            timestamp: SystemTime::now(),
+            action_type: JudgeActionType::ForcedKill,
+            details: "SIGKILL sent to child process (degraded mode)".to_string(),
+        });
+    }
 
     LaunchEvidence {
         strict_requested: req.profile.strict_mode,
@@ -183,17 +189,6 @@ fn build_launch_evidence(
             "default".to_string()
         },
         sys_policy_applied: "disabled".to_string(),
-        syscall_filtering_enabled: req.profile.enable_syscall_filtering,
-        syscall_filtering_source: if req.profile.enable_syscall_filtering {
-            crate::config::types::SyscallFilterSource::ReferenceCatalog
-        } else {
-            crate::config::types::SyscallFilterSource::None
-        },
-        syscall_filtering_profile_id: if req.profile.enable_syscall_filtering {
-            Some(format!("ref-{}-minimal-v1", std::env::consts::ARCH))
-        } else {
-            None
-        },
         judge_actions,
         cgroup_evidence,
         process_lifecycle,
@@ -274,13 +269,48 @@ pub fn launch_with_supervisor(
     }
 
     let child_launch_read = launch_read;
+    let child_launch_write = launch_write;
+    let child_status_read = status_read;
     let child_status_write = status_write;
     let mut child_stack = vec![0u8; 2 * 1024 * 1024];
-    let child_cb: Box<dyn FnMut() -> isize> =
-        Box::new(move || run_proxy_main_from_fds(child_launch_read, child_status_write));
+    let child_cb: Box<dyn FnMut() -> isize> = Box::new(move || {
+        // Close inherited pipe ends that belong to the parent.
+        // Without this, the child holds launch_write open and
+        // read_to_end() on launch_read never sees EOF.
+        let _ = close(child_launch_write);
+        let _ = close(child_status_read);
+        run_proxy_main_from_fds(child_launch_read, child_status_write)
+    });
 
-    let proxy_pid = unsafe { clone(child_cb, &mut child_stack, clone_flags, Some(libc::SIGCHLD)) }
-        .map_err(|e| to_process_error("clone(proxy)", e))?;
+    let clone_result =
+        unsafe { clone(child_cb, &mut child_stack, clone_flags, Some(libc::SIGCHLD)) };
+
+    let proxy_pid = match clone_result {
+        Ok(pid) => pid,
+        Err(nix::errno::Errno::EPERM) if !req.profile.strict_mode && req.profile.allow_degraded => {
+            // C3: clone() requires root for namespace flags. Only fall back to
+            // degraded mode when explicitly opted in via --allow-degraded.
+            let _ = close(launch_read);
+            let _ = close(launch_write);
+            let _ = close(status_read);
+            let _ = close(status_write);
+            log::warn!("Falling back to degraded launch (--allow-degraded enabled)");
+            return launch_degraded(req, cgroup);
+        }
+        Err(nix::errno::Errno::EPERM) if !req.profile.strict_mode => {
+            // C3: EPERM without --allow-degraded is a hard error.
+            let _ = close(launch_read);
+            let _ = close(launch_write);
+            let _ = close(status_read);
+            let _ = close(status_write);
+            return Err(IsolateError::Privilege(
+                "Root privileges required for namespace isolation. \
+                 Use --allow-degraded for development without isolation (unsafe for untrusted code)."
+                    .to_string(),
+            ));
+        }
+        Err(e) => return Err(to_process_error("clone(proxy)", e)),
+    };
 
     let _ = close(launch_read);
     let _ = close(status_write);
@@ -314,9 +344,13 @@ pub fn launch_with_supervisor(
     let started = Instant::now();
 
     let mut timed_out = false;
+    let mut cpu_timed_out = false;
     let mut kill_report: Option<KillReport> = None;
     let mut proxy_exit_code = None;
     let mut proxy_signal = None;
+
+    // C2: Derive CPU limit in microseconds for watchdog polling.
+    let cpu_limit_usec: Option<u64> = req.profile.cpu_time_limit_ms.map(|ms| ms * 1000);
 
     loop {
         match waitpid(proxy_pid, Some(WaitPidFlag::WNOHANG)) {
@@ -324,6 +358,23 @@ pub fn launch_with_supervisor(
                 if started.elapsed() > wall_limit {
                     timed_out = true;
                     kill_report = Some(terminate_proxy_group(proxy_pid));
+                } else if let (Some(limit_usec), Some(controller)) = (cpu_limit_usec, cgroup) {
+                    // C2: Poll cgroup CPU usage and enforce hard CPU-time limit.
+                    if let Ok(usage_usec) = controller.get_cpu_usage() {
+                        if usage_usec >= limit_usec {
+                            cpu_timed_out = true;
+                            timed_out = true;
+                            kill_report = Some(terminate_proxy_group(proxy_pid));
+                            log::info!(
+                                "CPU time limit exceeded: {}us >= {}us limit",
+                                usage_usec,
+                                limit_usec
+                            );
+                        }
+                    }
+                    if !timed_out {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
                 } else {
                     std::thread::sleep(Duration::from_millis(10));
                 }
@@ -362,6 +413,13 @@ pub fn launch_with_supervisor(
     if timed_out {
         result.status = ExecutionStatus::TimeLimit;
         result.success = false;
+    }
+
+    // C2: Record CPU-triggered timeout in evidence for verdict provenance.
+    if cpu_timed_out {
+        evidence_collection_errors.push(
+            "cpu_time_limit_exceeded: judge watchdog killed process after cgroup CPU usage exceeded limit".to_string(),
+        );
     }
 
     let mut cgroup_evidence = None;
@@ -408,4 +466,236 @@ pub fn launch_with_supervisor(
         kill_report,
         proxy_status: status,
     })
+}
+
+/// Degraded launch path for permissive non-root execution.
+/// Uses Command::spawn instead of clone() — no namespace isolation.
+fn launch_degraded(
+    req: SandboxLaunchRequest,
+    cgroup: Option<&dyn CgroupBackend>,
+) -> Result<SandboxLaunchOutcome> {
+    use std::process::{Command, Stdio};
+
+    log::warn!(
+        "Falling back to degraded launch (no namespace isolation) for '{}'",
+        req.profile.command.first().unwrap_or(&String::new())
+    );
+
+    let cgroup_backend_selected = cgroup.map(|c| c.backend_name().to_string());
+    let started = Instant::now();
+
+    let wall_limit = req
+        .profile
+        .wall_time_limit_ms
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_secs(30));
+
+    let mut cmd = Command::new(&req.profile.command[0]);
+    if req.profile.command.len() > 1 {
+        cmd.args(&req.profile.command[1..]);
+    }
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(if req.profile.stdin_data.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
+
+    for (key, value) in &req.profile.environment {
+        cmd.env(key, value);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| IsolateError::Process(format!("spawn(degraded): {}", e)))?;
+
+    let child_pid = child.id() as i32;
+
+    if let (Some(data), Some(mut stdin)) = (&req.profile.stdin_data, child.stdin.take()) {
+        use std::io::Write;
+        let _ = stdin.write_all(data.as_bytes());
+    }
+
+    // Monitor with wall-time limit.
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if started.elapsed() > wall_limit {
+                    timed_out = true;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => return Err(IsolateError::Process(format!("wait(degraded): {}", e))),
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| IsolateError::Process(format!("output(degraded): {}", e)));
+
+    let (exit_code, stdout, stderr) = match output {
+        Ok(out) => (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ),
+        Err(_) => (None, String::new(), String::new()),
+    };
+
+    let status = ProxyStatus {
+        payload_pid: Some(child_pid),
+        exit_code,
+        term_signal: None,
+        timed_out,
+        wall_time_ms: started.elapsed().as_millis() as u64,
+        stdout,
+        stderr,
+        output_integrity: crate::config::types::OutputIntegrity::Complete,
+        internal_error: None,
+        reaped_descendants: 0,
+    };
+
+    let mut result = status.to_execution_result();
+    if timed_out {
+        result.status = ExecutionStatus::TimeLimit;
+        result.success = false;
+    }
+
+    let evidence_collection_errors =
+        vec!["degraded_launch: no namespace isolation (non-root)".to_string()];
+
+    let evidence = build_launch_evidence(
+        &req,
+        false,
+        cgroup_backend_selected,
+        false,
+        timed_out,
+        None,
+        &status,
+        None,
+        evidence_collection_errors,
+        true,
+    );
+
+    Ok(SandboxLaunchOutcome {
+        proxy_host_pid: child_pid,
+        payload_host_pid: Some(child_pid),
+        result,
+        evidence,
+        kill_report: None,
+        proxy_status: status,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::{IsolateConfig, OutputIntegrity};
+
+    fn test_request(strict_mode: bool) -> SandboxLaunchRequest {
+        let mut config = IsolateConfig::default();
+        config.instance_id = "evidence-test".to_string();
+        config.strict_mode = strict_mode;
+        config.enable_pid_namespace = true;
+        config.enable_mount_namespace = true;
+        config.enable_network_namespace = true;
+        config.enable_user_namespace = false;
+        config.memory_limit = Some(128 * 1024 * 1024);
+        config.process_limit = Some(2);
+
+        SandboxLaunchRequest::from_config(&config, &[String::from("/bin/true")], None, None)
+    }
+
+    fn proxy_status(internal_error: Option<&str>) -> ProxyStatus {
+        ProxyStatus {
+            payload_pid: Some(1234),
+            exit_code: Some(0),
+            term_signal: None,
+            timed_out: false,
+            wall_time_ms: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            output_integrity: OutputIntegrity::Complete,
+            internal_error: internal_error.map(str::to_string),
+            reaped_descendants: 0,
+        }
+    }
+
+    #[test]
+    fn strict_mode_does_not_claim_setup_controls_on_proxy_failure() {
+        let req = test_request(true);
+        let status = proxy_status(Some("pre-exec failed"));
+        let evidence = build_launch_evidence(
+            &req,
+            true,
+            Some("cgroup-v1".to_string()),
+            true,
+            false,
+            None,
+            &status,
+            None,
+            Vec::new(),
+            true,
+        );
+
+        for control in [
+            "pid_namespace",
+            "mount_namespace",
+            "network_namespace",
+            "no_new_privileges",
+        ] {
+            assert!(
+                !evidence.applied_controls.iter().any(|c| c == control),
+                "control should not be reported as applied on proxy failure: {}",
+                control
+            );
+            assert!(
+                evidence.missing_controls.iter().any(|c| c == control),
+                "control should be reported missing on proxy failure: {}",
+                control
+            );
+        }
+    }
+
+    #[test]
+    fn strict_mode_claims_setup_controls_when_proxy_succeeds() {
+        let req = test_request(true);
+        let status = proxy_status(None);
+        let evidence = build_launch_evidence(
+            &req,
+            true,
+            Some("cgroup-v1".to_string()),
+            true,
+            false,
+            None,
+            &status,
+            None,
+            Vec::new(),
+            true,
+        );
+
+        for control in [
+            "pid_namespace",
+            "mount_namespace",
+            "network_namespace",
+            "no_new_privileges",
+        ] {
+            assert!(
+                evidence.applied_controls.iter().any(|c| c == control),
+                "control should be reported as applied on successful proxy setup: {}",
+                control
+            );
+            assert!(
+                !evidence.missing_controls.iter().any(|c| c == control),
+                "control should not be reported missing on successful proxy setup: {}",
+                control
+            );
+        }
+    }
 }

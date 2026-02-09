@@ -1,8 +1,8 @@
+use crate::config::types::{ExecutionResult, IsolateConfig, IsolateError, Result};
+use crate::core::types::LaunchEvidence;
 /// Main isolate management interface
 use crate::exec::executor::ProcessExecutor;
-use crate::core::types::LaunchEvidence;
 use crate::safety::lock_manager::{acquire_box_lock, with_file_lock, BoxLockGuard};
-use crate::config::types::{ExecutionResult, IsolateConfig, IsolateError, Result};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,10 +29,7 @@ fn atomic_write(target: &Path, content: &[u8]) -> std::io::Result<()> {
     // Write to a temp file in the same directory (same filesystem for rename)
     let temp_path = parent.join(format!(
         ".{}.tmp.{}",
-        target
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy(),
+        target.file_name().unwrap_or_default().to_string_lossy(),
         std::process::id()
     ));
 
@@ -64,12 +61,12 @@ pub struct Isolate {
 impl Isolate {
     fn candidate_state_roots() -> Vec<PathBuf> {
         let preferred = IsolateConfig::runtime_root_dir();
-        let legacy = std::env::temp_dir().join("rustbox");
+        let fallback = std::env::temp_dir().join("rustbox");
 
-        if preferred == legacy {
+        if preferred == fallback {
             vec![preferred]
         } else {
-            vec![preferred, legacy]
+            vec![preferred, fallback]
         }
     }
 
@@ -113,8 +110,8 @@ impl Isolate {
                 if let (Some(uid), Some(gid)) = (self.instance.config.uid, self.instance.config.gid)
                 {
                     use nix::unistd::{chown, Gid, Uid};
-                    chown(&workdir, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))
-                        .map_err(|e| {
+                    chown(&workdir, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid))).map_err(
+                        |e| {
                             IsolateError::Config(format!(
                                 "Failed to set workdir ownership {}:{} on {}: {}",
                                 uid,
@@ -122,7 +119,8 @@ impl Isolate {
                                 workdir.display(),
                                 e
                             ))
-                        })?;
+                        },
+                    )?;
                 }
             }
         }
@@ -318,12 +316,35 @@ impl Isolate {
         process_limit: Option<u32>,
     ) -> Result<ExecutionResult> {
         match language.to_lowercase().as_str() {
-            "python" | "py" => self
-                .execute_python_string(code, stdin_data, max_cpu, max_memory, max_time, max_wall_time, fd_limit, process_limit),
-            "cpp" | "c++" | "cxx" => self
-                .compile_and_execute_cpp(code, stdin_data, max_cpu, max_memory, max_time, max_wall_time, fd_limit, process_limit),
+            "python" | "py" => self.execute_python_string(
+                code,
+                stdin_data,
+                max_cpu,
+                max_memory,
+                max_time,
+                max_wall_time,
+                fd_limit,
+                process_limit,
+            ),
+            "cpp" | "c++" | "cxx" => self.compile_and_execute_cpp(
+                code,
+                stdin_data,
+                max_cpu,
+                max_memory,
+                max_time,
+                max_wall_time,
+                fd_limit,
+                process_limit,
+            ),
             "java" => self.compile_and_execute_java(
-                code, stdin_data, max_cpu, max_memory, max_time, max_wall_time, fd_limit, process_limit,
+                code,
+                stdin_data,
+                max_cpu,
+                max_memory,
+                max_time,
+                max_wall_time,
+                fd_limit,
+                process_limit,
             ),
             _ => Err(IsolateError::Config(format!(
                 "Unsupported language: {}",
@@ -351,7 +372,14 @@ impl Isolate {
             code.to_string(),
         ];
         self.execute_with_overrides(
-            &command, stdin_data, max_cpu, max_memory, max_time, max_wall_time, fd_limit, process_limit,
+            &command,
+            stdin_data,
+            max_cpu,
+            max_memory,
+            max_time,
+            max_wall_time,
+            fd_limit,
+            process_limit,
         )
     }
 
@@ -396,13 +424,8 @@ impl Isolate {
             .wall_time_limit
             .map(|d| d.as_secs())
             .unwrap_or(10);
-        let compile_cpu_secs = max_cpu
-            .or(max_time)
-            .unwrap_or(original_cpu_secs)
-            .max(15);
-        let compile_wall_secs = max_wall_time
-            .unwrap_or(original_wall_secs)
-            .max(30);
+        let compile_cpu_secs = max_cpu.or(max_time).unwrap_or(original_cpu_secs).max(15);
+        let compile_wall_secs = max_wall_time.unwrap_or(original_wall_secs).max(30);
         self.instance.config.cpu_time_limit = Some(Duration::from_secs(compile_cpu_secs));
         self.instance.config.time_limit = Some(Duration::from_secs(compile_cpu_secs));
         self.instance.config.wall_time_limit = Some(Duration::from_secs(compile_wall_secs));
@@ -805,7 +828,9 @@ impl Isolate {
         })
         .map_err(|e| match e {
             crate::config::types::LockError::FilesystemError(io_err) => IsolateError::Io(io_err),
-            crate::config::types::LockError::SystemError { message } => IsolateError::Config(message),
+            crate::config::types::LockError::SystemError { message } => {
+                IsolateError::Config(message)
+            }
             _ => IsolateError::Lock(e.to_string()),
         })
     }

@@ -72,8 +72,12 @@ fn map_io(context: &str, err: io::Error) -> IsolateError {
 }
 
 fn os_to_cstring(value: &OsStr) -> io::Result<CString> {
-    CString::new(value.as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains interior NUL byte"))
+    CString::new(value.as_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path contains interior NUL byte",
+        )
+    })
 }
 
 fn open_dir(path: &Path) -> io::Result<FdGuard> {

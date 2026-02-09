@@ -22,7 +22,6 @@ Rustbox v1 is **not** a general-purpose sandbox or an isolate drop-in replacemen
 - CRIU/snapshot workflows
 - Remote attestation
 - Pluggable policy engines
-- Dynamic syscall filtering tuning systems
 - Multi-tenant scheduling/orchestration layers
 
 See `plan.md` Section 1.1 for complete scope definition.
@@ -139,11 +138,8 @@ judge execute-code --strict --box-id 10 --language python --code 'print(1)'
 # Permissive mode (unsafe for untrusted code; development only)
 judge execute-code --permissive --box-id 11 --language python --code 'print(1)'
 
-# Optional syscall filtering gate (currently fail-closed until implemented)
-judge execute-code --strict --enable-syscall-filtering --box-id 12 --language python --code 'print(1)'
-
-# Backward-compatible alias still supported
-rustbox execute-code --strict --box-id 13 --language python --code 'print(1)'
+# Compatibility alias
+rustbox execute-code --strict --box-id 12 --language python --code 'print(1)'
 ```
 
 WSL note: C++ compile phase currently runs outside namespaces for toolchain stability; compiled payload execution still runs with isolate defaults.
@@ -154,15 +150,15 @@ WSL note: Java currently downgrades to permissive mode and disables PID namespac
 ```
 rustbox/
 ├── src/
-│   ├── main.rs            # rustbox compatibility wrapper
+│   ├── main.rs            # rustbox CLI entry wrapper
 │   ├── cli.rs             # shared CLI implementation and mode gating
 │   ├── bin/
 │   │   ├── isolate.rs     # isolate binary (language-agnostic core surface)
 │   │   └── judge.rs       # judge binary (language adapter surface)
 │   ├── config/            # Config loading, validation, policy
 │   ├── exec/              # Executor, pre-exec chain, supervision
-│   ├── kernel/            # Namespaces, cgroups, seccomp, capabilities
-│   ├── legacy/            # Compatibility paths kept during migration
+│   ├── kernel/            # Namespaces, cgroups, capabilities
+│   ├── runtime/           # Runtime orchestration and sandbox execution
 │   ├── observability/     # Audit logs, health, metrics, ops checks
 │   ├── safety/            # Cleanup, locks, workspace management
 │   ├── testing/           # Reusable proof helpers

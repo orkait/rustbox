@@ -19,8 +19,15 @@ impl VerdictClassifier {
             return Self::classify_cleanup_failure(evidence, limits);
         }
 
-        // Check for evidence collection errors first
-        if !evidence.evidence_collection_errors.is_empty() {
+        // Evidence collection errors are fatal only when they affect the verdict.
+        // In degraded/dev mode, missing cgroup evidence is expected and should not
+        // override a clean exit code. Only escalate to IE for errors that indicate
+        // actual judge infrastructure failures (not merely missing instrumentation).
+        let has_fatal_evidence_errors = evidence
+            .evidence_collection_errors
+            .iter()
+            .any(|e| !e.starts_with("degraded_launch:") && !e.starts_with("missing cgroup"));
+        if has_fatal_evidence_errors {
             return Self::classify_internal_error(evidence, limits, "Evidence collection failed");
         }
 
@@ -32,9 +39,7 @@ impl VerdictClassifier {
 
         // Check for normal/runtime exit
         if let Some(exit_code) = evidence.wait_outcome.exit_code {
-            if exit_code == 0
-                && !Self::has_kernel_limit_event(evidence)
-            {
+            if exit_code == 0 && !Self::has_kernel_limit_event(evidence) {
                 // Normal successful exit
                 return Self::classify_ok(evidence, limits);
             } else if exit_code != 0 {

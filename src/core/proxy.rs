@@ -92,22 +92,13 @@ fn exec_payload_with_typestate(req: &SandboxLaunchRequest) -> Result<()> {
         req.profile.enable_user_namespace,
     )?;
     let sandbox = sandbox.harden_mount_propagation()?;
-    let sandbox = sandbox.setup_mounts_and_root(&req.profile)?;
     let cgroup_attach = req.cgroup_attach_path.as_ref().and_then(|p| p.to_str());
     let sandbox = sandbox.attach_to_cgroup(cgroup_attach)?;
+    let sandbox = sandbox.setup_mounts_and_root(&req.profile)?;
     let sandbox = sandbox.apply_runtime_hygiene(&req.profile)?;
     let sandbox = sandbox.drop_credentials(req.profile.uid, req.profile.gid)?;
     let sandbox = sandbox.lock_privileges()?;
-    let sandbox = if req.profile.enable_syscall_filtering {
-        let seccomp_config = crate::kernel::seccomp::SyscallFilterConfig::reference_catalog(
-            std::env::consts::ARCH.to_string(),
-            "minimal".to_string(),
-            format!("ref-{}-minimal-v1", std::env::consts::ARCH),
-        );
-        sandbox.enable_seccomp(&seccomp_config)?
-    } else {
-        sandbox.without_seccomp()
-    };
+    let sandbox = sandbox.ready_for_exec();
     sandbox.exec_payload(&req.profile.command)
 }
 
@@ -158,9 +149,12 @@ fn run_proxy(req: SandboxLaunchRequest) -> Result<ProxyStatus> {
     let _ = setpgid(Pid::from_raw(0), Pid::from_raw(0));
     crate::exec::preexec::setup_parent_death_signal()?;
 
-    let (stdout_read, stdout_write) = nix::unistd::pipe().map_err(|e| to_isolate_error("pipe(stdout)", e))?;
-    let (stderr_read, stderr_write) = nix::unistd::pipe().map_err(|e| to_isolate_error("pipe(stderr)", e))?;
-    let (stdin_read, stdin_write) = nix::unistd::pipe().map_err(|e| to_isolate_error("pipe(stdin)", e))?;
+    let (stdout_read, stdout_write) =
+        nix::unistd::pipe().map_err(|e| to_isolate_error("pipe(stdout)", e))?;
+    let (stderr_read, stderr_write) =
+        nix::unistd::pipe().map_err(|e| to_isolate_error("pipe(stderr)", e))?;
+    let (stdin_read, stdin_write) =
+        nix::unistd::pipe().map_err(|e| to_isolate_error("pipe(stdin)", e))?;
 
     let payload_pid = match unsafe { fork() }.map_err(|e| to_isolate_error("fork(payload)", e))? {
         ForkResult::Child => {
@@ -169,8 +163,10 @@ fn run_proxy(req: SandboxLaunchRequest) -> Result<ProxyStatus> {
             let _ = close(stdin_write);
 
             dup2(stdin_read, libc::STDIN_FILENO).map_err(|e| to_isolate_error("dup2(stdin)", e))?;
-            dup2(stdout_write, libc::STDOUT_FILENO).map_err(|e| to_isolate_error("dup2(stdout)", e))?;
-            dup2(stderr_write, libc::STDERR_FILENO).map_err(|e| to_isolate_error("dup2(stderr)", e))?;
+            dup2(stdout_write, libc::STDOUT_FILENO)
+                .map_err(|e| to_isolate_error("dup2(stdout)", e))?;
+            dup2(stderr_write, libc::STDERR_FILENO)
+                .map_err(|e| to_isolate_error("dup2(stderr)", e))?;
 
             let _ = close(stdin_read);
             let _ = close(stdout_write);
@@ -259,7 +255,13 @@ pub fn run_proxy_main_from_fds(launch_fd: RawFd, status_fd: RawFd) -> ! {
     };
 
     let _ = write_proxy_status(status_fd, &outcome);
-    let code = outcome.exit_code.unwrap_or_else(|| if outcome.internal_error.is_some() { 126 } else { 0 });
+    let code = outcome.exit_code.unwrap_or_else(|| {
+        if outcome.internal_error.is_some() {
+            126
+        } else {
+            0
+        }
+    });
     std::process::exit(code);
 }
 

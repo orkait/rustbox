@@ -1,8 +1,0 @@
-error[E0599]: no method named `enable_seccomp` found for struct `Sandbox<CredsDropped>` in the current scope
-  --> tests/typestate_compile_fail/seccomp_before_privs_locked.rs:24:13
-   |
-24 |     sandbox.enable_seccomp(&seccomp_config);
-   |             ^^^^^^^^^^^^^^ method not found in `Sandbox<CredsDropped>`
-   |
-   = note: the method was found for
-           - `Sandbox<PrivsLocked>`

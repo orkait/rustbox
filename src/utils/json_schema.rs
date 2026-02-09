@@ -261,7 +261,7 @@ impl JudgeResultV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn create_test_result() -> JudgeResultV1 {
         let capability_report = CapabilityReport {
             configured_controls: vec!["pid_namespace".to_string(), "mount_namespace".to_string()],
@@ -274,9 +274,6 @@ mod tests {
             pidfd_mode: PidfdMode::Native,
             proc_policy_applied: "hardened".to_string(),
             sys_policy_applied: "disabled".to_string(),
-            syscall_filtering_enabled: false,
-            syscall_filtering_source: SyscallFilterSource::None,
-            syscall_filtering_profile_id: None,
         };
 
         let evidence_bundle = EvidenceBundle {

@@ -9,7 +9,6 @@
 //! - [`kernel::namespace`]: Linux namespace isolation (PID, mount, network, user)
 //! - [`kernel::cgroup`]: Resource governance (v1/v2 backends, limits, accounting)
 //! - [`kernel::capabilities`]: Capability management and privilege dropping
-//! - [`kernel::seccomp`]: Syscall filtering (optional, explicit opt-in)
 //! - [`kernel::mount`]: Filesystem isolation and mount management
 //! - [`kernel::signal`]: Signal handling and lifecycle contracts
 //!
@@ -95,18 +94,17 @@ pub mod testing;
 // CLI entrypoint wiring shared by isolate/judge/rustbox binaries.
 pub mod cli;
 
-// Legacy/Compatibility (to be refactored)
-pub mod legacy;
+// Runtime modules
+pub mod runtime;
 
 // Re-export commonly used types for convenience
 pub use config::types::*;
 
-// Backward-compatible root aliases for existing tests/docs.
+// Root aliases for existing tests/docs.
 pub mod types {
     pub use crate::config::types::*;
 }
 pub use exec::preexec;
-pub use kernel::seccomp;
 pub use observability::audit as security_logging;
 pub use safety::cleanup;
 pub use testing::mount_invariance;

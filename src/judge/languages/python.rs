@@ -20,7 +20,7 @@ fn base_profile() -> ExecutionProfile {
         enable_mount_namespace: true,
         enable_network_namespace: true,
         enable_user_namespace: false,
-        enable_syscall_filtering: false,
+        allow_degraded: false,
         memory_limit: Some(256 * 1024 * 1024),
         file_size_limit: Some(64 * 1024 * 1024),
         stack_limit: Some(8 * 1024 * 1024),
@@ -56,7 +56,11 @@ impl JudgeAdapter for PythonAdapter {
             "/usr/bin/python3".to_string(),
             "-B".to_string(),
             "-S".to_string(),
-            workspace.workdir.join("solution.py").to_string_lossy().to_string(),
+            workspace
+                .workdir
+                .join("solution.py")
+                .to_string_lossy()
+                .to_string(),
         ]
     }
 }

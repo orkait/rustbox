@@ -18,10 +18,6 @@ fn typestate_compile_fail_tests() {
     t.compile_fail("tests/typestate_compile_fail/skip_mount_hardening.rs");
     t.compile_fail("tests/typestate_compile_fail/skip_cgroup_attach.rs");
 
-    // Test that illegal seccomp invocation fails to compile
-    t.compile_fail("tests/typestate_compile_fail/seccomp_before_privs_locked.rs");
-    t.compile_fail("tests/typestate_compile_fail/double_seccomp.rs");
-
     // Test that state reuse fails to compile
     t.compile_fail("tests/typestate_compile_fail/reuse_consumed_state.rs");
 }

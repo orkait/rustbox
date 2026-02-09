@@ -9,7 +9,10 @@ fn profile(memory_mb: u64, process_limit: u32, cpu_ms: u64, wall_ms: u64) -> Exe
     ExecutionProfile {
         command: Vec::new(),
         stdin_data: None,
-        environment: vec![("JAVA_TOOL_OPTIONS".to_string(), "-Dfile.encoding=UTF-8".to_string())],
+        environment: vec![(
+            "JAVA_TOOL_OPTIONS".to_string(),
+            "-Dfile.encoding=UTF-8".to_string(),
+        )],
         inherit_fds: false,
         workdir: PathBuf::from("."),
         chroot_dir: None,
@@ -20,7 +23,7 @@ fn profile(memory_mb: u64, process_limit: u32, cpu_ms: u64, wall_ms: u64) -> Exe
         enable_mount_namespace: true,
         enable_network_namespace: true,
         enable_user_namespace: false,
-        enable_syscall_filtering: false,
+        allow_degraded: false,
         memory_limit: Some(memory_mb * 1024 * 1024),
         file_size_limit: Some(64 * 1024 * 1024),
         stack_limit: Some(8 * 1024 * 1024),
@@ -73,7 +76,11 @@ impl JudgeAdapter for JavaAdapter {
             "/usr/bin/javac".to_string(),
             "-encoding".to_string(),
             "UTF-8".to_string(),
-            workspace.workdir.join("Main.java").to_string_lossy().to_string(),
+            workspace
+                .workdir
+                .join("Main.java")
+                .to_string_lossy()
+                .to_string(),
         ]
     }
 

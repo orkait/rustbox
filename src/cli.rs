@@ -31,9 +31,15 @@ impl CliMode {
             Self::Compat => true,
             Self::Isolate => matches!(
                 command,
-                Commands::Init { .. } | Commands::Run { .. } | Commands::Status | Commands::Cleanup { .. }
+                Commands::Init { .. }
+                    | Commands::Run { .. }
+                    | Commands::Status
+                    | Commands::Cleanup { .. }
             ),
-            Self::Judge => matches!(command, Commands::ExecuteCode { .. } | Commands::CheckDeps { .. }),
+            Self::Judge => matches!(
+                command,
+                Commands::ExecuteCode { .. } | Commands::CheckDeps { .. }
+            ),
         }
     }
 }
@@ -129,9 +135,10 @@ enum Commands {
         /// Run in permissive mode (unsafe for untrusted code). Strict is default.
         #[arg(long)]
         permissive: bool,
-        /// Enable syscall filtering (explicit opt-in; currently fails closed until implemented)
+        /// Allow degraded (no-isolation) fallback when running without root.
+        /// WARNING: Unsafe for untrusted code. Use only for local development.
         #[arg(long)]
-        enable_syscall_filtering: bool,
+        allow_degraded: bool,
     },
     /// List known sandbox instances and their status
     Status,
@@ -260,7 +267,9 @@ pub fn run(mode: CliMode) -> Result<()> {
         return Err(anyhow::anyhow!("unsupported internal role: {}", role));
     }
 
-    let command = cli.command.ok_or_else(|| anyhow::anyhow!("missing command"))?;
+    let command = cli
+        .command
+        .ok_or_else(|| anyhow::anyhow!("missing command"))?;
     validate_command_mode(mode, &command);
 
     // Privilege check - many security features require elevated permissions
@@ -289,7 +298,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             // The workdir is created under the UID-scoped runtime root by default.
             config.strict_mode = true;
 
-            let _isolate = crate::legacy::isolate::Isolate::new(config)?;
+            let _isolate = crate::runtime::isolate::Isolate::new(config)?;
             eprintln!("Sandbox initialized successfully");
             Ok(())
         }
@@ -326,7 +335,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             }
 
             let instance_id = format!("rustbox/{}", box_id);
-            let mut isolate = crate::legacy::isolate::Isolate::load(&instance_id)?
+            let mut isolate = crate::runtime::isolate::Isolate::load(&instance_id)?
                 .ok_or_else(|| anyhow::anyhow!("Sandbox {} not found. Run init first.", box_id))?;
             isolate.config_mut().force_cgroup_v1 = cgroup_v1;
 
@@ -375,19 +384,20 @@ pub fn run(mode: CliMode) -> Result<()> {
                     eprintln!("Executing standardized file: {}", standard_filename);
                     let code = std::fs::read_to_string(&standard_path)?;
                     let result = isolate.execute_code_string(
-                        "python",
-                        &code,
-                        None, // stdin
+                        "python", &code, None, // stdin
+                        cpu, mem, time, wall_time, None,      // fd_limit
+                        processes, // P0-CLI-001: Pass process limit
+                    )?;
+
+                    let output_config = build_overridden_config(
+                        isolate.config(),
                         cpu,
                         mem,
                         time,
                         wall_time,
-                        None, // fd_limit
-                        processes, // P0-CLI-001: Pass process limit
-                    )?;
-
-                    let output_config =
-                        build_overridden_config(isolate.config(), cpu, mem, time, wall_time, None, processes);
+                        None,
+                        processes,
+                    );
                     let launch_evidence = isolate.take_last_launch_evidence();
                     let reported_status = emit_judge_json(
                         &result,
@@ -403,9 +413,9 @@ pub fn run(mode: CliMode) -> Result<()> {
                             // Also clean up the standardized files we created
                             let sandbox_work_dir = sandbox_box_work_dir(box_id);
                             if sandbox_work_dir.exists() {
-                                if let Err(e) =
-                                    crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
-                                {
+                                if let Err(e) = crate::safety::safe_cleanup::remove_tree_secure(
+                                    &sandbox_work_dir,
+                                ) {
                                     eprintln!(
                                         "Warning: Failed to remove sandbox files {}: {}",
                                         sandbox_work_dir.display(),
@@ -479,7 +489,11 @@ pub fn run(mode: CliMode) -> Result<()> {
                         eprintln!(
                             "Please use a different box-id or clean up the existing sandbox first."
                         );
-                        eprintln!("To cleanup: {} cleanup --box-id {}", mode.primary_binary(), box_id);
+                        eprintln!(
+                            "To cleanup: {} cleanup --box-id {}",
+                            mode.primary_binary(),
+                            box_id
+                        );
                         std::process::exit(1);
                     }
 
@@ -497,7 +511,11 @@ pub fn run(mode: CliMode) -> Result<()> {
                         eprintln!(
                             "Please use a different box-id or clean up the existing sandbox first."
                         );
-                        eprintln!("To cleanup: {} cleanup --box-id {}", mode.primary_binary(), box_id);
+                        eprintln!(
+                            "To cleanup: {} cleanup --box-id {}",
+                            mode.primary_binary(),
+                            box_id
+                        );
                         std::process::exit(1);
                     }
 
@@ -524,19 +542,20 @@ pub fn run(mode: CliMode) -> Result<()> {
                         _ => "python", // default
                     };
                     let result = isolate.execute_code_string(
-                        language,
-                        &code,
-                        None, // stdin
+                        language, &code, None, // stdin
+                        cpu, mem, time, wall_time, None,      // fd_limit
+                        processes, // P0-CLI-001: Pass process limit
+                    )?;
+
+                    let output_config = build_overridden_config(
+                        isolate.config(),
                         cpu,
                         mem,
                         time,
                         wall_time,
-                        None, // fd_limit
-                        processes, // P0-CLI-001: Pass process limit
-                    )?;
-
-                    let output_config =
-                        build_overridden_config(isolate.config(), cpu, mem, time, wall_time, None, processes);
+                        None,
+                        processes,
+                    );
                     let launch_evidence = isolate.take_last_launch_evidence();
                     let reported_status = emit_judge_json(
                         &result,
@@ -552,9 +571,9 @@ pub fn run(mode: CliMode) -> Result<()> {
                             // Also clean up the standardized files we created
                             let sandbox_work_dir = sandbox_box_work_dir(box_id);
                             if sandbox_work_dir.exists() {
-                                if let Err(e) =
-                                    crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
-                                {
+                                if let Err(e) = crate::safety::safe_cleanup::remove_tree_secure(
+                                    &sandbox_work_dir,
+                                ) {
                                     eprintln!(
                                         "Warning: Failed to remove sandbox files {}: {}",
                                         sandbox_work_dir.display(),
@@ -594,19 +613,20 @@ pub fn run(mode: CliMode) -> Result<()> {
                         _ => "python", // default
                     };
                     let result = isolate.execute_code_string(
-                        language,
-                        &code,
-                        None, // stdin
+                        language, &code, None, // stdin
+                        cpu, mem, time, wall_time, None,      // fd_limit
+                        processes, // P0-CLI-001: Pass process limit
+                    )?;
+
+                    let output_config = build_overridden_config(
+                        isolate.config(),
                         cpu,
                         mem,
                         time,
                         wall_time,
-                        None, // fd_limit
-                        processes, // P0-CLI-001: Pass process limit
-                    )?;
-
-                    let output_config =
-                        build_overridden_config(isolate.config(), cpu, mem, time, wall_time, None, processes);
+                        None,
+                        processes,
+                    );
                     let launch_evidence = isolate.take_last_launch_evidence();
                     let reported_status = emit_judge_json(
                         &result,
@@ -622,9 +642,9 @@ pub fn run(mode: CliMode) -> Result<()> {
                             // Also clean up the standardized files we created
                             let sandbox_work_dir = sandbox_box_work_dir(box_id);
                             if sandbox_work_dir.exists() {
-                                if let Err(e) =
-                                    crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
-                                {
+                                if let Err(e) = crate::safety::safe_cleanup::remove_tree_secure(
+                                    &sandbox_work_dir,
+                                ) {
                                     eprintln!(
                                         "Warning: Failed to remove sandbox files {}: {}",
                                         sandbox_work_dir.display(),
@@ -659,18 +679,20 @@ pub fn run(mode: CliMode) -> Result<()> {
             } else {
                 // Multiple arguments or command - execute directly
                 let result = isolate.execute_with_overrides(
-                    &command,
-                    None, // stdin
+                    &command, None, // stdin
+                    cpu, mem, time, wall_time, None,      // fd_limit
+                    processes, // P0-CLI-001: Pass process limit
+                )?;
+
+                let output_config = build_overridden_config(
+                    isolate.config(),
                     cpu,
                     mem,
                     time,
                     wall_time,
-                    None, // fd_limit
-                    processes, // P0-CLI-001: Pass process limit
-                )?;
-
-                let output_config =
-                    build_overridden_config(isolate.config(), cpu, mem, time, wall_time, None, processes);
+                    None,
+                    processes,
+                );
                 let launch_evidence = isolate.take_last_launch_evidence();
                 let reported_status =
                     emit_judge_json(&result, &output_config, None, launch_evidence.as_ref())?;
@@ -726,7 +748,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             cgroup_v1,
             strict,
             permissive,
-            enable_syscall_filtering,
+            allow_degraded,
         } => {
             CURRENT_BOX_ID.store(box_id, Ordering::Relaxed);
 
@@ -767,7 +789,8 @@ pub fn run(mode: CliMode) -> Result<()> {
                 eprintln!(
                     "   sudo {} execute-code --strict --box-id={} --language={} --code='...'",
                     mode.primary_binary(),
-                    box_id, language
+                    box_id,
+                    language
                 );
                 eprintln!();
 
@@ -817,15 +840,15 @@ pub fn run(mode: CliMode) -> Result<()> {
                 config.process_limit = Some(proc_limit);
                 eprintln!("🔧 CLI Override - Process limit: {}", proc_limit);
             }
-            if enable_syscall_filtering {
-                config.enable_syscall_filtering = true;
-                eprintln!("🔧 CLI Override - Syscall filtering: enabled");
+            if allow_degraded {
+                config.allow_degraded = true;
+                eprintln!("⚠️  CLI Override - Allow degraded fallback: ENABLED (unsafe for untrusted code)");
             }
             if cgroup_v1 {
                 eprintln!("🔧 CLI Override - Cgroup backend: forced v1");
             }
 
-            let mut isolate = crate::legacy::isolate::Isolate::new(config)?;
+            let mut isolate = crate::runtime::isolate::Isolate::new(config)?;
 
             // Execute code string directly
             let result = isolate.execute_code_string(
@@ -836,7 +859,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                 mem,
                 time,
                 wall_time,
-                None, // fd_limit
+                None,      // fd_limit
                 processes, // P0-CLI-001: Pass process limit
             )?;
 
@@ -865,7 +888,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             Ok(())
         }
         Commands::Status => {
-            let mut boxes = crate::legacy::isolate::Isolate::list_all()?;
+            let mut boxes = crate::runtime::isolate::Isolate::list_all()?;
             boxes.sort();
             let json_result = serde_json::json!({
                 "status": "OK",
@@ -879,7 +902,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             eprintln!("Cleaning up sandbox with box-id: {}", box_id);
 
             let instance_id = format!("rustbox/{}", box_id);
-            if let Some(isolate) = crate::legacy::isolate::Isolate::load(&instance_id)? {
+            if let Some(isolate) = crate::runtime::isolate::Isolate::load(&instance_id)? {
                 isolate.cleanup()?;
                 eprintln!("Sandbox cleaned up successfully");
             } else {
@@ -887,7 +910,9 @@ pub fn run(mode: CliMode) -> Result<()> {
             }
             Ok(())
         }
-        Commands::CheckDeps { verbose } => check_language_dependencies(verbose, mode.primary_binary()),
+        Commands::CheckDeps { verbose } => {
+            check_language_dependencies(verbose, mode.primary_binary())
+        }
     }
 }
 
@@ -936,15 +961,25 @@ fn build_envelope_id(
     language_runtime_envelope: Option<&str>,
 ) -> String {
     // Simplified envelope ID computation (deferred full implementation to post-V1)
-    use sha2::{Sha256, Digest};
-    
+    use sha2::{Digest, Sha256};
+
     let mut hasher = Sha256::new();
-    
+
     // Hash key configuration elements
     hasher.update(format!("rustbox-{}", env!("CARGO_PKG_VERSION")));
-    hasher.update(format!("uid:{}", config.uid.unwrap_or_else(|| unsafe { libc::geteuid() as u32 })));
-    hasher.update(format!("gid:{}", config.gid.unwrap_or_else(|| unsafe { libc::getegid() as u32 })));
-    
+    hasher.update(format!(
+        "uid:{}",
+        config
+            .uid
+            .unwrap_or_else(|| unsafe { libc::geteuid() as u32 })
+    ));
+    hasher.update(format!(
+        "gid:{}",
+        config
+            .gid
+            .unwrap_or_else(|| unsafe { libc::getegid() as u32 })
+    ));
+
     if let Some(mem) = config.memory_limit {
         hasher.update(format!("mem:{}", mem));
     }
@@ -957,15 +992,15 @@ fn build_envelope_id(
     if let Some(procs) = config.process_limit {
         hasher.update(format!("procs:{}", procs));
     }
-    
+
     if let Some(backend) = &capability_report.cgroup_backend_selected {
         hasher.update(format!("cgroup:{}", backend));
     }
-    
+
     if let Some(lang) = language_runtime_envelope {
         hasher.update(format!("lang:{}", lang));
     }
-    
+
     format!("{:x}", hasher.finalize())
 }
 

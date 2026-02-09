@@ -53,9 +53,6 @@ pub fn validate_config(config: &IsolateConfig) -> Result<ValidationResult> {
     // Validate UID/GID
     validate_credentials(config, &mut result);
 
-    // Validate syscall filtering
-    validate_syscall_filtering(config, &mut result);
-
     // In strict mode, errors are fatal
     if config.strict_mode && !result.is_valid() {
         let error_msg = format!(
@@ -227,20 +224,6 @@ fn validate_credentials(config: &IsolateConfig, result: &mut ValidationResult) {
     }
 }
 
-/// Validate syscall filtering configuration
-fn validate_syscall_filtering(config: &IsolateConfig, result: &mut ValidationResult) {
-    if config.enable_syscall_filtering {
-        result.add_warning(
-            "Syscall filtering enabled - no compatibility/correctness/safety guarantees"
-                .to_string(),
-        );
-        result.add_warning(
-            "Failures under filtering are attributed to filter, not judge infrastructure"
-                .to_string(),
-        );
-    }
-}
-
 /// Check if required controls are available on this system
 pub fn check_system_capabilities() -> Result<Vec<String>> {
     let mut missing = Vec::new();
@@ -381,19 +364,6 @@ mod tests {
 
         let result = validate_config(&config);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_syscall_filtering_warning() {
-        let mut config = IsolateConfig::default();
-        config.enable_syscall_filtering = true;
-        config.strict_mode = false;
-
-        let result = validate_config(&config).unwrap();
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("Syscall filtering enabled")));
     }
 
     #[test]

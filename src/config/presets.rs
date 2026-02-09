@@ -27,8 +27,6 @@ pub struct LanguageEnvelope {
     pub default_limits: ResourceLimits,
     /// Expected startup overhead (milliseconds)
     pub startup_overhead_ms: u64,
-    /// Optional syscall filtering notes (informational only, non-guaranteed)
-    pub syscall_notes: Option<String>,
 }
 
 /// Compiler configuration
@@ -114,10 +112,6 @@ impl LanguageEnvelope {
             self.startup_overhead_ms.to_string(),
         );
 
-        if let Some(ref notes) = self.syscall_notes {
-            metadata.insert("syscall_notes".to_string(), notes.clone());
-        }
-
         metadata
     }
 }
@@ -174,7 +168,6 @@ impl LanguagePresets {
                 stack_mb: Some(64),
             },
             startup_overhead_ms: 50,
-            syscall_notes: Some("Compiled binary; minimal syscalls expected".to_string()),
         };
 
         self.envelopes.insert(envelope.id.clone(), envelope);
@@ -210,9 +203,6 @@ impl LanguagePresets {
                 stack_mb: Some(64),
             },
             startup_overhead_ms: 200,
-            syscall_notes: Some(
-                "JVM requires many syscalls; filtering not recommended".to_string(),
-            ),
         };
 
         self.envelopes.insert(envelope.id.clone(), envelope);
@@ -241,9 +231,6 @@ impl LanguagePresets {
                 stack_mb: Some(64),
             },
             startup_overhead_ms: 100,
-            syscall_notes: Some(
-                "Python interpreter requires many syscalls; filtering not recommended".to_string(),
-            ),
         };
 
         self.envelopes.insert(envelope.id.clone(), envelope);

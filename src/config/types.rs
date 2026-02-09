@@ -79,9 +79,9 @@ impl DirectoryBinding {
 
     /// Parse directory binding with enhanced security validation
     pub fn parse_secure(binding_str: &str) -> crate::config::types::Result<Self> {
-        use crate::legacy::security::path_validation;
         use crate::observability::audit::events;
-        
+        use crate::runtime::security::path_validation;
+
         let parts: Vec<&str> = binding_str.split(':').collect();
         let path_part = parts[0];
         let options = if parts.len() > 1 { parts[1] } else { "" };
@@ -94,7 +94,10 @@ impl DirectoryBinding {
                         .to_string(),
                 ));
             }
-            (std::path::Path::new(path_parts[0]), std::path::Path::new(path_parts[1]))
+            (
+                std::path::Path::new(path_parts[0]),
+                std::path::Path::new(path_parts[1]),
+            )
         } else {
             // If no target specified, use same path in sandbox
             let path = std::path::Path::new(path_part);
@@ -102,14 +105,15 @@ impl DirectoryBinding {
         };
 
         // Use security validation for paths
-        let (validated_source, validated_target) = match path_validation::validate_directory_binding(source, target) {
-            Ok(paths) => paths,
-            Err(e) => {
-                // Log security event for path traversal attempt
-                events::path_traversal_attempt(binding_str.to_string(), None);
-                return Err(e);
-            }
-        };
+        let (validated_source, validated_target) =
+            match path_validation::validate_directory_binding(source, target) {
+                Ok(paths) => paths,
+                Err(e) => {
+                    // Log security event for path traversal attempt
+                    events::path_traversal_attempt(binding_str.to_string(), None);
+                    return Err(e);
+                }
+            };
 
         let mut permissions = DirectoryPermissions::ReadOnly;
         let mut maybe = false;
@@ -123,7 +127,12 @@ impl DirectoryBinding {
                 "maybe" => maybe = true,
                 "tmp" => is_tmp = true,
                 "" => {} // Empty option
-                _ => return Err(crate::config::types::IsolateError::Config(format!("Unknown directory binding option: {}", option))),
+                _ => {
+                    return Err(crate::config::types::IsolateError::Config(format!(
+                        "Unknown directory binding option: {}",
+                        option
+                    )))
+                }
             }
         }
 
@@ -168,10 +177,6 @@ pub struct IsolateConfig {
     pub core_limit: Option<u64>,
     /// File descriptor limit (max open files)
     pub fd_limit: Option<u64>,
-    /// Disk quota limit in bytes (filesystem-dependent)
-    pub disk_quota: Option<u64>,
-    /// Enable networking
-    pub enable_network: bool,
     /// Custom environment variables
     pub environment: Vec<(String, String)>,
     /// Strict mode: fail hard if cgroups unavailable or permission denied
@@ -203,8 +208,10 @@ pub struct IsolateConfig {
     pub enable_mount_namespace: bool,
     pub enable_network_namespace: bool,
     pub enable_user_namespace: bool,
-    /// Syscall filtering (disabled by default per plan.md)
-    pub enable_syscall_filtering: bool,
+    /// Allow degraded (no-isolation) fallback for non-root permissive mode.
+    /// Default false: EPERM from clone() is a hard error unless explicitly opted in.
+    #[serde(default)]
+    pub allow_degraded: bool,
     /// Directory bindings for filesystem access
     pub directory_bindings: Vec<DirectoryBinding>,
 }
@@ -225,26 +232,23 @@ impl Default for IsolateConfig {
     /// - single process limit
     /// - read-only filesystem with controlled writable work area
     /// - no_new_privileges required (enforced in executor)
-    /// - syscall filtering disabled by default (isolate-compatible)
     fn default() -> Self {
         Self {
             instance_id: uuid::Uuid::new_v4().to_string(),
             workdir: Self::runtime_root_dir(),
             chroot_dir: None,
             // Judge-v1 strict baseline: payload must drop to unprivileged identity.
-            uid: Some(65534), // nobody
-            gid: Some(65534), // nogroup
+            uid: Some(65534),                      // nobody
+            gid: Some(65534),                      // nogroup
             memory_limit: Some(128 * 1024 * 1024), // 128MB default for judge
             time_limit: Some(Duration::from_secs(10)),
             cpu_time_limit: Some(Duration::from_secs(10)),
             wall_time_limit: Some(Duration::from_secs(20)),
             process_limit: Some(1), // Single process by default (judge-v1)
             file_size_limit: Some(64 * 1024 * 1024), // 64MB
-            stack_limit: Some(8 * 1024 * 1024),      // 8MB default stack
-            core_limit: Some(0),                     // Disable core dumps by default
-            fd_limit: Some(64), // Default file descriptor limit
-            disk_quota: None,   // No disk quota by default
-            enable_network: false, // Network disabled by default (judge-v1)
+            stack_limit: Some(8 * 1024 * 1024), // 8MB default stack
+            core_limit: Some(0),    // Disable core dumps by default
+            fd_limit: Some(64),     // Default file descriptor limit
             environment: Vec::new(),
             strict_mode: true, // Strict mode by default (judge-v1)
             force_cgroup_v1: false,
@@ -257,11 +261,11 @@ impl Default for IsolateConfig {
             stdin_file: None,
             io_buffer_size: 8192, // 8KB default buffer
             text_encoding: "utf-8".to_string(),
-            enable_pid_namespace: true,  // Mandatory for judge-v1
-            enable_mount_namespace: true, // Mandatory for judge-v1
+            enable_pid_namespace: true,     // Mandatory for judge-v1
+            enable_mount_namespace: true,   // Mandatory for judge-v1
             enable_network_namespace: true, // Network isolation
-            enable_user_namespace: false, // Rootful strict GA (judge-v1)
-            enable_syscall_filtering: false, // Disabled by default (judge-v1, isolate-compatible)
+            enable_user_namespace: false,   // Rootful strict GA (judge-v1)
+            allow_degraded: false,          // C3: Never degrade by default
             directory_bindings: Vec::new(),
         }
     }
@@ -356,23 +360,23 @@ pub enum VerdictCause {
     TleCpuKernel,
     #[serde(rename = "tle_wall_judge")]
     TleWallJudge,
-    
+
     // MLE causes
     #[serde(rename = "mle_kernel_oom")]
     MleKernelOom,
     #[serde(rename = "mle_limit_breach")]
     MleLimitBreach,
-    
+
     // RE causes
     #[serde(rename = "re_nonzero_exit")]
     ReNonzeroExit,
     #[serde(rename = "re_fatal_signal")]
     ReFatalSignal,
-    
+
     // SIG causes
     #[serde(rename = "sig_unattributed")]
     SigUnattributed,
-    
+
     // ABUSE causes
     #[serde(rename = "abuse_fork_bomb")]
     AbuseForkBomb,
@@ -382,7 +386,7 @@ pub enum VerdictCause {
     AbuseSignalStorm,
     #[serde(rename = "abuse_exec_churn")]
     AbuseExecChurn,
-    
+
     // IE causes
     #[serde(rename = "ie_missing_evidence")]
     IeMissingEvidence,
@@ -392,7 +396,7 @@ pub enum VerdictCause {
     IeSupervisorFailure,
     #[serde(rename = "ie_cleanup_failure")]
     IeCleanupFailure,
-    
+
     // Other
     #[serde(rename = "normal_exit")]
     NormalExit,
@@ -592,15 +596,8 @@ impl From<std::process::Output> for ExecutionResult {
             wall_time: 0.0, // Not available from std::process::Output
             memory_peak: 0, // Not available from std::process::Output
             signal: {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::process::ExitStatusExt;
-                    output.status.signal()
-                }
-                #[cfg(not(unix))]
-                {
-                    None
-                }
+                use std::os::unix::process::ExitStatusExt;
+                output.status.signal()
             },
             success: output.status.success(),
             error_message: None,
@@ -642,12 +639,6 @@ pub struct CapabilityReport {
     pub proc_policy_applied: String,
     /// /sys policy applied
     pub sys_policy_applied: String,
-    /// Syscall filtering enabled
-    pub syscall_filtering_enabled: bool,
-    /// Syscall filtering source
-    pub syscall_filtering_source: SyscallFilterSource,
-    /// Syscall filtering profile ID (if applicable)
-    pub syscall_filtering_profile_id: Option<String>,
 }
 
 /// Security mode
@@ -673,17 +664,6 @@ pub enum PidfdMode {
     Fallback,
     #[serde(rename = "unavailable")]
     Unavailable,
-}
-
-/// Syscall filter source
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum SyscallFilterSource {
-    #[serde(rename = "none")]
-    None,
-    #[serde(rename = "custom_allowlist")]
-    CustomAllowlist,
-    #[serde(rename = "reference_catalog")]
-    ReferenceCatalog,
 }
 
 /// Evidence Bundle - Per plan.md Section 8.5.1
@@ -872,18 +852,12 @@ pub struct ExecutionEnvelopeInputs {
     pub rustbox_version: String,
     /// Language runtime envelope ID
     pub language_runtime_envelope_id: Option<String>,
-    /// Syscall filtering state
-    pub syscall_filtering_enabled: bool,
-    /// Syscall filtering source
-    pub syscall_filtering_source: SyscallFilterSource,
-    /// Syscall filtering profile ID
-    pub syscall_filtering_profile_id: Option<String>,
 }
 
 impl ExecutionEnvelopeInputs {
     /// Compute SHA256 hash of canonical envelope inputs
     pub fn compute_envelope_id(&self) -> String {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let canonical = serde_json::to_string(self).unwrap_or_default();
         let mut hasher = Sha256::new();
         hasher.update(canonical.as_bytes());

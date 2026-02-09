@@ -161,18 +161,6 @@ impl ProcSysPolicy {
         Ok(())
     }
 
-    #[cfg(not(unix))]
-    pub fn apply_proc_policy(&self, _proc_path: &Path) -> Result<()> {
-        log::warn!("/proc policy not supported on non-Unix systems");
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    pub fn apply_sys_policy(&self, _sys_path: &Path) -> Result<()> {
-        log::warn!("/sys policy not supported on non-Unix systems");
-        Ok(())
-    }
-
     /// Get policy description for capability report
     pub fn get_proc_policy_description(&self) -> String {
         match self.proc_policy {

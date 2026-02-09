@@ -1,3 +1,5 @@
+use crate::config::types::{IsolateError, Result};
+use crate::core::types::ExecutionProfile;
 /// Pre-Exec Ordering Enforcement
 /// Implements P1-ORDER-001: Locked Pre-Exec Ordering Enforcement
 /// Per plan.md Section 6: Locked Pre-Exec Sequence
@@ -13,16 +15,12 @@
 /// 8. drop capabilities (bounding and ambient/effective/permitted/inheritable)
 /// 9. setresgid then setresuid
 /// 10. prctl(PR_SET_NO_NEW_PRIVS, 1)
-/// 11. if --enable-syscall-filtering is set, install syscall filtering as final gate
-/// 12. exec payload
-
+/// 11. exec payload
 use crate::kernel::capabilities;
-use crate::config::types::{IsolateError, Result};
-use crate::core::types::ExecutionProfile;
 use std::collections::HashMap;
+use std::ffi::CString;
 use std::marker::PhantomData;
 use std::path::Path;
-use std::ffi::CString;
 
 #[cfg(unix)]
 fn apply_rlimit_value(
@@ -137,17 +135,17 @@ pub fn setup_parent_death_signal() -> Result<()> {
     {
         use nix::sys::prctl;
         use nix::sys::signal::Signal;
-        
+
         // Set PR_SET_PDEATHSIG to SIGKILL
         // Child will receive SIGKILL if parent dies
         prctl::set_pdeathsig(Signal::SIGKILL).map_err(|e| {
             IsolateError::Process(format!("Failed to set parent death signal: {}", e))
         })?;
-        
+
         log::debug!("Parent death signal (SIGKILL) configured");
         Ok(())
     }
-    
+
     #[cfg(not(target_os = "linux"))]
     {
         log::warn!("Parent death signal not supported on this platform");
@@ -185,9 +183,7 @@ pub enum PreExecStep {
     CredentialDrop,
     /// Step 10: PR_SET_NO_NEW_PRIVS
     NoNewPrivs,
-    /// Step 11: syscall filtering (if enabled)
-    SyscallFiltering,
-    /// Step 12: exec payload
+    /// Step 11: exec payload
     PayloadExec,
 }
 
@@ -199,12 +195,12 @@ impl PreExecValidator {
             strict_mode,
         }
     }
-    
+
     /// Record a step completion
     pub fn record_step(&mut self, step: PreExecStep) -> Result<()> {
         // Verify this step comes in the correct order
         let expected_next = self.get_next_expected_step();
-        
+
         if let Some(expected) = expected_next {
             if step != expected {
                 if self.strict_mode {
@@ -216,20 +212,21 @@ impl PreExecValidator {
                 } else {
                     log::warn!(
                         "Pre-exec ordering warning: expected {:?}, got {:?}",
-                        expected, step
+                        expected,
+                        step
                     );
                 }
             }
         }
-        
+
         self.steps_completed.push(step);
         Ok(())
     }
-    
+
     /// Get the next expected step
     fn get_next_expected_step(&self) -> Option<PreExecStep> {
         let completed_count = self.steps_completed.len();
-        
+
         match completed_count {
             0 => Some(PreExecStep::SessionSetup),
             1 => Some(PreExecStep::ParentDeathSignal),
@@ -241,15 +238,14 @@ impl PreExecValidator {
             7 => Some(PreExecStep::CapabilityDrop),
             8 => Some(PreExecStep::CredentialDrop),
             9 => Some(PreExecStep::NoNewPrivs),
-            10 => Some(PreExecStep::SyscallFiltering),
-            11 => Some(PreExecStep::PayloadExec),
+            10 => Some(PreExecStep::PayloadExec),
             _ => None,
         }
     }
-    
+
     /// Verify all required steps completed before exec
     pub fn verify_ready_for_exec(&self) -> Result<()> {
-        // At minimum, we need steps 1-10 (syscall filtering is optional)
+        // At minimum, we need steps 1-10 before exec.
         let required_steps = vec![
             PreExecStep::SessionSetup,
             PreExecStep::ParentDeathSignal,
@@ -262,7 +258,7 @@ impl PreExecValidator {
             PreExecStep::CredentialDrop,
             PreExecStep::NoNewPrivs,
         ];
-        
+
         for required_step in required_steps {
             if !self.steps_completed.contains(&required_step) {
                 if self.strict_mode {
@@ -271,14 +267,17 @@ impl PreExecValidator {
                         required_step
                     )));
                 } else {
-                    log::warn!("Pre-exec sequence incomplete: missing step {:?}", required_step);
+                    log::warn!(
+                        "Pre-exec sequence incomplete: missing step {:?}",
+                        required_step
+                    );
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get completed steps for audit
     pub fn get_completed_steps(&self) -> &[PreExecStep] {
         &self.steps_completed
@@ -346,7 +345,7 @@ impl Sandbox<FreshChild> {
             _state: PhantomData,
         }
     }
-    
+
     /// Transition to NamespacesReady state
     /// This consumes FreshChild and returns NamespacesReady on success
     pub fn setup_namespaces(
@@ -373,7 +372,7 @@ impl Sandbox<FreshChild> {
 
         // Step 2: ensure child dies if supervisor/parent dies.
         setup_parent_death_signal()?;
-        
+
         let ns_isolation = NamespaceIsolation::new(
             enable_pid,
             enable_mount,
@@ -382,7 +381,7 @@ impl Sandbox<FreshChild> {
             false, // IPC namespace
             false, // UTS namespace
         );
-        
+
         if ns_isolation.is_isolation_enabled() {
             if let Err(e) = ns_isolation.apply_isolation() {
                 if self.strict_mode {
@@ -396,7 +395,7 @@ impl Sandbox<FreshChild> {
                 );
             }
         }
-        
+
         Ok(Sandbox {
             pid: self.pid,
             instance_id: self.instance_id,
@@ -412,7 +411,7 @@ impl Sandbox<NamespacesReady> {
     /// This hardens mount propagation before any mount operations
     pub fn harden_mount_propagation(self) -> Result<Sandbox<MountsPrivate>> {
         use crate::kernel::namespace::harden_mount_propagation;
-        
+
         if self.mount_namespace_enabled {
             // Per plan.md Section 6: mount propagation hardening is MANDATORY
             // Failure is fatal in strict mode.
@@ -420,13 +419,16 @@ impl Sandbox<NamespacesReady> {
                 if self.strict_mode {
                     return Err(e);
                 } else {
-                    log::warn!("Mount propagation hardening failed (permissive mode): {}", e);
+                    log::warn!(
+                        "Mount propagation hardening failed (permissive mode): {}",
+                        e
+                    );
                 }
             }
         } else {
             log::debug!("Mount namespace disabled; skipping propagation hardening step");
         }
-        
+
         Ok(Sandbox {
             pid: self.pid,
             instance_id: self.instance_id,
@@ -438,39 +440,6 @@ impl Sandbox<NamespacesReady> {
 }
 
 impl Sandbox<MountsPrivate> {
-    /// Step 5: mount/bind setup and root transition (pivot_root/chroot fallback).
-    /// This runs in the active runtime path before cgroup attach and exec.
-    pub fn setup_mounts_and_root(self, profile: &ExecutionProfile) -> Result<Sandbox<MountsPrivate>> {
-        let fs_security = crate::kernel::mount::filesystem::FilesystemSecurity::new(
-            profile.chroot_dir.clone(),
-            profile.workdir.clone(),
-            self.strict_mode,
-        );
-
-        if let Err(e) = fs_security.setup_isolation() {
-            if self.strict_mode {
-                return Err(e);
-            }
-            log::warn!("Filesystem isolation setup failed (permissive mode): {}", e);
-        }
-
-        if let Err(e) = fs_security.setup_directory_bindings(&profile.directory_bindings) {
-            if self.strict_mode {
-                return Err(e);
-            }
-            log::warn!("Directory binding setup failed (permissive mode): {}", e);
-        }
-
-        if let Err(e) = fs_security.apply_chroot() {
-            if self.strict_mode {
-                return Err(e);
-            }
-            log::warn!("Root transition failed (permissive mode): {}", e);
-        }
-
-        Ok(self)
-    }
-
     /// Transition to CgroupAttached state
     /// This attaches the process to its cgroup before any user code runs
     pub fn attach_to_cgroup(self, cgroup_path: Option<&str>) -> Result<Sandbox<CgroupAttached>> {
@@ -520,7 +489,7 @@ impl Sandbox<MountsPrivate> {
                 );
             }
         }
-        
+
         Ok(Sandbox {
             pid: self.pid,
             instance_id: self.instance_id,
@@ -532,9 +501,48 @@ impl Sandbox<MountsPrivate> {
 }
 
 impl Sandbox<CgroupAttached> {
+    /// Step 5: mount/bind setup and root transition (pivot_root/chroot fallback).
+    /// Runs AFTER cgroup attach so host cgroup paths are still visible during attach.
+    pub fn setup_mounts_and_root(
+        self,
+        profile: &ExecutionProfile,
+    ) -> Result<Sandbox<CgroupAttached>> {
+        let mut fs_security = crate::kernel::mount::filesystem::FilesystemSecurity::new(
+            profile.chroot_dir.clone(),
+            profile.workdir.clone(),
+            self.strict_mode,
+        );
+
+        if let Err(e) = fs_security.setup_isolation() {
+            if self.strict_mode {
+                return Err(e);
+            }
+            log::warn!("Filesystem isolation setup failed (permissive mode): {}", e);
+        }
+
+        if let Err(e) = fs_security.setup_directory_bindings(&profile.directory_bindings) {
+            if self.strict_mode {
+                return Err(e);
+            }
+            log::warn!("Directory binding setup failed (permissive mode): {}", e);
+        }
+
+        if let Err(e) = fs_security.apply_chroot() {
+            if self.strict_mode {
+                return Err(e);
+            }
+            log::warn!("Root transition failed (permissive mode): {}", e);
+        }
+
+        Ok(self)
+    }
+
     /// Apply pre-exec Step 7 in active runtime path:
     /// rlimits, umask, FD closure, and environment sanitization.
-    pub fn apply_runtime_hygiene(self, profile: &ExecutionProfile) -> Result<Sandbox<CgroupAttached>> {
+    pub fn apply_runtime_hygiene(
+        self,
+        profile: &ExecutionProfile,
+    ) -> Result<Sandbox<CgroupAttached>> {
         #[cfg(unix)]
         {
             if let Some(memory_limit) = profile.memory_limit {
@@ -605,6 +613,19 @@ impl Sandbox<CgroupAttached> {
                 )?;
             }
 
+            // C2: RLIMIT_CPU as defense-in-depth for CPU-time enforcement.
+            // soft = limit_secs → SIGXCPU, hard = limit_secs+1 → SIGKILL.
+            if let Some(cpu_ms) = profile.cpu_time_limit_ms {
+                let cpu_secs = (cpu_ms / 1000).max(1);
+                apply_rlimit_value(
+                    "RLIMIT_CPU",
+                    libc::RLIMIT_CPU,
+                    cpu_secs,
+                    cpu_secs + 1,
+                    self.strict_mode,
+                )?;
+            }
+
             let env_policy = crate::utils::env_hygiene::EnvPolicy {
                 strict_mode: self.strict_mode,
                 ..Default::default()
@@ -649,21 +670,21 @@ impl Sandbox<CgroupAttached> {
         // P15-PRIV-003: UID/GID Transition
         // Per plan.md Section 6: setresgid THEN setresuid
         // Order is critical: groups must be set before dropping to unprivileged user
-        
+
         if let (Some(uid_val), Some(gid_val)) = (uid, gid) {
             log::info!("Transitioning to UID={}, GID={}", uid_val, gid_val);
-            
+
             // Use capabilities module for complete transition
             // This handles: setgroups([]), setresgid, setresuid, verification
             capabilities::transition_to_unprivileged(uid_val, gid_val, self.strict_mode)?;
-            
+
             // Log current IDs for debugging
             let current_ids = capabilities::get_current_ids();
             log::info!("After transition: {}", current_ids);
         } else {
             log::warn!("UID/GID not specified, skipping credential drop");
         }
-        
+
         Ok(Sandbox {
             pid: self.pid,
             instance_id: self.instance_id,
@@ -679,15 +700,14 @@ impl Sandbox<CredsDropped> {
     /// This locks down privileges (capabilities + no_new_privs)
     pub fn lock_privileges(self) -> Result<Sandbox<PrivsLocked>> {
         log::info!("Locking privileges (capabilities + no_new_privs)");
-        
+
         // P15-PRIV-002: Drop all capabilities
         // Per plan.md Section 6: Drop bounding/ambient/effective/permitted/inheritable caps
         if self.strict_mode {
-            capabilities::drop_all_capabilities()
-                .map_err(|e| {
-                    log::error!("Failed to drop capabilities: {:?}", e);
-                    e
-                })?;
+            capabilities::drop_all_capabilities().map_err(|e| {
+                log::error!("Failed to drop capabilities: {:?}", e);
+                e
+            })?;
             log::info!("Dropped all capabilities");
         } else {
             // Permissive mode: attempt but don't fail
@@ -695,22 +715,22 @@ impl Sandbox<CredsDropped> {
                 log::warn!("Failed to drop capabilities (permissive mode): {:?}", e);
             }
         }
-        
+
         // P15-PRIV-001: Set PR_SET_NO_NEW_PRIVS
         // Per plan.md Section 6: prctl(PR_SET_NO_NEW_PRIVS, 1) is mandatory in strict mode
         // This prevents privilege escalation after exec
         capabilities::set_no_new_privs()?;
-        
+
         // Verify no_new_privs is set
         let is_set = capabilities::check_no_new_privs()?;
         if !is_set && self.strict_mode {
             return Err(IsolateError::Privilege(
-                "PR_SET_NO_NEW_PRIVS verification failed".to_string()
+                "PR_SET_NO_NEW_PRIVS verification failed".to_string(),
             ));
         }
-        
+
         log::info!("Privileges locked: no_new_privs={}", is_set);
-        
+
         Ok(Sandbox {
             pid: self.pid,
             instance_id: self.instance_id,
@@ -722,11 +742,8 @@ impl Sandbox<CredsDropped> {
 }
 
 impl Sandbox<PrivsLocked> {
-    /// Transition to ExecReady state WITHOUT seccomp
-    /// This is the default path (seccomp disabled by default)
-    pub fn without_seccomp(self) -> Sandbox<ExecReady> {
-        log::info!("Skipping seccomp (default behavior)");
-        
+    /// Transition to ExecReady state after privilege hardening.
+    pub fn ready_for_exec(self) -> Sandbox<ExecReady> {
         Sandbox {
             pid: self.pid,
             instance_id: self.instance_id,
@@ -734,25 +751,6 @@ impl Sandbox<PrivsLocked> {
             mount_namespace_enabled: self.mount_namespace_enabled,
             _state: PhantomData,
         }
-    }
-    
-    /// Transition to ExecReady state WITH seccomp
-    /// This is only called when --enable-syscall-filtering is set
-    pub fn enable_seccomp(self, config: &crate::kernel::seccomp::SyscallFilterConfig) -> Result<Sandbox<ExecReady>> {
-        log::info!("Enabling seccomp filtering");
-        
-        // P15-SECCOMP-001: Install syscall filter
-        // This is ONLY enabled when --enable-syscall-filtering flag is set
-        // Per plan.md: Filtering is disabled by default and provides no guarantees
-        crate::kernel::seccomp::install_syscall_filter(config, self.strict_mode)?;
-        
-        Ok(Sandbox {
-            pid: self.pid,
-            instance_id: self.instance_id,
-            strict_mode: self.strict_mode,
-            mount_namespace_enabled: self.mount_namespace_enabled,
-            _state: PhantomData,
-        })
     }
 }
 
@@ -832,11 +830,7 @@ Pre-Exec Sequence (plan.md Section 6):
     - prctl(PR_SET_NO_NEW_PRIVS, 1)
     - Prevents privilege escalation
 
-11. syscall filtering (optional, explicit flag required)
-    - Only if --enable-syscall-filtering is set
-    - Install seccomp filter as final gate
-
-12. exec payload
+11. exec payload
     - Execute the untrusted program
     - No return from this point
 "#;
@@ -844,63 +838,73 @@ Pre-Exec Sequence (plan.md Section 6):
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_correct_ordering() {
         let mut validator = PreExecValidator::new(true);
-        
+
         // Follow correct order
         assert!(validator.record_step(PreExecStep::SessionSetup).is_ok());
-        assert!(validator.record_step(PreExecStep::ParentDeathSignal).is_ok());
+        assert!(validator
+            .record_step(PreExecStep::ParentDeathSignal)
+            .is_ok());
         assert!(validator.record_step(PreExecStep::NamespaceSetup).is_ok());
-        assert!(validator.record_step(PreExecStep::MountPropagationHardening).is_ok());
-        
+        assert!(validator
+            .record_step(PreExecStep::MountPropagationHardening)
+            .is_ok());
+
         assert_eq!(validator.get_completed_steps().len(), 4);
     }
-    
+
     #[test]
     fn test_incorrect_ordering_strict() {
         let mut validator = PreExecValidator::new(true);
-        
+
         // Try to skip a step
         assert!(validator.record_step(PreExecStep::SessionSetup).is_ok());
-        
+
         // Skip ParentDeathSignal and go straight to NamespaceSetup
         let result = validator.record_step(PreExecStep::NamespaceSetup);
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_incorrect_ordering_permissive() {
         let mut validator = PreExecValidator::new(false);
-        
+
         // Try to skip a step in permissive mode
         assert!(validator.record_step(PreExecStep::SessionSetup).is_ok());
-        
+
         // Skip ParentDeathSignal - should warn but not error
         let result = validator.record_step(PreExecStep::NamespaceSetup);
         assert!(result.is_ok()); // Permissive mode allows it
     }
-    
+
     #[test]
     fn test_verify_ready_for_exec() {
         let mut validator = PreExecValidator::new(true);
-        
+
         // Not ready yet
         assert!(validator.verify_ready_for_exec().is_err());
-        
+
         // Complete all required steps
         validator.record_step(PreExecStep::SessionSetup).unwrap();
-        validator.record_step(PreExecStep::ParentDeathSignal).unwrap();
+        validator
+            .record_step(PreExecStep::ParentDeathSignal)
+            .unwrap();
         validator.record_step(PreExecStep::NamespaceSetup).unwrap();
-        validator.record_step(PreExecStep::MountPropagationHardening).unwrap();
+        validator
+            .record_step(PreExecStep::MountPropagationHardening)
+            .unwrap();
         validator.record_step(PreExecStep::MountSetup).unwrap();
-        validator.record_step(PreExecStep::UserNamespaceMapping).unwrap();
+        validator
+            .record_step(PreExecStep::UserNamespaceMapping)
+            .unwrap();
         validator.record_step(PreExecStep::ResourceLimits).unwrap();
         validator.record_step(PreExecStep::CapabilityDrop).unwrap();
         validator.record_step(PreExecStep::CredentialDrop).unwrap();
         validator.record_step(PreExecStep::NoNewPrivs).unwrap();
-        
+
         // Now ready
         assert!(validator.verify_ready_for_exec().is_ok());
     }
@@ -909,12 +913,12 @@ mod tests {
 #[cfg(test)]
 mod typestate_tests {
     use super::*;
-    
+
     #[test]
     fn test_typestate_chain_happy_path() {
         // Create fresh sandbox
         let sandbox = Sandbox::<FreshChild>::new("test-001".to_string(), false);
-        
+
         // Progress through states
         // Note: namespace setup will fail without privileges, but that's OK for testing the type system
         let sandbox = match sandbox.setup_namespaces(false, false, false, false) {
@@ -925,86 +929,52 @@ mod typestate_tests {
                 return;
             }
         };
-        
+
         let sandbox = match sandbox.harden_mount_propagation() {
             Ok(s) => s,
             Err(_) => return, // Skip if no privileges
         };
-        
-        let sandbox = sandbox.attach_to_cgroup(None)
+
+        let sandbox = sandbox
+            .attach_to_cgroup(None)
             .expect("cgroup attach failed");
-        
-        let sandbox = sandbox.drop_credentials(None, None)
+
+        let sandbox = sandbox
+            .drop_credentials(None, None)
             .expect("credential drop failed");
-        
-        let sandbox = sandbox.lock_privileges()
-            .expect("privilege lock failed");
-        
-        // Default path: no seccomp
-        let sandbox = sandbox.without_seccomp();
-        
+
+        let sandbox = sandbox.lock_privileges().expect("privilege lock failed");
+
+        let sandbox = sandbox.ready_for_exec();
+
         // Reaching ExecReady proves compile-time chain; runtime exec is integration-tested elsewhere.
         let _ready = sandbox;
     }
-    
-    #[test]
-    fn test_typestate_chain_with_seccomp() {
-        // Create fresh sandbox
-        let sandbox = Sandbox::<FreshChild>::new("test-002".to_string(), false);
-        
-        // Progress through states
-        let sandbox = match sandbox.setup_namespaces(false, false, false, false) {
-            Ok(s) => s,
-            Err(_) => return, // Skip if no privileges
-        };
-        
-        let sandbox = match sandbox.harden_mount_propagation() {
-            Ok(s) => s,
-            Err(_) => return, // Skip if no privileges
-        };
-        
-        let sandbox = sandbox.attach_to_cgroup(None)
-            .expect("cgroup attach failed");
-        
-        let sandbox = sandbox.drop_credentials(None, None)
-            .expect("credential drop failed");
-        
-        let sandbox = sandbox.lock_privileges()
-            .expect("privilege lock failed");
-        
-        // Optional path: with seccomp
-        let seccomp_config = crate::kernel::seccomp::SyscallFilterConfig::disabled();
-        let sandbox = sandbox.enable_seccomp(&seccomp_config)
-            .expect("seccomp enable failed");
-        
-        // Reaching ExecReady proves compile-time chain; runtime exec is integration-tested elsewhere.
-        let _ready = sandbox;
-    }
-    
+
     #[test]
     fn test_typestate_prevents_early_exec() {
         // This test demonstrates that you CANNOT exec from wrong state
         // The following would not compile:
-        
+
         // let sandbox = Sandbox::<FreshChild>::new("test-003".to_string(), false);
         // sandbox.exec_payload(&["echo".to_string()]); // COMPILE ERROR!
-        
+
         // let sandbox = sandbox.setup_namespaces(true, true, false, false).unwrap();
         // sandbox.exec_payload(&["echo".to_string()]); // COMPILE ERROR!
-        
+
         // Only ExecReady can exec - this is enforced at compile time
-        
+
         // This test passes by not compiling the above code
         assert!(true);
     }
-    
+
     #[test]
     fn test_typestate_chain_preserves_metadata() {
         let sandbox = Sandbox::<FreshChild>::new("test-004".to_string(), true);
-        
+
         assert_eq!(sandbox.instance_id, "test-004");
         assert_eq!(sandbox.strict_mode, true);
-        
+
         // Metadata is preserved through transitions
         // Skip namespace operations that require privileges
         let sandbox = match sandbox.setup_namespaces(false, false, false, false) {
@@ -1013,7 +983,7 @@ mod typestate_tests {
         };
         assert_eq!(sandbox.instance_id, "test-004");
         assert_eq!(sandbox.strict_mode, true);
-        
+
         let sandbox = match sandbox.harden_mount_propagation() {
             Ok(s) => s,
             Err(_) => return, // Skip if no privileges
@@ -1021,123 +991,142 @@ mod typestate_tests {
         assert_eq!(sandbox.instance_id, "test-004");
         assert_eq!(sandbox.strict_mode, true);
     }
-    
+
     #[test]
     fn test_typestate_consumes_previous_state() {
         let sandbox = Sandbox::<FreshChild>::new("test-005".to_string(), false);
-        
+
         // After this transition, sandbox is consumed and cannot be used again
         let _sandbox2 = match sandbox.setup_namespaces(false, false, false, false) {
             Ok(s) => s,
             Err(_) => return, // Skip if no privileges
         };
-        
+
         // The following would not compile:
         // sandbox.setup_namespaces(false, false, false, false); // COMPILE ERROR! sandbox moved
-        
+
         assert!(true);
     }
-    
+
     #[test]
     fn test_typestate_metadata_only() {
         // Test that doesn't require privileges - just tests the type system
         let sandbox = Sandbox::<FreshChild>::new("test-006".to_string(), true);
-        
+
         assert_eq!(sandbox.instance_id, "test-006");
         assert_eq!(sandbox.strict_mode, true);
         assert_eq!(sandbox.pid, None);
     }
-    
+
     #[test]
     fn test_credential_drop_ordering() {
         // Test that credentials are dropped in correct order (GID then UID)
         // This test verifies the API enforces the correct order
-        
+
         let sandbox = Sandbox::<FreshChild>::new("test-007".to_string(), false);
-        
+
         // Progress through states
         let sandbox = match sandbox.setup_namespaces(false, false, false, false) {
             Ok(s) => s,
             Err(_) => return, // Skip if no privileges
         };
-        
+
         let sandbox = match sandbox.harden_mount_propagation() {
             Ok(s) => s,
             Err(_) => return, // Skip if no privileges
         };
-        
-        let sandbox = sandbox.attach_to_cgroup(None)
+
+        let sandbox = sandbox
+            .attach_to_cgroup(None)
             .expect("cgroup attach failed");
-        
+
         // Drop credentials with GID and UID
         // The implementation ensures GID is set before UID
-        let sandbox = sandbox.drop_credentials(Some(1000), Some(1000))
+        let sandbox = sandbox
+            .drop_credentials(Some(1000), Some(1000))
             .expect("credential drop failed");
-        
+
         // Verify we're in CredsDropped state (type system enforces this)
-        let sandbox = sandbox.lock_privileges()
-            .expect("privilege lock failed");
-        
-        // Verify we're in PrivsLocked state
-        let _sandbox = sandbox.without_seccomp();
+        let sandbox = sandbox.lock_privileges().expect("privilege lock failed");
+
+        // Verify transition to ExecReady
+        let _sandbox = sandbox.ready_for_exec();
     }
 }
 
 #[cfg(test)]
 mod ordering_tests {
     use super::*;
-    
+
     #[test]
     fn test_preexec_ordering_validator() {
         let mut validator = PreExecValidator::new(true);
-        
+
         // Test complete sequence
         assert!(validator.record_step(PreExecStep::SessionSetup).is_ok());
-        assert!(validator.record_step(PreExecStep::ParentDeathSignal).is_ok());
+        assert!(validator
+            .record_step(PreExecStep::ParentDeathSignal)
+            .is_ok());
         assert!(validator.record_step(PreExecStep::NamespaceSetup).is_ok());
-        assert!(validator.record_step(PreExecStep::MountPropagationHardening).is_ok());
+        assert!(validator
+            .record_step(PreExecStep::MountPropagationHardening)
+            .is_ok());
         assert!(validator.record_step(PreExecStep::MountSetup).is_ok());
-        assert!(validator.record_step(PreExecStep::UserNamespaceMapping).is_ok());
+        assert!(validator
+            .record_step(PreExecStep::UserNamespaceMapping)
+            .is_ok());
         assert!(validator.record_step(PreExecStep::ResourceLimits).is_ok());
         assert!(validator.record_step(PreExecStep::CapabilityDrop).is_ok());
         assert!(validator.record_step(PreExecStep::CredentialDrop).is_ok());
         assert!(validator.record_step(PreExecStep::NoNewPrivs).is_ok());
-        
+
         // Verify ready for exec
         assert!(validator.verify_ready_for_exec().is_ok());
     }
-    
+
     #[test]
     fn test_credential_drop_before_capability_drop_fails() {
         let mut validator = PreExecValidator::new(true);
-        
+
         // Progress to ResourceLimits
         validator.record_step(PreExecStep::SessionSetup).unwrap();
-        validator.record_step(PreExecStep::ParentDeathSignal).unwrap();
+        validator
+            .record_step(PreExecStep::ParentDeathSignal)
+            .unwrap();
         validator.record_step(PreExecStep::NamespaceSetup).unwrap();
-        validator.record_step(PreExecStep::MountPropagationHardening).unwrap();
+        validator
+            .record_step(PreExecStep::MountPropagationHardening)
+            .unwrap();
         validator.record_step(PreExecStep::MountSetup).unwrap();
-        validator.record_step(PreExecStep::UserNamespaceMapping).unwrap();
+        validator
+            .record_step(PreExecStep::UserNamespaceMapping)
+            .unwrap();
         validator.record_step(PreExecStep::ResourceLimits).unwrap();
-        
+
         // Try to skip CapabilityDrop and go straight to CredentialDrop
         let result = validator.record_step(PreExecStep::CredentialDrop);
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_no_new_privs_before_credential_drop_fails() {
         let mut validator = PreExecValidator::new(true);
-        
+
         // Progress to ResourceLimits
         validator.record_step(PreExecStep::SessionSetup).unwrap();
-        validator.record_step(PreExecStep::ParentDeathSignal).unwrap();
+        validator
+            .record_step(PreExecStep::ParentDeathSignal)
+            .unwrap();
         validator.record_step(PreExecStep::NamespaceSetup).unwrap();
-        validator.record_step(PreExecStep::MountPropagationHardening).unwrap();
+        validator
+            .record_step(PreExecStep::MountPropagationHardening)
+            .unwrap();
         validator.record_step(PreExecStep::MountSetup).unwrap();
-        validator.record_step(PreExecStep::UserNamespaceMapping).unwrap();
+        validator
+            .record_step(PreExecStep::UserNamespaceMapping)
+            .unwrap();
         validator.record_step(PreExecStep::ResourceLimits).unwrap();
-        
+
         // Try to skip CapabilityDrop and CredentialDrop and go to NoNewPrivs
         let result = validator.record_step(PreExecStep::NoNewPrivs);
         assert!(result.is_err());

@@ -20,7 +20,7 @@ fn profile(memory_mb: u64, process_limit: u32, cpu_ms: u64, wall_ms: u64) -> Exe
         enable_mount_namespace: true,
         enable_network_namespace: true,
         enable_user_namespace: false,
-        enable_syscall_filtering: false,
+        allow_degraded: false,
         memory_limit: Some(memory_mb * 1024 * 1024),
         file_size_limit: Some(64 * 1024 * 1024),
         stack_limit: Some(8 * 1024 * 1024),
@@ -54,7 +54,11 @@ impl JudgeAdapter for CppAdapter {
             "-O2".to_string(),
             "-pipe".to_string(),
             "-o".to_string(),
-            workspace.workdir.join("solution").to_string_lossy().to_string(),
+            workspace
+                .workdir
+                .join("solution")
+                .to_string_lossy()
+                .to_string(),
             workspace
                 .workdir
                 .join("solution.cpp")
@@ -64,6 +68,10 @@ impl JudgeAdapter for CppAdapter {
     }
 
     fn run_command(&self, workspace: &RunWorkspace) -> Vec<String> {
-        vec![workspace.workdir.join("solution").to_string_lossy().to_string()]
+        vec![workspace
+            .workdir
+            .join("solution")
+            .to_string_lossy()
+            .to_string()]
     }
 }

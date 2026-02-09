@@ -1,6 +1,6 @@
 use crate::config::types::{
     CapabilityReport, CgroupEvidence, DirectoryBinding, ExecutionResult, JudgeAction,
-    OutputIntegrity, PidfdMode, ProcessLifecycleEvidence, SecurityMode, SyscallFilterSource,
+    OutputIntegrity, PidfdMode, ProcessLifecycleEvidence, SecurityMode,
 };
 use crate::config::types::{ExecutionStatus, IsolateConfig};
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub struct ExecutionProfile {
     pub enable_mount_namespace: bool,
     pub enable_network_namespace: bool,
     pub enable_user_namespace: bool,
-    pub enable_syscall_filtering: bool,
+    pub allow_degraded: bool,
     pub memory_limit: Option<u64>,
     pub file_size_limit: Option<u64>,
     pub stack_limit: Option<u64>,
@@ -54,7 +54,7 @@ impl ExecutionProfile {
             enable_mount_namespace: config.enable_mount_namespace,
             enable_network_namespace: config.enable_network_namespace,
             enable_user_namespace: config.enable_user_namespace,
-            enable_syscall_filtering: config.enable_syscall_filtering,
+            allow_degraded: config.allow_degraded,
             memory_limit: config.memory_limit,
             file_size_limit: config.file_size_limit,
             stack_limit: config.stack_limit,
@@ -122,9 +122,6 @@ pub struct LaunchEvidence {
     pub pidfd_mode: PidfdMode,
     pub proc_policy_applied: String,
     pub sys_policy_applied: String,
-    pub syscall_filtering_enabled: bool,
-    pub syscall_filtering_source: SyscallFilterSource,
-    pub syscall_filtering_profile_id: Option<String>,
     pub judge_actions: Vec<JudgeAction>,
     pub cgroup_evidence: Option<CgroupEvidence>,
     pub process_lifecycle: ProcessLifecycleEvidence,
@@ -156,9 +153,6 @@ impl LaunchEvidence {
             pidfd_mode: self.pidfd_mode.clone(),
             proc_policy_applied: self.proc_policy_applied.clone(),
             sys_policy_applied: self.sys_policy_applied.clone(),
-            syscall_filtering_enabled: self.syscall_filtering_enabled,
-            syscall_filtering_source: self.syscall_filtering_source.clone(),
-            syscall_filtering_profile_id: self.syscall_filtering_profile_id.clone(),
         }
     }
 }

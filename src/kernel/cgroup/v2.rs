@@ -178,6 +178,15 @@ impl CgroupBackend for CgroupV2 {
         let path = self.instance_path(instance_id);
 
         if path.exists() {
+            // Kill all processes in cgroup before removal (kernel 5.14+).
+            // Without this, rmdir fails with EBUSY if processes are still running.
+            let kill_path = path.join("cgroup.kill");
+            if kill_path.exists() {
+                let _ = fs::write(&kill_path, "1");
+                // Brief wait for kernel to propagate the kill.
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
             fs::remove_dir(&path)
                 .map_err(|e| IsolateError::Cgroup(format!("Failed to remove cgroup: {}", e)))?;
         }
@@ -203,6 +212,19 @@ impl CgroupBackend for CgroupV2 {
         fs::write(&limit_path, limit_bytes.to_string())
             .map_err(|e| IsolateError::Cgroup(format!("Failed to set memory limit: {}", e)))?;
 
+        // Disable swap to prevent processes from escaping the memory limit.
+        // Without this, the kernel moves pages to swap instead of triggering OOM.
+        let swap_path = path.join("memory.swap.max");
+        if let Err(e) = fs::write(&swap_path, "0") {
+            if self.strict_mode {
+                return Err(IsolateError::Cgroup(format!(
+                    "Failed to set memory.swap.max=0: {}",
+                    e
+                )));
+            }
+            log::warn!("Failed to set memory.swap.max=0 (permissive mode): {}", e);
+        }
+
         Ok(())
     }
 
@@ -216,17 +238,21 @@ impl CgroupBackend for CgroupV2 {
         Ok(())
     }
 
-    fn set_cpu_limit(&self, instance_id: &str, limit_usec: u64) -> Result<()> {
+    fn set_cpu_limit(&self, instance_id: &str, _limit_usec: u64) -> Result<()> {
         let path = self.instance_path(instance_id);
 
-        // Convert microseconds to weight (v2 uses cpu.weight instead of cpu.shares).
-        // Default weight is 100, range is 1-10000.
-        let weight = (limit_usec / 1000).clamp(1, 10000);
+        // C2: Use CFS bandwidth control via cpu.max instead of cpu.weight.
+        // cpu.max format: "{quota_us} {period_us}"
+        // 100000 100000 = 1 full CPU core per 100ms period.
+        let period_us: u64 = 100_000;
+        let quota_us: u64 = 100_000; // Cap at 1 CPU core
 
-        let weight_path = path.join("cpu.weight");
-        fs::write(&weight_path, weight.to_string())
-            .map_err(|e| IsolateError::Cgroup(format!("Failed to set CPU weight: {}", e)))?;
+        let max_path = path.join("cpu.max");
+        let max_value = format!("{} {}", quota_us, period_us);
+        fs::write(&max_path, &max_value)
+            .map_err(|e| IsolateError::Cgroup(format!("Failed to set cpu.max: {}", e)))?;
 
+        log::info!("Set cpu.max={} (1 CPU core bandwidth cap)", max_value);
         Ok(())
     }
 

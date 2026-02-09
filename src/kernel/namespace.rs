@@ -2,9 +2,7 @@
 /// Provides PID, mount, and network namespace isolation capabilities
 use crate::config::types::{IsolateError, Result};
 
-#[cfg(unix)]
 use nix::sched::{unshare, CloneFlags};
-#[cfg(unix)]
 use nix::unistd::sethostname;
 
 /// Namespace isolation controller
@@ -50,74 +48,54 @@ impl NamespaceIsolation {
 
     /// Check if namespace isolation is supported on this system
     pub fn is_supported() -> bool {
-        #[cfg(unix)]
-        {
-            // Check if we can read /proc/self/ns/ directory
-            std::fs::read_dir("/proc/self/ns").is_ok()
-        }
-        #[cfg(not(unix))]
-        {
-            false
-        }
+        // Check if we can read /proc/self/ns/ directory
+        std::fs::read_dir("/proc/self/ns").is_ok()
     }
 
     /// Apply namespace isolation using unshare syscalls
     /// This must be called before forking the target process
     pub fn apply_isolation(&self) -> Result<()> {
-        #[cfg(unix)]
-        {
-            let mut flags = CloneFlags::empty();
+        let mut flags = CloneFlags::empty();
 
-            // Build clone flags for unshare
-            if self.enable_pid_namespace {
-                flags |= CloneFlags::CLONE_NEWPID;
-            }
-            if self.enable_mount_namespace {
-                flags |= CloneFlags::CLONE_NEWNS;
-            }
-            if self.enable_network_namespace {
-                flags |= CloneFlags::CLONE_NEWNET;
-            }
-            if self.enable_user_namespace {
-                flags |= CloneFlags::CLONE_NEWUSER;
-            }
-            if self.enable_ipc_namespace {
-                flags |= CloneFlags::CLONE_NEWIPC;
-            }
+        // Build clone flags for unshare
+        if self.enable_pid_namespace {
+            flags |= CloneFlags::CLONE_NEWPID;
+        }
+        if self.enable_mount_namespace {
+            flags |= CloneFlags::CLONE_NEWNS;
+        }
+        if self.enable_network_namespace {
+            flags |= CloneFlags::CLONE_NEWNET;
+        }
+        if self.enable_user_namespace {
+            flags |= CloneFlags::CLONE_NEWUSER;
+        }
+        if self.enable_ipc_namespace {
+            flags |= CloneFlags::CLONE_NEWIPC;
+        }
+        if self.enable_uts_namespace {
+            flags |= CloneFlags::CLONE_NEWUTS;
+        }
+
+        if !flags.is_empty() {
+            unshare(flags).map_err(|e| {
+                IsolateError::Namespace(format!("Failed to unshare namespaces: {}", e))
+            })?;
+
+            // Set hostname in UTS namespace if enabled
             if self.enable_uts_namespace {
-                flags |= CloneFlags::CLONE_NEWUTS;
-            }
-
-            if !flags.is_empty() {
-                unshare(flags).map_err(|e| {
-                    IsolateError::Namespace(format!("Failed to unshare namespaces: {}", e))
-                })?;
-
-                // Set hostname in UTS namespace if enabled
-                if self.enable_uts_namespace {
-                    if let Err(e) = sethostname("rustbox-sandbox") {
-                        log::warn!("Failed to set hostname in UTS namespace: {}", e);
-                    }
+                if let Err(e) = sethostname("rustbox-sandbox") {
+                    log::warn!("Failed to set hostname in UTS namespace: {}", e);
                 }
-
-                log::info!(
-                    "Successfully applied namespace isolation: {:?}",
-                    self.get_enabled_namespaces()
-                );
             }
 
-            Ok(())
+            log::info!(
+                "Successfully applied namespace isolation: {:?}",
+                self.get_enabled_namespaces()
+            );
         }
-        #[cfg(not(unix))]
-        {
-            if self.is_isolation_enabled() {
-                Err(IsolateError::Namespace(
-                    "Namespace isolation is only supported on Unix systems".to_string(),
-                ))
-            } else {
-                Ok(())
-            }
-        }
+
+        Ok(())
     }
 
     /// Check if any isolation is enabled
@@ -162,7 +140,6 @@ impl NamespaceIsolation {
 /// This is CRITICAL - must succeed or abort
 ///
 /// This function is public so it can be called from the type-state chain
-#[cfg(unix)]
 pub fn harden_mount_propagation() -> Result<()> {
     use nix::mount::{mount, MsFlags};
 
@@ -185,11 +162,4 @@ pub fn harden_mount_propagation() -> Result<()> {
 
     log::info!("Mount propagation hardened: / set to MS_PRIVATE|MS_REC");
     Ok(())
-}
-
-#[cfg(not(unix))]
-pub fn harden_mount_propagation() -> Result<()> {
-    Err(IsolateError::Namespace(
-        "Mount propagation hardening is only supported on Unix systems".to_string(),
-    ))
 }

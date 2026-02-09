@@ -6,19 +6,8 @@
 		"group": "rustbox",
 		"preserve_env": ["PATH", "HOME", "USER"]
 	},
-	"syscalls": {
-		"allow_fork": false,
-		"allow_exec": true,
-		"allow_clone": false,
-		"allow_network": false,
-		"allow_filesystem_write": true,
-		"allow_ptrace": false,
-		"allow_mount": false,
-		"blocked_syscalls": ["reboot", "shutdown", "mount", "umount", "ptrace"]
-	},
 	"security": {
 		"drop_capabilities": true,
-		"use_seccomp": true,
 		"use_namespaces": true,
 		"use_cgroups": true,
 		"no_new_privileges": true,
@@ -35,7 +24,7 @@
 				"wall_time_seconds": 7
 			},
 			"processes": {
-				"max_processes": 1,
+				"max_processes": 10,
 				"max_forks": 0
 			},
 			"filesystem": {
@@ -44,15 +33,11 @@
 				"additional_read_only_paths": ["/usr/lib/python3*", "/usr/local/lib/python3*"],
 				"required_binaries": ["/usr/bin/python3"]
 			},
-			"syscalls": {
-				"allow_exec": false,
-				"additional_blocked_syscalls": ["execve", "clone", "fork"]
-			},
-			"environment": {
-				"PYTHONPATH": "/usr/lib/python3.11:/usr/local/lib/python3.11/dist-packages",
-				"PYTHONDONTWRITEBYTECODE": "1",
-				"PYTHONUNBUFFERED": "1"
-			},
+				"environment": {
+					"PYTHONPATH": "/usr/lib/python3.11:/usr/local/lib/python3.11/dist-packages",
+					"PYTHONDONTWRITEBYTECODE": "1",
+					"PYTHONUNBUFFERED": "1"
+				},
 			"compilation": {
 				"enabled": false,
 				"compiler": "",
@@ -81,16 +66,11 @@
 				"additional_read_only_paths": ["/usr/lib/jvm", "/usr/share/java"],
 				"required_binaries": ["/usr/bin/java", "/usr/bin/javac"]
 			},
-			"syscalls": {
-				"allow_exec": true,
-				"allow_clone": true,
-				"additional_allowed_syscalls": ["clone", "mmap", "munmap", "brk"]
-			},
-			"environment": {
-				"JAVA_HOME": "/usr/lib/jvm/default-java",
-				"CLASSPATH": ".",
-				"JAVA_TOOL_OPTIONS": "-Xmx256m -Xms64m -XX:+UseSerialGC"
-			},
+				"environment": {
+					"JAVA_HOME": "/usr/lib/jvm/default-java",
+					"CLASSPATH": ".",
+					"JAVA_TOOL_OPTIONS": "-Xmx256m -Xms64m -XX:+UseSerialGC"
+				},
 			"compilation": {
 				"enabled": true,
 				"compiler": "javac -d {output} {source}",
@@ -120,17 +100,9 @@
 				"required_binaries": ["/usr/bin/gcc", "/usr/bin/g++"],
 				"compilation_output_limit_kb": 4096
 			},
-			"syscalls": {
-				"allow_exec": true,
-				"compilation_syscalls": {
-					"allow_fork": true,
-					"allow_exec": true,
-					"additional_allowed_syscalls": ["pipe", "dup2", "wait4"]
-				}
-			},
-			"environment": {
-				"PATH": "/usr/bin:/bin",
-				"CFLAGS": "-O2 -static -std=c++17",
+				"environment": {
+					"PATH": "/usr/bin:/bin",
+					"CFLAGS": "-O2 -static -std=c++17",
 				"CXXFLAGS": "-O2 -static -std=c++17"
 			},
 			"compilation": {
