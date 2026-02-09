@@ -246,3 +246,4 @@ Runtime smoke check status (timeout/fork-bomb containment):
 - Attempted in WSL via CLI runtime path.
 - Blocked in this environment due missing root privileges and non-interactive sudo (`clone(proxy): EPERM`).
 - Strict containment smoke requires root-capable run context; current runner is non-root and cannot provide passwordless sudo.
+- Added root-required harness: `scripts/smoke/phase2_containment_smoke.sh`.
