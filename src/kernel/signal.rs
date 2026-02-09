@@ -1,11 +1,9 @@
+use log::info;
+use nix::sys::signal::{self, SaFlags, SigAction, SigHandler, SigSet, Signal};
 /// Async-safe signal handling for rustbox
 /// Implements P0-SIG-001: Async-Safe Signal Path and Main-Loop Handling
 /// Per plan.md Section 2: Non-Negotiable Fundamentals
-
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
-use log::info;
-use nix::sys::signal::{self, SigHandler, Signal, SigAction, SigSet, SaFlags};
 
 /// Global shutdown flag (async-safe atomic)
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -14,9 +12,7 @@ static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_RECEIVED: AtomicU32 = AtomicU32::new(0);
 
 /// Signal handler state
-pub struct SignalHandler {
-    shutdown_flag: Arc<AtomicBool>,
-}
+pub struct SignalHandler;
 
 impl SignalHandler {
     /// Initialize signal handlers
@@ -24,10 +20,8 @@ impl SignalHandler {
     pub fn init() -> Result<Self, String> {
         // Install async-safe signal handlers
         Self::install_signal_handlers()?;
-        
-        Ok(Self {
-            shutdown_flag: Arc::new(AtomicBool::new(false)),
-        })
+
+        Ok(Self)
     }
 
     /// Install signal handlers for SIGINT, SIGTERM, SIGHUP
@@ -38,18 +32,18 @@ impl SignalHandler {
             SaFlags::SA_RESTART,
             SigSet::empty(),
         );
-        
+
         unsafe {
             signal::sigaction(Signal::SIGINT, &sig_action)
                 .map_err(|e| format!("Failed to install SIGINT handler: {}", e))?;
-            
+
             signal::sigaction(Signal::SIGTERM, &sig_action)
                 .map_err(|e| format!("Failed to install SIGTERM handler: {}", e))?;
-            
+
             signal::sigaction(Signal::SIGHUP, &sig_action)
                 .map_err(|e| format!("Failed to install SIGHUP handler: {}", e))?;
         }
-        
+
         info!("Signal handlers installed (SIGINT, SIGTERM, SIGHUP)");
         Ok(())
     }
@@ -59,10 +53,10 @@ impl SignalHandler {
     extern "C" fn signal_handler(signal: libc::c_int) {
         // Store signal number atomically
         SIGNAL_RECEIVED.store(signal as u32, Ordering::SeqCst);
-        
+
         // Set shutdown flag atomically
         SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
-        
+
         // That's it - no other operations allowed in signal handler
         // Main loop will check these flags and perform cleanup
     }
@@ -88,14 +82,14 @@ impl SignalHandler {
     /// Returns true if signal received, false if timeout
     pub fn wait_for_signal(&self, timeout: std::time::Duration) -> bool {
         let start = std::time::Instant::now();
-        
+
         while start.elapsed() < timeout {
             if self.shutdown_requested() {
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        
+
         false
     }
 }
@@ -165,11 +159,11 @@ impl ShutdownCoordinator {
         } else {
             info!("Running cleanup handlers");
         }
-        
+
         for handler in self.cleanup_handlers {
             handler.run();
         }
-        
+
         info!("Cleanup complete");
     }
 }
@@ -193,11 +187,11 @@ impl SignalBlockGuard {
         mask.add(Signal::SIGINT);
         mask.add(Signal::SIGTERM);
         mask.add(Signal::SIGHUP);
-        
+
         // Block the signals
         signal::sigprocmask(signal::SigmaskHow::SIG_BLOCK, Some(&mask), None)
             .map_err(|e| format!("Failed to block signals: {}", e))?;
-        
+
         Ok(Self { _marker: () })
     }
 }
@@ -216,7 +210,6 @@ impl Drop for SignalBlockGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn test_signal_handler_init() {
@@ -228,11 +221,11 @@ mod tests {
     fn test_shutdown_flag() {
         let handler = SignalHandler::init().unwrap();
         assert!(!handler.shutdown_requested());
-        
+
         // Simulate signal
         SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
         assert!(handler.shutdown_requested());
-        
+
         // Reset for other tests
         SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
     }

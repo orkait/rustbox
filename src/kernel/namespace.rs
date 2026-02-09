@@ -119,14 +119,6 @@ impl NamespaceIsolation {
             }
         }
     }
-    
-    /// Harden mount propagation to prevent host contamination
-    /// Per plan.md Section 6: mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)
-    /// This is CRITICAL - must succeed or abort
-    #[cfg(unix)]
-    fn harden_mount_propagation(&self) -> Result<()> {
-        harden_mount_propagation()
-    }
 
     /// Check if any isolation is enabled
     pub fn is_isolation_enabled(&self) -> bool {
@@ -165,16 +157,15 @@ impl NamespaceIsolation {
     }
 }
 
-
 /// Standalone function to harden mount propagation
 /// Per plan.md Section 6: mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)
 /// This is CRITICAL - must succeed or abort
-/// 
+///
 /// This function is public so it can be called from the type-state chain
 #[cfg(unix)]
 pub fn harden_mount_propagation() -> Result<()> {
     use nix::mount::{mount, MsFlags};
-    
+
     // Make / private and recursive
     // This prevents any mount changes in the sandbox from propagating to the host
     mount(
@@ -191,7 +182,7 @@ pub fn harden_mount_propagation() -> Result<()> {
             e
         ))
     })?;
-    
+
     log::info!("Mount propagation hardened: / set to MS_PRIVATE|MS_REC");
     Ok(())
 }

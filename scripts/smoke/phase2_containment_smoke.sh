@@ -67,7 +67,7 @@ run_case() {
     return 1
   fi
 
-  if ! rg -q '"status":"(TLE|SIG|IE|RE|SV|MLE|OK)"' "${out_file}"; then
+  if ! rg -q '"status"[[:space:]]*:[[:space:]]*"(TLE|SIG|IE|RE|SV|MLE|OK)"' "${out_file}"; then
     echo "[phase2-smoke] WARN: output did not include expected JSON status token" >&2
     cat "${out_file}" >&2
   fi
