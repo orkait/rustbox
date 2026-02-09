@@ -67,6 +67,7 @@ fn exec_payload_with_typestate(req: &SandboxLaunchRequest) -> Result<()> {
     let sandbox = sandbox.harden_mount_propagation()?;
     let cgroup_attach = req.cgroup_attach_path.as_ref().and_then(|p| p.to_str());
     let sandbox = sandbox.attach_to_cgroup(cgroup_attach)?;
+    let sandbox = sandbox.apply_runtime_hygiene(&req.profile)?;
     let sandbox = sandbox.drop_credentials(req.profile.uid, req.profile.gid)?;
     let sandbox = sandbox.lock_privileges()?;
     let sandbox = if req.profile.enable_syscall_filtering {
@@ -225,4 +226,3 @@ pub fn exec_argv(argv: &[String]) -> Result<()> {
     execvp(cargv[0].as_c_str(), &refs).map_err(|e| to_isolate_error("execvp", e))?;
     Ok(())
 }
-

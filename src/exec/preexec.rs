@@ -18,9 +18,112 @@
 
 use crate::kernel::capabilities;
 use crate::config::types::{IsolateError, Result};
+use crate::core::types::ExecutionProfile;
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::ffi::CString;
+
+#[cfg(unix)]
+fn apply_rlimit_value(
+    name: &str,
+    resource: libc::__rlimit_resource_t,
+    soft: u64,
+    hard: u64,
+    strict_mode: bool,
+) -> Result<()> {
+    let limit = libc::rlimit {
+        rlim_cur: soft as libc::rlim_t,
+        rlim_max: hard as libc::rlim_t,
+    };
+
+    let rc = unsafe { libc::setrlimit(resource, &limit) };
+    if rc == 0 {
+        return Ok(());
+    }
+
+    let err = std::io::Error::last_os_error();
+    if strict_mode {
+        Err(IsolateError::Process(format!(
+            "Failed to apply {}={} (hard={}): {}",
+            name, soft, hard, err
+        )))
+    } else {
+        log::warn!(
+            "Failed to apply {}={} (hard={}) in permissive mode: {}",
+            name,
+            soft,
+            hard,
+            err
+        );
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) -> Result<()> {
+    let clear_rc = unsafe { libc::clearenv() };
+    if clear_rc != 0 {
+        let err = std::io::Error::last_os_error();
+        if strict_mode {
+            return Err(IsolateError::Process(format!(
+                "clearenv failed in strict mode: {}",
+                err
+            )));
+        }
+        log::warn!("clearenv failed in permissive mode: {}", err);
+    }
+
+    for (key, value) in env_map {
+        let key_c = match CString::new(key.as_str()) {
+            Ok(k) => k,
+            Err(_) if strict_mode => {
+                return Err(IsolateError::Config(format!(
+                    "Environment key contains NUL byte: {}",
+                    key
+                )));
+            }
+            Err(_) => {
+                log::warn!(
+                    "Skipping environment key with NUL byte in permissive mode: {}",
+                    key
+                );
+                continue;
+            }
+        };
+
+        let value_c = match CString::new(value.as_str()) {
+            Ok(v) => v,
+            Err(_) if strict_mode => {
+                return Err(IsolateError::Config(format!(
+                    "Environment value for {} contains NUL byte",
+                    key
+                )));
+            }
+            Err(_) => {
+                log::warn!(
+                    "Skipping environment value with NUL byte in permissive mode: {}",
+                    key
+                );
+                continue;
+            }
+        };
+
+        let rc = unsafe { libc::setenv(key_c.as_ptr(), value_c.as_ptr(), 1) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            if strict_mode {
+                return Err(IsolateError::Process(format!(
+                    "setenv failed for {}: {}",
+                    key, err
+                )));
+            }
+            log::warn!("setenv failed for {} in permissive mode: {}", key, err);
+        }
+    }
+
+    Ok(())
+}
 
 // ============================================================================
 // Parent Death Signal Setup
@@ -396,6 +499,112 @@ impl Sandbox<MountsPrivate> {
 }
 
 impl Sandbox<CgroupAttached> {
+    /// Apply pre-exec Step 7 in active runtime path:
+    /// rlimits, umask, FD closure, and environment sanitization.
+    pub fn apply_runtime_hygiene(self, profile: &ExecutionProfile) -> Result<Sandbox<CgroupAttached>> {
+        #[cfg(unix)]
+        {
+            if let Some(memory_limit) = profile.memory_limit {
+                apply_rlimit_value(
+                    "RLIMIT_AS",
+                    libc::RLIMIT_AS,
+                    memory_limit,
+                    memory_limit,
+                    self.strict_mode,
+                )?;
+            }
+
+            if let Some(file_size_limit) = profile.file_size_limit {
+                apply_rlimit_value(
+                    "RLIMIT_FSIZE",
+                    libc::RLIMIT_FSIZE,
+                    file_size_limit,
+                    file_size_limit,
+                    self.strict_mode,
+                )?;
+            }
+
+            let core_limit = profile.core_limit.unwrap_or(0);
+            apply_rlimit_value(
+                "RLIMIT_CORE",
+                libc::RLIMIT_CORE,
+                core_limit,
+                core_limit,
+                self.strict_mode,
+            )?;
+
+            apply_rlimit_value(
+                "RLIMIT_MEMLOCK",
+                libc::RLIMIT_MEMLOCK,
+                0,
+                0,
+                self.strict_mode,
+            )?;
+
+            if let Some(process_limit) = profile.process_limit {
+                let nproc = process_limit as u64;
+                apply_rlimit_value(
+                    "RLIMIT_NPROC",
+                    libc::RLIMIT_NPROC,
+                    nproc,
+                    nproc,
+                    self.strict_mode,
+                )?;
+            }
+
+            if let Some(stack_limit) = profile.stack_limit {
+                apply_rlimit_value(
+                    "RLIMIT_STACK",
+                    libc::RLIMIT_STACK,
+                    stack_limit,
+                    stack_limit,
+                    self.strict_mode,
+                )?;
+            }
+
+            if let Some(fd_limit) = profile.fd_limit {
+                apply_rlimit_value(
+                    "RLIMIT_NOFILE",
+                    libc::RLIMIT_NOFILE,
+                    fd_limit,
+                    fd_limit,
+                    self.strict_mode,
+                )?;
+            }
+
+            let env_policy = crate::utils::env_hygiene::EnvPolicy {
+                strict_mode: self.strict_mode,
+                ..Default::default()
+            };
+            let perm_policy = crate::utils::env_hygiene::PermissionPolicy {
+                strict_mode: self.strict_mode,
+                ..Default::default()
+            };
+            let hygiene = crate::utils::env_hygiene::EnvHygiene::new(env_policy, perm_policy);
+
+            hygiene.apply_umask()?;
+
+            // Strict mode always closes inherited FDs; permissive/dev may opt in via config.
+            if self.strict_mode || !profile.inherit_fds {
+                crate::utils::fd_closure::close_inherited_fds(self.strict_mode)?;
+            }
+
+            let mut env_map = hygiene.sanitize_environment()?;
+            for (key, value) in &profile.environment {
+                env_map.insert(key.clone(), value.clone());
+            }
+            apply_exec_environment(&env_map, self.strict_mode)?;
+        }
+
+        Ok(Sandbox {
+            pid: self.pid,
+            instance_id: self.instance_id,
+            strict_mode: self.strict_mode,
+            mount_namespace_enabled: self.mount_namespace_enabled,
+            _state: PhantomData,
+        })
+    }
+
     /// Transition to CredsDropped state
     /// This drops credentials (setresgid then setresuid)
     /// Per plan.md Section 6: setresgid THEN setresuid (order is critical)

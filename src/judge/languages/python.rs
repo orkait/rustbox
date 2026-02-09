@@ -10,6 +10,7 @@ fn base_profile() -> ExecutionProfile {
         command: Vec::new(),
         stdin_data: None,
         environment: Vec::new(),
+        inherit_fds: false,
         workdir: PathBuf::from("."),
         uid: Some(65534),
         gid: Some(65534),
@@ -20,6 +21,9 @@ fn base_profile() -> ExecutionProfile {
         enable_user_namespace: false,
         enable_syscall_filtering: false,
         memory_limit: Some(256 * 1024 * 1024),
+        file_size_limit: Some(64 * 1024 * 1024),
+        stack_limit: Some(8 * 1024 * 1024),
+        core_limit: Some(0),
         process_limit: Some(1),
         cpu_time_limit_ms: Some(10_000),
         wall_time_limit_ms: Some(15_000),
@@ -54,4 +58,3 @@ impl JudgeAdapter for PythonAdapter {
         ]
     }
 }
-

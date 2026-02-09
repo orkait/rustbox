@@ -10,6 +10,7 @@ fn profile(memory_mb: u64, process_limit: u32, cpu_ms: u64, wall_ms: u64) -> Exe
         command: Vec::new(),
         stdin_data: None,
         environment: vec![("JAVA_TOOL_OPTIONS".to_string(), "-Dfile.encoding=UTF-8".to_string())],
+        inherit_fds: false,
         workdir: PathBuf::from("."),
         uid: Some(65534),
         gid: Some(65534),
@@ -20,6 +21,9 @@ fn profile(memory_mb: u64, process_limit: u32, cpu_ms: u64, wall_ms: u64) -> Exe
         enable_user_namespace: false,
         enable_syscall_filtering: false,
         memory_limit: Some(memory_mb * 1024 * 1024),
+        file_size_limit: Some(64 * 1024 * 1024),
+        stack_limit: Some(8 * 1024 * 1024),
+        core_limit: Some(0),
         process_limit: Some(process_limit),
         cpu_time_limit_ms: Some(cpu_ms),
         wall_time_limit_ms: Some(wall_ms),
@@ -84,4 +88,3 @@ impl JudgeAdapter for JavaAdapter {
         ]
     }
 }
-
