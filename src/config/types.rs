@@ -229,7 +229,7 @@ impl Default for IsolateConfig {
     /// Judge-V1 default profile per plan.md Section 2.1
     /// - strict mode enabled
     /// - no network
-    /// - single process limit
+    /// - proxy+payload process headroom
     /// - read-only filesystem with controlled writable work area
     /// - no_new_privileges required (enforced in executor)
     fn default() -> Self {
@@ -244,11 +244,11 @@ impl Default for IsolateConfig {
             time_limit: Some(Duration::from_secs(10)),
             cpu_time_limit: Some(Duration::from_secs(10)),
             wall_time_limit: Some(Duration::from_secs(20)),
-            process_limit: Some(1), // Single process by default (judge-v1)
+            process_limit: Some(10), // Proxy + payload baseline headroom
             file_size_limit: Some(64 * 1024 * 1024), // 64MB
             stack_limit: Some(8 * 1024 * 1024), // 8MB default stack
-            core_limit: Some(0),    // Disable core dumps by default
-            fd_limit: Some(64),     // Default file descriptor limit
+            core_limit: Some(0),     // Disable core dumps by default
+            fd_limit: Some(64),      // Default file descriptor limit
             environment: Vec::new(),
             strict_mode: true, // Strict mode by default (judge-v1)
             force_cgroup_v1: false,

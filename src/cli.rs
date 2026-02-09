@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CliMode {
@@ -200,24 +200,41 @@ fn validate_command_mode(mode: CliMode, command: &Commands) {
 }
 
 static CURRENT_BOX_ID: AtomicU32 = AtomicU32::new(0);
+static SIGNAL_RECEIVED: AtomicI32 = AtomicI32::new(0);
 
 fn sandbox_box_work_dir(box_id: u32) -> std::path::PathBuf {
     crate::config::types::IsolateConfig::runtime_root_dir().join(format!("rustbox-{}", box_id))
 }
 
-extern "C" fn signal_handler(sig: i32) {
-    // ASYNC-SIGNAL SAFETY: Only use async-signal-safe functions here.
-    // - No eprintln! (can deadlock if signal arrives during stdio/malloc)
-    // - No std::process::exit() (runs atexit handlers, also unsafe)
-    // - libc::write(STDERR) and libc::_exit() are async-signal-safe
-    // - Kernel automatically releases all flocks on _exit
-
-    // Write a minimal message using raw libc::write (async-signal-safe)
-    let msg = b"rustbox: signal received, exiting\n";
-    unsafe {
-        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
-        libc::_exit(128 + sig);
+fn source_language_for_path(path: &std::path::Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "py" => Some("python"),
+        "cpp" | "cc" | "cxx" => Some("cpp"),
+        "java" => Some("java"),
+        _ => None,
     }
+}
+
+fn resolve_single_command_path(command_arg: &str) -> Option<std::path::PathBuf> {
+    let current_dir = std::env::current_dir().ok()?;
+    let candidate = current_dir.join(command_arg);
+    if candidate.exists() {
+        return Some(candidate);
+    }
+
+    let absolute = std::path::PathBuf::from(command_arg);
+    if absolute.exists() {
+        Some(absolute)
+    } else {
+        None
+    }
+}
+
+extern "C" fn signal_handler(sig: i32) {
+    // ASYNC-SIGNAL SAFETY: only atomic store in signal path.
+    SIGNAL_RECEIVED.store(sig, Ordering::SeqCst);
+    crate::kernel::signal::request_shutdown(sig);
 }
 
 fn setup_signal_handlers() {
@@ -225,6 +242,29 @@ fn setup_signal_handlers() {
         libc::signal(libc::SIGTERM, signal_handler as usize);
         libc::signal(libc::SIGINT, signal_handler as usize);
     }
+}
+
+fn maybe_exit_on_pending_signal() {
+    let sig = SIGNAL_RECEIVED.swap(0, Ordering::SeqCst);
+    if sig <= 0 {
+        return;
+    }
+
+    let box_id = CURRENT_BOX_ID.load(Ordering::Relaxed);
+    if box_id != 0 {
+        let instance_id = format!("rustbox/{}", box_id);
+        if let Ok(Some(isolate)) = crate::runtime::isolate::Isolate::load(&instance_id) {
+            if let Err(err) = isolate.cleanup() {
+                eprintln!(
+                    "Warning: signal cleanup failed for sandbox {}: {}",
+                    box_id, err
+                );
+            }
+        }
+    }
+
+    eprintln!("Signal {} received; exiting", sig);
+    std::process::exit(128 + sig);
 }
 
 pub fn run(mode: CliMode) -> Result<()> {
@@ -286,9 +326,10 @@ pub fn run(mode: CliMode) -> Result<()> {
 
     // Security subsystem availability checks
     perform_security_checks();
+    maybe_exit_on_pending_signal();
 
     // Execute the appropriate command
-    match command {
+    let command_result = match command {
         Commands::Init { box_id } => {
             CURRENT_BOX_ID.store(box_id, Ordering::Relaxed);
             eprintln!("Initializing sandbox with box-id: {}", box_id);
@@ -374,363 +415,130 @@ pub fn run(mode: CliMode) -> Result<()> {
                 isolate.add_directory_bindings(bindings)?;
             }
 
-            if command.is_empty() {
-                // No command specified - look for standardized pattern /tmp/<box-id>.py in sandbox
-                let standard_filename = format!("{}.py", box_id);
-                let sandbox_work_dir = sandbox_box_work_dir(box_id);
-                let standard_path = sandbox_work_dir.join(&standard_filename);
+            let execution_outcome: anyhow::Result<crate::config::types::ExecutionStatus> = (|| {
+                if command.is_empty() {
+                    // No command specified - look for standardized pattern /tmp/<box-id>.py in sandbox
+                    let standard_filename = format!("{}.py", box_id);
+                    let sandbox_work_dir = sandbox_box_work_dir(box_id);
+                    let standard_path = sandbox_work_dir.join(&standard_filename);
 
-                if standard_path.exists() {
+                    if !standard_path.exists() {
+                        return Err(anyhow::anyhow!(
+                            "No command specified and standardized file {} not found in sandbox {}",
+                            standard_filename,
+                            sandbox_work_dir.display()
+                        ));
+                    }
+
                     eprintln!("Executing standardized file: {}", standard_filename);
-                    let code = std::fs::read_to_string(&standard_path)?;
+                    let code = std::fs::read_to_string(&standard_path).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to read standardized source {}: {}",
+                            standard_path.display(),
+                            e
+                        )
+                    })?;
                     let result = isolate.execute_code_string(
                         "python", &code, None, // stdin
                         cpu, mem, time, wall_time, None,      // fd_limit
-                        processes, // P0-CLI-001: Pass process limit
+                        processes, // process_limit
                     )?;
-
-                    let output_config = build_overridden_config(
-                        isolate.config(),
-                        cpu,
-                        mem,
-                        time,
-                        wall_time,
-                        None,
-                        processes,
-                    );
-                    let launch_evidence = isolate.take_last_launch_evidence();
-                    let reported_status = emit_judge_json(
+                    return emit_run_result(
+                        &mut isolate,
                         &result,
-                        &output_config,
                         Some("python"),
-                        launch_evidence.as_ref(),
-                    )?;
-
-                    // Automatic cleanup after execution (no command specified path)
-                    let cleanup_result = isolate.cleanup();
-                    match cleanup_result {
-                        Ok(_) => {
-                            // Also clean up the standardized files we created
-                            let sandbox_work_dir = sandbox_box_work_dir(box_id);
-                            if sandbox_work_dir.exists() {
-                                if let Err(e) = crate::safety::safe_cleanup::remove_tree_secure(
-                                    &sandbox_work_dir,
-                                ) {
-                                    eprintln!(
-                                        "Warning: Failed to remove sandbox files {}: {}",
-                                        sandbox_work_dir.display(),
-                                        e
-                                    );
-                                } else {
-                                    eprintln!(
-                                        "Automatically cleaned up sandbox {} files and instance",
-                                        box_id
-                                    );
-                                }
-                            } else {
-                                eprintln!(
-                                    "Automatically cleaned up sandbox {} after execution",
-                                    box_id
-                                );
-                            }
-                        }
-                        Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
-                    }
-
-                    if reported_status != crate::config::types::ExecutionStatus::Ok {
-                        std::process::exit(1);
-                    }
-                } else {
-                    eprintln!(
-                        "Error: No command specified and standardized file {} not found in sandbox",
-                        standard_filename
-                    );
-                    eprintln!(
-                        "Usage: {} run --box-id {} <filename> or ensure {} exists in {}",
-                        mode.primary_binary(),
-                        box_id,
-                        standard_filename,
-                        sandbox_work_dir.display()
-                    );
-                    std::process::exit(1);
-                }
-            } else if command.len() == 1 {
-                let command_arg = &command[0];
-                let current_dir =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let source_path = current_dir.join(command_arg);
-
-                // Check if file exists in current directory, copy to standardized location in sandbox
-                if source_path.exists() {
-                    let sandbox_work_dir = sandbox_box_work_dir(box_id);
-
-                    // Ensure sandbox work directory exists
-                    if !sandbox_work_dir.exists() {
-                        std::fs::create_dir_all(&sandbox_work_dir).map_err(|e| {
-                            anyhow::anyhow!("Failed to create sandbox work directory: {}", e)
-                        })?;
-                    }
-
-                    // Determine file extension and create standardized name
-                    let extension = source_path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .unwrap_or("py"); // default to .py
-                    let standardized_name = format!("{}.{}", box_id, extension);
-                    let dest_path = sandbox_work_dir.join(&standardized_name);
-
-                    // Check if standardized file already exists (conflict detection)
-                    if dest_path.exists() {
-                        eprintln!(
-                            "Error: Standardized file {} already exists in sandbox {}",
-                            standardized_name, box_id
-                        );
-                        eprintln!("This indicates another user/process has already initialized this box-id with a file.");
-                        eprintln!(
-                            "Please use a different box-id or clean up the existing sandbox first."
-                        );
-                        eprintln!(
-                            "To cleanup: {} cleanup --box-id {}",
-                            mode.primary_binary(),
-                            box_id
-                        );
-                        std::process::exit(1);
-                    }
-
-                    // Also create the standard /tmp location inside the sandbox
-                    let sandbox_tmp_dir = sandbox_work_dir.join("tmp");
-                    std::fs::create_dir_all(&sandbox_tmp_dir).map_err(|e| {
-                        anyhow::anyhow!("Failed to create sandbox /tmp directory: {}", e)
-                    })?;
-                    let internal_dest_path = sandbox_tmp_dir.join(&standardized_name);
-
-                    // Check internal path conflict as well
-                    if internal_dest_path.exists() {
-                        eprintln!("Error: Internal standardized file /tmp/{} already exists in sandbox {}", standardized_name, box_id);
-                        eprintln!("This indicates another user/process has already initialized this box-id with a file.");
-                        eprintln!(
-                            "Please use a different box-id or clean up the existing sandbox first."
-                        );
-                        eprintln!(
-                            "To cleanup: {} cleanup --box-id {}",
-                            mode.primary_binary(),
-                            box_id
-                        );
-                        std::process::exit(1);
-                    }
-
-                    // Copy file to both locations (work dir and /tmp inside sandbox)
-                    std::fs::copy(&source_path, &dest_path).map_err(|e| {
-                        anyhow::anyhow!("Failed to copy file to sandbox work directory: {}", e)
-                    })?;
-                    std::fs::copy(&source_path, &internal_dest_path).map_err(|e| {
-                        anyhow::anyhow!("Failed to copy file to sandbox /tmp: {}", e)
-                    })?;
-
-                    eprintln!("Copied {} to sandbox as {}", command_arg, standardized_name);
-                    eprintln!(
-                        "File available at: /tmp/{} inside sandbox",
-                        standardized_name
-                    );
-
-                    // Execute the copied file using the standardized path
-                    let code = std::fs::read_to_string(&dest_path)?;
-                    let language = match extension {
-                        "py" => "python",
-                        "cpp" | "cc" | "cxx" => "cpp",
-                        "java" => "java",
-                        _ => "python", // default
-                    };
-                    let result = isolate.execute_code_string(
-                        language, &code, None, // stdin
-                        cpu, mem, time, wall_time, None,      // fd_limit
-                        processes, // P0-CLI-001: Pass process limit
-                    )?;
-
-                    let output_config = build_overridden_config(
-                        isolate.config(),
                         cpu,
                         mem,
                         time,
                         wall_time,
-                        None,
                         processes,
                     );
-                    let launch_evidence = isolate.take_last_launch_evidence();
-                    let reported_status = emit_judge_json(
-                        &result,
-                        &output_config,
-                        Some(language),
-                        launch_evidence.as_ref(),
-                    )?;
-
-                    // Automatic cleanup after execution (file specified path)
-                    let cleanup_result = isolate.cleanup();
-                    match cleanup_result {
-                        Ok(_) => {
-                            // Also clean up the standardized files we created
-                            let sandbox_work_dir = sandbox_box_work_dir(box_id);
-                            if sandbox_work_dir.exists() {
-                                if let Err(e) = crate::safety::safe_cleanup::remove_tree_secure(
-                                    &sandbox_work_dir,
-                                ) {
-                                    eprintln!(
-                                        "Warning: Failed to remove sandbox files {}: {}",
-                                        sandbox_work_dir.display(),
-                                        e
-                                    );
-                                } else {
-                                    eprintln!(
-                                        "Automatically cleaned up sandbox {} files and instance",
-                                        box_id
-                                    );
-                                }
-                            } else {
-                                eprintln!(
-                                    "Automatically cleaned up sandbox {} after execution",
-                                    box_id
-                                );
-                            }
-                        }
-                        Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
-                    }
-
-                    if reported_status != crate::config::types::ExecutionStatus::Ok {
-                        std::process::exit(1);
-                    }
-                } else if std::path::Path::new(command_arg).exists() {
-                    // File exists as absolute path - execute directly
-                    let file_path = std::path::Path::new(command_arg);
-                    let code = std::fs::read_to_string(file_path)?;
-                    let language = match file_path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .unwrap_or("py")
-                    {
-                        "py" => "python",
-                        "cpp" | "cc" | "cxx" => "cpp",
-                        "java" => "java",
-                        _ => "python", // default
-                    };
-                    let result = isolate.execute_code_string(
-                        language, &code, None, // stdin
-                        cpu, mem, time, wall_time, None,      // fd_limit
-                        processes, // P0-CLI-001: Pass process limit
-                    )?;
-
-                    let output_config = build_overridden_config(
-                        isolate.config(),
-                        cpu,
-                        mem,
-                        time,
-                        wall_time,
-                        None,
-                        processes,
-                    );
-                    let launch_evidence = isolate.take_last_launch_evidence();
-                    let reported_status = emit_judge_json(
-                        &result,
-                        &output_config,
-                        Some(language),
-                        launch_evidence.as_ref(),
-                    )?;
-
-                    // Automatic cleanup after execution (absolute path)
-                    let cleanup_result = isolate.cleanup();
-                    match cleanup_result {
-                        Ok(_) => {
-                            // Also clean up the standardized files we created
-                            let sandbox_work_dir = sandbox_box_work_dir(box_id);
-                            if sandbox_work_dir.exists() {
-                                if let Err(e) = crate::safety::safe_cleanup::remove_tree_secure(
-                                    &sandbox_work_dir,
-                                ) {
-                                    eprintln!(
-                                        "Warning: Failed to remove sandbox files {}: {}",
-                                        sandbox_work_dir.display(),
-                                        e
-                                    );
-                                } else {
-                                    eprintln!(
-                                        "Automatically cleaned up sandbox {} files and instance",
-                                        box_id
-                                    );
-                                }
-                            } else {
-                                eprintln!(
-                                    "Automatically cleaned up sandbox {} after execution",
-                                    box_id
-                                );
-                            }
-                        }
-                        Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
-                    }
-
-                    if reported_status != crate::config::types::ExecutionStatus::Ok {
-                        std::process::exit(1);
-                    }
-                } else {
-                    eprintln!(
-                        "Error: File '{}' not found in current directory or as absolute path",
-                        command_arg
-                    );
-                    std::process::exit(1);
                 }
-            } else {
-                // Multiple arguments or command - execute directly
+
+                if command.len() == 1 {
+                    let command_arg = &command[0];
+                    if let Some(path) = resolve_single_command_path(command_arg) {
+                        if let Some(language) = source_language_for_path(&path) {
+                            eprintln!("Executing {} source file: {}", language, path.display());
+                            let code = std::fs::read_to_string(&path).map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to read source file {}: {}",
+                                    path.display(),
+                                    e
+                                )
+                            })?;
+                            let result = isolate.execute_code_string(
+                                language, &code, None, // stdin
+                                cpu, mem, time, wall_time, None,      // fd_limit
+                                processes, // process_limit
+                            )?;
+                            return emit_run_result(
+                                &mut isolate,
+                                &result,
+                                Some(language),
+                                cpu,
+                                mem,
+                                time,
+                                wall_time,
+                                processes,
+                            );
+                        }
+                    }
+                }
+
+                // Execute command directly (binary/script path or argv command).
                 let result = isolate.execute_with_overrides(
                     &command, None, // stdin
                     cpu, mem, time, wall_time, None,      // fd_limit
-                    processes, // P0-CLI-001: Pass process limit
+                    processes, // process_limit
                 )?;
-
-                let output_config = build_overridden_config(
-                    isolate.config(),
+                emit_run_result(
+                    &mut isolate,
+                    &result,
+                    None,
                     cpu,
                     mem,
                     time,
                     wall_time,
-                    None,
                     processes,
-                );
-                let launch_evidence = isolate.take_last_launch_evidence();
-                let reported_status =
-                    emit_judge_json(&result, &output_config, None, launch_evidence.as_ref())?;
+                )
+            })(
+            );
 
-                // Automatic cleanup after execution (multiple arguments path)
-                let cleanup_result = isolate.cleanup();
-                match cleanup_result {
-                    Ok(_) => {
-                        // Also clean up the standardized files we created (if any)
-                        let sandbox_work_dir = sandbox_box_work_dir(box_id);
-                        if sandbox_work_dir.exists() {
-                            if let Err(e) =
-                                crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
-                            {
-                                eprintln!(
-                                    "Warning: Failed to remove sandbox files {}: {}",
-                                    sandbox_work_dir.display(),
-                                    e
-                                );
-                            } else {
-                                eprintln!(
-                                    "Automatically cleaned up sandbox {} files and instance",
-                                    box_id
-                                );
-                            }
+            // Cleanup always runs after isolate creation, even when execution failed.
+            let cleanup_result = isolate.cleanup();
+            match cleanup_result {
+                Ok(_) => {
+                    // Also clean up any standardized sandbox files if present.
+                    let sandbox_work_dir = sandbox_box_work_dir(box_id);
+                    if sandbox_work_dir.exists() {
+                        if let Err(e) =
+                            crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
+                        {
+                            eprintln!(
+                                "Warning: Failed to remove sandbox files {}: {}",
+                                sandbox_work_dir.display(),
+                                e
+                            );
                         } else {
                             eprintln!(
-                                "Automatically cleaned up sandbox {} after execution",
+                                "Automatically cleaned up sandbox {} files and instance",
                                 box_id
                             );
                         }
+                    } else {
+                        eprintln!(
+                            "Automatically cleaned up sandbox {} after execution",
+                            box_id
+                        );
                     }
-                    Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
                 }
+                Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
+            }
 
-                if reported_status != crate::config::types::ExecutionStatus::Ok {
-                    std::process::exit(1);
-                }
+            let reported_status = execution_outcome?;
+            if reported_status != crate::config::types::ExecutionStatus::Ok {
+                std::process::exit(1);
             }
 
             Ok(())
@@ -850,36 +658,53 @@ pub fn run(mode: CliMode) -> Result<()> {
 
             let mut isolate = crate::runtime::isolate::Isolate::new(config)?;
 
-            // Execute code string directly
-            let result = isolate.execute_code_string(
-                &language,
-                &code,
-                stdin.as_deref(),
-                cpu.or(time),
-                mem,
-                time,
-                wall_time,
-                None,      // fd_limit
-                processes, // P0-CLI-001: Pass process limit
-            )?;
+            // Keep execution+reporting result separate so isolate cleanup always runs,
+            // even when execution fails and we return an error.
+            let execution_outcome: anyhow::Result<crate::config::types::ExecutionStatus> =
+                match isolate.execute_code_string(
+                    &language,
+                    &code,
+                    stdin.as_deref(),
+                    cpu.or(time),
+                    mem,
+                    time,
+                    wall_time,
+                    None,      // fd_limit
+                    processes, // P0-CLI-001: Pass process limit
+                ) {
+                    Ok(result) => {
+                        let output_config = build_overridden_config(
+                            isolate.config(),
+                            cpu.or(time),
+                            mem,
+                            time,
+                            wall_time,
+                            None,
+                            processes,
+                        );
 
-            let output_config = build_overridden_config(
-                isolate.config(),
-                cpu.or(time),
-                mem,
-                time,
-                wall_time,
-                None,
-                processes,
-            );
+                        let launch_evidence = isolate.take_last_launch_evidence();
+                        emit_judge_json(
+                            &result,
+                            &output_config,
+                            Some(&language),
+                            launch_evidence.as_ref(),
+                        )
+                    }
+                    Err(err) => Err(err.into()),
+                };
 
-            let launch_evidence = isolate.take_last_launch_evidence();
-            let reported_status = emit_judge_json(
-                &result,
-                &output_config,
-                Some(&language),
-                launch_evidence.as_ref(),
-            )?;
+            let cleanup_result = isolate.cleanup();
+            if let Err(e) = cleanup_result {
+                eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e);
+            } else {
+                eprintln!(
+                    "Automatically cleaned up sandbox {} after execution",
+                    box_id
+                );
+            }
+
+            let reported_status = execution_outcome?;
 
             if reported_status != crate::config::types::ExecutionStatus::Ok {
                 std::process::exit(1);
@@ -913,7 +738,10 @@ pub fn run(mode: CliMode) -> Result<()> {
         Commands::CheckDeps { verbose } => {
             check_language_dependencies(verbose, mode.primary_binary())
         }
-    }
+    };
+
+    maybe_exit_on_pending_signal();
+    command_result
 }
 
 fn build_overridden_config(
@@ -953,6 +781,29 @@ fn build_overridden_config(
     }
 
     config
+}
+
+fn emit_run_result(
+    isolate: &mut crate::runtime::isolate::Isolate,
+    result: &crate::config::types::ExecutionResult,
+    language: Option<&str>,
+    max_cpu: Option<u64>,
+    max_memory: Option<u64>,
+    max_time: Option<u64>,
+    max_wall_time: Option<u64>,
+    process_limit: Option<u32>,
+) -> Result<crate::config::types::ExecutionStatus> {
+    let output_config = build_overridden_config(
+        isolate.config(),
+        max_cpu,
+        max_memory,
+        max_time,
+        max_wall_time,
+        None,
+        process_limit,
+    );
+    let launch_evidence = isolate.take_last_launch_evidence();
+    emit_judge_json(result, &output_config, language, launch_evidence.as_ref())
 }
 
 fn build_envelope_id(
@@ -1037,12 +888,18 @@ fn emit_judge_json(
 /// and properly configured on the host system.
 fn perform_security_checks() {
     // Check cgroups availability for resource control
-    if !crate::kernel::cgroup::v1::cgroups_available() {
-        eprintln!("⚠️  Warning: cgroups not available - resource limits will not be enforced");
-        eprintln!("   Ensure /proc/cgroups and /sys/fs/cgroup are properly mounted");
-        eprintln!("   Some contest systems may not function correctly without cgroups");
-    } else {
-        eprintln!("✅ cgroups v1 available - resource limits enabled");
+    match crate::kernel::cgroup::backend::detect_cgroup_backend() {
+        Some(backend) => {
+            eprintln!(
+                "✅ {} available - resource limits enabled",
+                crate::kernel::cgroup::backend::backend_type_name(backend)
+            );
+        }
+        None => {
+            eprintln!("⚠️  Warning: cgroups not available - resource limits will not be enforced");
+            eprintln!("   Ensure /proc/cgroups and /sys/fs/cgroup are properly mounted");
+            eprintln!("   Some contest systems may not function correctly without cgroups");
+        }
     }
 
     // Check namespace support for process isolation
@@ -1214,5 +1071,42 @@ fn check_language_dependencies(verbose: bool, primary_binary: &str) -> Result<()
         }
 
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_language_detection_from_extension() {
+        assert_eq!(
+            source_language_for_path(std::path::Path::new("solution.py")),
+            Some("python")
+        );
+        assert_eq!(
+            source_language_for_path(std::path::Path::new("solution.cpp")),
+            Some("cpp")
+        );
+        assert_eq!(
+            source_language_for_path(std::path::Path::new("solution.cxx")),
+            Some("cpp")
+        );
+        assert_eq!(
+            source_language_for_path(std::path::Path::new("Main.java")),
+            Some("java")
+        );
+    }
+
+    #[test]
+    fn source_language_detection_rejects_non_source() {
+        assert_eq!(
+            source_language_for_path(std::path::Path::new("/bin/true")),
+            None
+        );
+        assert_eq!(
+            source_language_for_path(std::path::Path::new("archive.tar.gz")),
+            None
+        );
     }
 }

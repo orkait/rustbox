@@ -89,6 +89,10 @@ impl NamespaceIsolation {
                 }
             }
 
+            if self.enable_network_namespace {
+                self.bring_up_loopback()?;
+            }
+
             log::info!(
                 "Successfully applied namespace isolation: {:?}",
                 self.get_enabled_namespaces()
@@ -132,6 +136,55 @@ impl NamespaceIsolation {
         }
 
         namespaces
+    }
+
+    fn bring_up_loopback(&self) -> Result<()> {
+        let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+        if sock < 0 {
+            return Err(IsolateError::Namespace(format!(
+                "Failed to open socket for loopback setup: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+
+        let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
+        let lo_name = b"lo\0";
+        for (idx, b) in lo_name.iter().enumerate() {
+            ifr.ifr_name[idx] = *b as libc::c_char;
+        }
+
+        let get_flags_rc = unsafe { libc::ioctl(sock, libc::SIOCGIFFLAGS as _, &mut ifr) };
+        if get_flags_rc != 0 {
+            let err = std::io::Error::last_os_error();
+            let _ = unsafe { libc::close(sock) };
+            return Err(IsolateError::Namespace(format!(
+                "Failed to query loopback flags: {}",
+                err
+            )));
+        }
+
+        let current_flags = unsafe { ifr.ifr_ifru.ifru_flags } as libc::c_int;
+        let updated_flags = current_flags | libc::IFF_UP;
+        ifr.ifr_ifru.ifru_flags = updated_flags as libc::c_short;
+
+        let set_flags_rc = unsafe { libc::ioctl(sock, libc::SIOCSIFFLAGS as _, &ifr) };
+        let close_rc = unsafe { libc::close(sock) };
+        if close_rc != 0 {
+            log::warn!(
+                "Failed to close loopback setup socket cleanly: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        if set_flags_rc != 0 {
+            return Err(IsolateError::Namespace(format!(
+                "Failed to bring up loopback interface: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+
+        log::info!("Enabled loopback interface inside network namespace");
+        Ok(())
     }
 }
 

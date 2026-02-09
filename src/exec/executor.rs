@@ -230,3 +230,133 @@ impl ProcessExecutor {
         Ok(())
     }
 }
+
+impl Drop for ProcessExecutor {
+    fn drop(&mut self) {
+        // Best-effort safety net: cleanup must still run when execute()
+        // returns early before explicit cleanup paths.
+        if self.cgroup.is_some() {
+            if let Err(err) = self.cleanup() {
+                log::warn!(
+                    "ProcessExecutor drop cleanup failed for {}: {}",
+                    self.config.instance_id,
+                    err
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::CgroupEvidence;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct MockCgroupBackend {
+        remove_calls: Arc<AtomicUsize>,
+    }
+
+    impl CgroupBackend for MockCgroupBackend {
+        fn backend_name(&self) -> &str {
+            "mock"
+        }
+
+        fn create(&self, _instance_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn remove(&self, _instance_id: &str) -> Result<()> {
+            self.remove_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn attach_process(&self, _instance_id: &str, _pid: u32) -> Result<()> {
+            Ok(())
+        }
+
+        fn set_memory_limit(&self, _instance_id: &str, _limit_bytes: u64) -> Result<()> {
+            Ok(())
+        }
+
+        fn set_process_limit(&self, _instance_id: &str, _limit: u32) -> Result<()> {
+            Ok(())
+        }
+
+        fn set_cpu_limit(&self, _instance_id: &str, _limit_usec: u64) -> Result<()> {
+            Ok(())
+        }
+
+        fn get_memory_usage(&self) -> Result<u64> {
+            Ok(0)
+        }
+
+        fn get_memory_peak(&self) -> Result<u64> {
+            Ok(0)
+        }
+
+        fn get_cpu_usage(&self) -> Result<u64> {
+            Ok(0)
+        }
+
+        fn get_process_count(&self) -> Result<u32> {
+            Ok(0)
+        }
+
+        fn check_oom(&self) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn get_oom_kill_count(&self) -> Result<u64> {
+            Ok(0)
+        }
+
+        fn collect_evidence(&self, _instance_id: &str) -> Result<CgroupEvidence> {
+            Ok(CgroupEvidence {
+                memory_peak: None,
+                memory_limit: None,
+                oom_events: 0,
+                oom_kill_events: 0,
+                cpu_usage_usec: None,
+                process_count: None,
+                process_limit: None,
+            })
+        }
+
+        fn get_cgroup_path(&self, _instance_id: &str) -> PathBuf {
+            PathBuf::from("/tmp/mock-cgroup")
+        }
+
+        fn is_empty(&self) -> Result<bool> {
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn drop_runs_cleanup_after_early_execution_error() {
+        let remove_calls = Arc::new(AtomicUsize::new(0));
+
+        {
+            let mut config = IsolateConfig::default();
+            config.instance_id = "drop-cleanup-test".to_string();
+
+            let mut executor = ProcessExecutor {
+                config,
+                cgroup: Some(Box::new(MockCgroupBackend {
+                    remove_calls: remove_calls.clone(),
+                })),
+                last_launch_evidence: None,
+                baseline_checker: None,
+                baseline_capture_error: None,
+            };
+
+            // Empty argv is rejected before explicit execute() cleanup path.
+            let result = executor.execute_single_process(&[], None);
+            assert!(result.is_err());
+        }
+
+        assert_eq!(remove_calls.load(Ordering::SeqCst), 1);
+    }
+}

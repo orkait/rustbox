@@ -174,12 +174,18 @@ pub struct ProxyStatus {
 
 impl ProxyStatus {
     pub fn to_execution_result(&self) -> ExecutionResult {
-        let status = if self.internal_error.is_some() {
-            ExecutionStatus::InternalError
-        } else if self.timed_out {
+        let interrupted_signal = self.internal_error.as_deref().and_then(|msg| {
+            msg.strip_prefix("interrupted_by_signal:")
+                .and_then(|s| s.parse::<i32>().ok())
+        });
+        let resolved_signal = self.term_signal.or(interrupted_signal);
+
+        let status = if self.timed_out {
             ExecutionStatus::TimeLimit
-        } else if self.term_signal.is_some() {
+        } else if resolved_signal.is_some() {
             ExecutionStatus::Signaled
+        } else if self.internal_error.is_some() {
+            ExecutionStatus::InternalError
         } else if self.exit_code == Some(0) {
             ExecutionStatus::Ok
         } else {
@@ -195,7 +201,7 @@ impl ProxyStatus {
             cpu_time: 0.0,
             wall_time: self.wall_time_ms as f64 / 1000.0,
             memory_peak: 0,
-            signal: self.term_signal,
+            signal: resolved_signal,
             success: status == ExecutionStatus::Ok,
             error_message: self.internal_error.clone(),
         }
@@ -211,4 +217,34 @@ pub struct SandboxLaunchOutcome {
     pub evidence: LaunchEvidence,
     pub kill_report: Option<KillReport>,
     pub proxy_status: ProxyStatus,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_internal_error_maps_to_signaled_status() {
+        let status = ProxyStatus {
+            internal_error: Some("interrupted_by_signal:15".to_string()),
+            ..ProxyStatus::default()
+        };
+
+        let result = status.to_execution_result();
+        assert_eq!(result.status, ExecutionStatus::Signaled);
+        assert_eq!(result.signal, Some(15));
+    }
+
+    #[test]
+    fn timeout_still_takes_precedence_over_signal() {
+        let status = ProxyStatus {
+            timed_out: true,
+            term_signal: Some(libc::SIGTERM),
+            internal_error: Some("interrupted_by_signal:15".to_string()),
+            ..ProxyStatus::default()
+        };
+
+        let result = status.to_execution_result();
+        assert_eq!(result.status, ExecutionStatus::TimeLimit);
+    }
 }

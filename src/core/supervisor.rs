@@ -309,7 +309,13 @@ pub fn launch_with_supervisor(
                     .to_string(),
             ));
         }
-        Err(e) => return Err(to_process_error("clone(proxy)", e)),
+        Err(e) => {
+            let _ = close(launch_read);
+            let _ = close(launch_write);
+            let _ = close(status_read);
+            let _ = close(status_write);
+            return Err(to_process_error("clone(proxy)", e));
+        }
     };
 
     let _ = close(launch_read);
@@ -317,9 +323,12 @@ pub fn launch_with_supervisor(
 
     if let Some(controller) = cgroup {
         if let Err(e) = controller.attach_process(&req.instance_id, proxy_pid.as_raw() as u32) {
-            let _ = terminate_proxy_group(proxy_pid);
             evidence_collection_errors.push(format!("cgroup_attach: {}", e));
             if req.profile.strict_mode {
+                let _ = terminate_proxy_group(proxy_pid);
+                let _ = waitpid(proxy_pid, None);
+                let _ = close(launch_write);
+                let _ = close(status_read);
                 return Err(e);
             }
         } else {
@@ -329,12 +338,20 @@ pub fn launch_with_supervisor(
         && (req.profile.memory_limit.is_some() || req.profile.process_limit.is_some())
     {
         let _ = terminate_proxy_group(proxy_pid);
+        let _ = waitpid(proxy_pid, None);
+        let _ = close(launch_write);
+        let _ = close(status_read);
         return Err(IsolateError::Cgroup(
             "strict mode requires cgroup limits for configured memory/process controls".to_string(),
         ));
     }
 
-    write_request_to_fd(launch_write, &req)?;
+    if let Err(err) = write_request_to_fd(launch_write, &req) {
+        let _ = terminate_proxy_group(proxy_pid);
+        let _ = waitpid(proxy_pid, None);
+        let _ = close(status_read);
+        return Err(err);
+    }
 
     let wall_limit = req
         .profile
@@ -345,6 +362,8 @@ pub fn launch_with_supervisor(
 
     let mut timed_out = false;
     let mut cpu_timed_out = false;
+    let mut interrupted_by_signal = false;
+    let mut interrupt_signal = None;
     let mut kill_report: Option<KillReport> = None;
     let mut proxy_exit_code = None;
     let mut proxy_signal = None;
@@ -355,7 +374,11 @@ pub fn launch_with_supervisor(
     loop {
         match waitpid(proxy_pid, Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => {
-                if started.elapsed() > wall_limit {
+                if !crate::kernel::signal::should_continue() {
+                    interrupted_by_signal = true;
+                    interrupt_signal = Some(crate::kernel::signal::received_signal());
+                    kill_report = Some(terminate_proxy_group(proxy_pid));
+                } else if started.elapsed() > wall_limit {
                     timed_out = true;
                     kill_report = Some(terminate_proxy_group(proxy_pid));
                 } else if let (Some(limit_usec), Some(controller)) = (cpu_limit_usec, cgroup) {
@@ -372,11 +395,17 @@ pub fn launch_with_supervisor(
                             );
                         }
                     }
-                    if !timed_out {
+                    if !timed_out && !interrupted_by_signal {
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 } else {
-                    std::thread::sleep(Duration::from_millis(10));
+                    if !interrupted_by_signal {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+
+                if interrupted_by_signal {
+                    break;
                 }
             }
             Ok(WaitStatus::Exited(_, code)) => {
@@ -389,7 +418,26 @@ pub fn launch_with_supervisor(
             }
             Ok(_) => continue,
             Err(nix::errno::Errno::EINTR) => continue,
-            Err(e) => return Err(to_process_error("waitpid(proxy)", e)),
+            Err(e) => {
+                let _ = close(status_read);
+                return Err(to_process_error("waitpid(proxy)", e));
+            }
+        }
+    }
+
+    // If interrupted by host signal, ensure proxy is reaped before reading
+    // status pipe so we do not block on an open writer.
+    if interrupted_by_signal && proxy_exit_code.is_none() && proxy_signal.is_none() {
+        match waitpid(proxy_pid, None) {
+            Ok(WaitStatus::Exited(_, code)) => proxy_exit_code = Some(code),
+            Ok(WaitStatus::Signaled(_, sig, _)) => proxy_signal = Some(sig as i32),
+            Ok(_) => {}
+            Err(nix::errno::Errno::ECHILD) => {}
+            Err(nix::errno::Errno::EINTR) => {}
+            Err(e) => {
+                let _ = close(status_read);
+                return Err(to_process_error("waitpid(proxy-interrupt)", e));
+            }
         }
     }
 
@@ -408,6 +456,12 @@ pub fn launch_with_supervisor(
     if timed_out {
         status.timed_out = true;
     }
+    if interrupted_by_signal {
+        status.timed_out = false;
+        let sig = interrupt_signal.unwrap_or(0) as i32;
+        status.term_signal = Some(sig);
+        status.internal_error = Some(format!("interrupted_by_signal:{}", sig));
+    }
 
     let mut result = status.to_execution_result();
     if timed_out {
@@ -420,6 +474,12 @@ pub fn launch_with_supervisor(
         evidence_collection_errors.push(
             "cpu_time_limit_exceeded: judge watchdog killed process after cgroup CPU usage exceeded limit".to_string(),
         );
+    }
+    if interrupted_by_signal {
+        evidence_collection_errors.push(format!(
+            "interrupted_by_signal:{}",
+            interrupt_signal.unwrap_or(0)
+        ));
     }
 
     let mut cgroup_evidence = None;
@@ -519,11 +579,19 @@ fn launch_degraded(
 
     // Monitor with wall-time limit.
     let mut timed_out = false;
+    let mut interrupted_by_signal = false;
+    let mut interrupt_signal = None;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => {
-                if started.elapsed() > wall_limit {
+                if !crate::kernel::signal::should_continue() {
+                    interrupted_by_signal = true;
+                    interrupt_signal = Some(crate::kernel::signal::received_signal());
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                } else if started.elapsed() > wall_limit {
                     timed_out = true;
                     let _ = child.kill();
                     let _ = child.wait();
@@ -551,13 +619,24 @@ fn launch_degraded(
     let status = ProxyStatus {
         payload_pid: Some(child_pid),
         exit_code,
-        term_signal: None,
+        term_signal: if interrupted_by_signal {
+            Some(interrupt_signal.unwrap_or(0) as i32)
+        } else {
+            None
+        },
         timed_out,
         wall_time_ms: started.elapsed().as_millis() as u64,
         stdout,
         stderr,
         output_integrity: crate::config::types::OutputIntegrity::Complete,
-        internal_error: None,
+        internal_error: if interrupted_by_signal {
+            Some(format!(
+                "interrupted_by_signal:{}",
+                interrupt_signal.unwrap_or(0)
+            ))
+        } else {
+            None
+        },
         reaped_descendants: 0,
     };
 
@@ -567,8 +646,14 @@ fn launch_degraded(
         result.success = false;
     }
 
-    let evidence_collection_errors =
-        vec!["degraded_launch: no namespace isolation (non-root)".to_string()];
+    let evidence_collection_errors = if interrupted_by_signal {
+        vec![
+            "degraded_launch: no namespace isolation (non-root)".to_string(),
+            format!("interrupted_by_signal:{}", interrupt_signal.unwrap_or(0)),
+        ]
+    } else {
+        vec!["degraded_launch: no namespace isolation (non-root)".to_string()]
+    };
 
     let evidence = build_launch_evidence(
         &req,

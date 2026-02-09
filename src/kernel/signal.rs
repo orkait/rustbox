@@ -11,6 +11,18 @@ static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// Global signal received (async-safe atomic)
 static SIGNAL_RECEIVED: AtomicU32 = AtomicU32::new(0);
 
+/// Async-signal-safe global shutdown trigger.
+/// Safe to call from process signal handlers in other modules.
+pub fn request_shutdown(signal: i32) {
+    SIGNAL_RECEIVED.store(signal as u32, Ordering::SeqCst);
+    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+/// Read the last received signal number (0 when none).
+pub fn received_signal() -> u32 {
+    SIGNAL_RECEIVED.load(Ordering::SeqCst)
+}
+
 /// Signal handler state
 pub struct SignalHandler;
 
@@ -51,14 +63,9 @@ impl SignalHandler {
     /// Async-safe signal handler
     /// Only performs atomic operations - no allocations, no locks, no I/O
     extern "C" fn signal_handler(signal: libc::c_int) {
-        // Store signal number atomically
-        SIGNAL_RECEIVED.store(signal as u32, Ordering::SeqCst);
-
-        // Set shutdown flag atomically
-        SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
-
-        // That's it - no other operations allowed in signal handler
-        // Main loop will check these flags and perform cleanup
+        // That's it - no other operations allowed in signal handler.
+        // Main loop will check these flags and perform cleanup.
+        request_shutdown(signal);
     }
 
     /// Check if shutdown was requested

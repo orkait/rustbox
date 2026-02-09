@@ -511,6 +511,8 @@ impl Sandbox<CgroupAttached> {
             profile.chroot_dir.clone(),
             profile.workdir.clone(),
             self.strict_mode,
+            profile.file_size_limit.or(profile.memory_limit),
+            None,
         );
 
         if let Err(e) = fs_security.setup_isolation() {
@@ -648,6 +650,22 @@ impl Sandbox<CgroupAttached> {
                 env_map.insert(key.clone(), value.clone());
             }
             apply_exec_environment(&env_map, self.strict_mode)?;
+
+            // Run payload from configured workspace for deterministic relative-path behavior.
+            if let Err(e) = std::env::set_current_dir(&profile.workdir) {
+                if self.strict_mode {
+                    return Err(IsolateError::Config(format!(
+                        "Failed to chdir to workdir {}: {}",
+                        profile.workdir.display(),
+                        e
+                    )));
+                }
+                log::warn!(
+                    "Failed to chdir to workdir {} (permissive mode): {}",
+                    profile.workdir.display(),
+                    e
+                );
+            }
         }
 
         Ok(Sandbox {

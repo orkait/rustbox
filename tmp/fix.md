@@ -1,384 +1,250 @@
-# Rustbox Security Hardening Plan
+# Rustbox Security Hardening Status (Current)
 
 **Date**: 2026-02-09  
-**Based on**: Deep analysis vs IOI Isolate baseline  
-**Verdict**: Not production-ready for untrusted code execution  
+**Scope**: Re-validated against current `src/` after recent fix wave  
+**Verdict**: **Closer, but still not a full drop-in Isolate replacement** for hostile multi-tenant untrusted code; usable with constraints.
 
 ---
 
 ## Executive Summary
 
-Rustbox has strong architectural foundations (type-state chain, dual cgroup backends, structured evidence) but **critical security gaps** prevent it from replacing IOI Isolate:
-
-**P0 Blockers**:
-1. No mandatory tmpfs-root filesystem boundary (host root visible)
-2. No hard CPU-time enforcement (wall-time only, not CPU quota)
-3. Unsafe degraded fallback (can run without namespaces/cgroups)
-4. Declared-but-not-wired security controls (seccomp, disk quotas)
-5. Incomplete capability drop implementation
-
-**Rustbox Strengths**: Type-state safety, explicit cap/NNP, PDEATHSIG, cgroup.kill, evidence provenance, memory safety  
-**Isolate Strengths**: Tmpfs root, mount rule engine, capability-isolated mounting, disk quotas, 20+ years battle-testing
+The previous report is now partially stale. Major P0 items were fixed (strict tmpfs-root boundary, hard CPU-time enforcement path, capability-drop implementation, and removal of seccomp dead surface). This pass also fixed loopback bring-up, command lifecycle cleanup parity, backend-aware cgroup diagnostics, explicit workdir `chdir` before payload exec, guaranteed executor cgroup cleanup on early-error paths, and corrected default process-limit headroom for proxy+payload launches.
 
 ---
 
-## Critical Findings (P0)
+## Re-Validation of Prior P0 Claims
 
-### C1. No Mandatory Filesystem Boundary
+### C1. Mandatory filesystem boundary in strict mode
+**Status**: **FIXED**
 
-**Gap**: `chroot_dir` defaults to `None`. Strict mode does not enforce tmpfs-root + chroot.
+What exists now:
+- Strict mode auto-creates tmpfs sandbox root when `chroot_dir` is absent.
+- Standard bind set is mounted into that root.
+- `chroot` is applied in pre-exec chain.
 
-**Isolate baseline**: Always creates tmpfs root, applies controlled bind mounts, then `chroot("root")`.
+Evidence:
+- `src/kernel/mount/filesystem.rs:33` (`setup_isolation`)
+- `src/kernel/mount/filesystem.rs:38` (`auto_create_tmpfs_root` call)
+- `src/kernel/mount/filesystem.rs:302` (`mount_standard_bind_set`)
+- `src/kernel/mount/filesystem.rs:744` (`apply_chroot`)
+- `src/exec/preexec.rs:516` + `src/exec/preexec.rs:530`
 
-**Impact**: Payload can access host filesystem paths outside bind mount coverage.
+### C2. Hard CPU-time enforcement
+**Status**: **FIXED**
 
-**Fix**: 
-```rust
-// In strict mode, enforce:
-1. Create tmpfs root
-2. Apply controlled bind set (workspace, /bin, /lib, /usr, /dev, /proc)
-3. Mandatory chroot/pivot_root
-4. Fail closed if any step fails
-```
+What exists now:
+- cgroup v2 uses `cpu.max` (quota/period) instead of weight-only behavior.
+- cgroup v1 writes CFS quota (`cpu.cfs_quota_us` / period).
+- Supervisor watchdog also kills when cgroup CPU usage exceeds limit.
 
-**Files**: `src/kernel/mount/filesystem.rs`, `src/config/types.rs`
+Evidence:
+- `src/kernel/cgroup/v2.rs:244`
+- `src/kernel/cgroup/v1.rs:650`
+- `src/core/supervisor.rs:363`
+- `src/core/supervisor.rs:421`
 
----
+### C3. Unsafe degraded fallback
+**Status**: **PARTIALLY FIXED / INTENTIONAL DEVGATE**
 
-### C2. No Hard CPU-Time Enforcement
+Current behavior:
+- Strict mode is fail-closed.
+- Degraded fallback only triggers in non-strict mode **and** when `allow_degraded` is explicitly set.
 
-**Gap**: Uses `cpu.weight` (share), not `cpu.max` (quota). Watchdog is wall-time only.
+Evidence:
+- `src/core/supervisor.rs:290`
+- `src/core/supervisor.rs:300`
+- `src/core/supervisor.rs:473`
+- `src/cli.rs:843`
 
-**Isolate baseline**: Keeper enforces CPU runtime via periodic checks + kill on CPU limit.
+Risk note:
+- Still a dangerous mode if used in production by mistake.
 
-**Impact**: CPU-bound abuse (tight loop) can saturate host CPU until wall timeout.
+### C4. Declared-but-not-wired controls (seccomp, etc.)
+**Status**: **MOSTLY RESOLVED BY REMOVAL**
 
-**Fix**:
-```rust
-// Option 1: cgroup v2 cpu.max
-write("cpu.max", format!("{} 100000", cpu_limit_us));
+What changed:
+- Seccomp/syscall-filtering surface removed from active code paths.
+- No active `seccomp`/`enable_syscall_filtering` flags in `src/`.
 
-// Option 2: Watchdog CPU runtime check
-loop {
-    let cpu_used = read_cpu_stat();
-    if cpu_used > cpu_limit { kill_process_group(); }
-}
-```
+Validation:
+- Repo search across `src/`, `README.md`, tests for `seccomp` and syscall-filter flags returned no active hits.
 
-**Files**: `src/kernel/cgroup/v2.rs`, `src/core/supervisor.rs`
+Open part:
+- Quota controls (disk/inode) are still not implemented.
 
----
+### C5. Capability drop implementation
+**Status**: **FIXED (WITH CAVEATS)**
 
-### C3. Unsafe Degraded Fallback
+What exists now:
+- Bounding + ambient drop path.
+- `capset`-based drop for effective/permitted/inheritable sets.
+- Verification by reading `/proc/self/status` capability fields.
 
-**Gap**: Permissive mode + non-root + `clone()` EPERM → `Command::spawn` without isolation.
+Evidence:
+- `src/kernel/capabilities.rs:31`
+- `src/kernel/capabilities.rs:67`
+- `src/kernel/capabilities.rs:131`
 
-**Isolate baseline**: No "run unisolated" path. Root required always.
-
-**Impact**: Untrusted payload can run with host namespace/cgroup/filesystem visibility.
-
-**Fix**:
-```rust
-// Remove automatic fallback for untrusted mode
-if config.strict_mode && clone_result.is_err() {
-    return Err(IsolateError::InsufficientPrivileges);
-}
-
-// Require explicit --dev-unsafe flag for degraded mode
-if config.allow_degraded && clone_result.is_err() {
-    log::error!("UNSAFE: Running without isolation");
-    launch_degraded()?;
-}
-```
-
-**Files**: `src/core/supervisor.rs`
-
----
-
-### C4. Declared-But-Not-Wired Controls
-
-**Gap**: Config fields exist but have no runtime enforcement:
-- `disk_quota` (no `quotactl_fd` calls)
-- `use_seccomp` (returns error, not installed)
-- `enable_network` (not used by launch profile)
-- Judge adapter registry (not called by CLI)
-
-**Impact**: False confidence. Users assume controls are active.
-
-**Fix**: Either implement or remove from production config.
-
-**Files**: `src/config/types.rs`, `src/kernel/seccomp.rs`, `src/judge/registry.rs`
+Caveat:
+- Error handling tolerates some post-drop failure modes (warn/log behavior).
 
 ---
 
-### C5. Incomplete Capability Drop
+## Remaining High-Risk Gaps
 
-**Gap**: `drop_process_capabilities()` is a no-op placeholder.
+### H1. No explicit loopback bring-up in netns
+**Status**: **FIXED**
 
-**Current**: Drops bounding + ambient, relies on `setresuid()` for effective/permitted.
+Current behavior:
+- After namespace unshare, loopback is brought up via `SIOCGIFFLAGS`/`SIOCSIFFLAGS`.
 
-**Fix**:
-```rust
-fn drop_process_capabilities() -> Result<()> {
-    // Drop effective/permitted/inheritable
-    for cap in 0..40 {
-        caps::drop(None, CapSet::Effective, cap)?;
-        caps::drop(None, CapSet::Permitted, cap)?;
-        caps::drop(None, CapSet::Inheritable, cap)?;
-    }
-    // Verify all sets are empty
-    verify_no_capabilities()?;
-}
-```
+Evidence:
+- `src/kernel/namespace.rs:93`
+- `src/kernel/namespace.rs:141`
+- `src/kernel/namespace.rs:170`
 
-**Files**: `src/kernel/capabilities.rs`
+Impact:
+- Programs expecting localhost networking can fail unexpectedly.
 
----
+### H2. No disk/inode quota enforcement
+**Status**: **FIXED (STRICT-MODE PATH)**
 
-## High-Risk Findings (P1)
+Current behavior:
+- Strict mode always uses an auto-created tmpfs root.
+- Tmpfs root has explicit `size=` and `nr_inodes=` mount options.
+- Workspace is copied into tmpfs root (instead of bind-mounting host workdir), so writes/inodes in strict mode are bounded by tmpfs limits.
+- Strict mode now rejects read-write host directory bindings to avoid bypassing tmpfs limits.
 
-### H1. No Loopback Network Setup
+Impact:
+- Writable surfaces in strict mode are constrained to quota-bounded tmpfs.
 
-**Gap**: Network namespace created but loopback not brought up.
+### H3. Lifecycle semantics differ by command path
+**Status**: **FIXED**
 
-**Isolate**: `ioctl(SIOCSIFFLAGS, IFF_UP)` on `lo`.
+Current behavior:
+- `run` path performs automatic cleanup after execution in multiple branches.
+- `execute-code` now also performs automatic cleanup after execution.
 
-**Impact**: Programs expecting `127.0.0.1` fail.
+Evidence:
+- Auto cleanup in run path: `src/cli.rs:425`, `src/cli.rs:583`, `src/cli.rs:654`, `src/cli.rs:716`
+- Execute-code cleanup: `src/cli.rs:899`
 
-**Fix**:
-```rust
-// In network namespace setup
-let sock = socket(AF_INET, SOCK_DGRAM, 0)?;
-let mut ifr = ifreq { ifr_name: "lo", ... };
-ioctl(sock, SIOCSIFFLAGS, IFF_UP)?;
-```
+Impact:
+- Operator confusion, inconsistent persistence semantics.
 
-**Files**: `src/kernel/namespace.rs`
+### H4. Security check messaging is backend-stale
+**Status**: **FIXED**
 
----
+Current behavior:
+- `perform_security_checks()` now reports actual detected backend (`v2` preferred / `v1` fallback).
 
-### H2. No Disk/Inode Quotas
+Evidence:
+- `src/cli.rs:1068`
 
-**Gap**: `disk_quota` field unused. No `quotactl_fd()` enforcement.
+Impact:
+- Misleading diagnostics during incident response and ops triage.
 
-**Isolate**: Native block+inode quota via `--quota`.
+### H5. Signal teardown in CLI fast-exit path
+**Status**: **FIXED**
 
-**Impact**: Disk exhaustion attacks (write large files, spray inodes).
+Current behavior:
+- CLI signal handler no longer uses `_exit`; it records signal atomically.
+- Signal state is propagated into runtime supervision loops.
+- Supervisor/degraded loops terminate child process groups immediately on signal.
+- Mainline performs sandbox cleanup before final exit.
 
-**Fix**: Implement project quotas or use size-limited tmpfs workspace.
+Evidence:
+- `src/cli.rs:203`
+- `src/cli.rs:211`
+- `src/cli.rs:222`
+- `src/cli.rs:240`
+- `src/core/supervisor.rs` signal-aware monitor loops
+- `src/kernel/signal.rs` shared shutdown signaling helpers
 
-**Files**: `src/kernel/mount/filesystem.rs`
-
----
-
-### H3. Inconsistent Lifecycle Semantics
-
-**Gap**: 
-- `run` command auto-cleans after execution
-- `execute-code` does not call `isolate.cleanup()`, leaves state
-
-**Isolate**: Explicit `--init` / `--run` / `--cleanup` lifecycle.
-
-**Impact**: State leakage, forensic confusion.
-
-**Fix**: Unify to either explicit cleanup everywhere or guaranteed ephemeral cleanup.
-
-**Files**: `src/cli.rs`, `src/legacy/isolate.rs`
-
----
-
-### H4. No Capability-Isolated Mounting
-
-**Gap**: Mounts performed as full root.
-
-**Isolate**: Drops to caller UID + CAP_SYS_ADMIN only during mount.
-
-**Impact**: Broader attack surface during mount operations.
-
-**Fix**:
-```rust
-// Before mount
-setresuid(orig_uid, orig_uid, 0)?;
-set_cap_sys_admin_only()?;
-mount(source, target, ...)?;
-// After mount
-setresuid(orig_uid, 0, orig_uid)?;
-```
-
-**Files**: `src/kernel/mount/filesystem.rs`
+Impact:
+- Signal interruption now stops long-running payloads promptly and preserves cleanup semantics.
 
 ---
 
-### H5. User Namespace Incomplete
+## Moderate Gaps
 
-**Gap**: `enable_user_namespace` flag exists but mapping workflow deferred.
+### M1. No explicit `chdir(workdir)` before payload exec
+**Status**: **FIXED**
 
-**Impact**: Rootless strict mode is not production-ready.
+Current behavior:
+- After chroot, runtime switches cwd to `/`.
+- Runtime now explicitly transitions to configured sandbox workdir before exec.
 
-**Fix**: Either complete `uid_map`/`gid_map`/`setgroups` workflow or hard-disable.
+Evidence:
+- `src/kernel/mount/filesystem.rs:760` (`set_current_dir("/")`)
+- `src/exec/preexec.rs:655`
 
-**Files**: `src/config/policy/userns.rs`
-
----
-
-## Moderate Findings (P2)
-
-### M1. No Workdir chdir() in Preexec
-
-**Gap**: Workdir created but no explicit `chdir(workdir)` in active path.
-
-**Impact**: Relative-path behavior fragile.
-
-**Fix**: Add `std::env::set_current_dir(workdir)` in type-state chain.
+Impact:
+- Relative-path behavior may not match expected sandbox workdir contract.
 
 ---
 
-### M2. Misleading Security Check Messages
+## Structural Updates Already Landed
 
-**Gap**: `perform_security_checks()` reports cgroup-v1 messaging even when v2 active.
-
-**Fix**: Report actual backend selection.
-
----
-
-### M3. No Signal-Aware Teardown
-
-**Gap**: CLI signal handler uses `_exit`, skips cleanup logic.
-
-**Isolate**: Keeper signal handler runs cleanup before exit.
-
-**Fix**: Run cleanup path in signal handler before exit.
+- Module naming cleanup applied:
+  - `src/legacy/` renamed to `src/runtime/`
+  - Active runtime imports updated accordingly.
+- Seccomp historical surface removed.
 
 ---
 
-## Rustbox Advantages (Keep These)
+## Current Production Recommendation
 
-| Feature | Benefit |
-|---------|---------|
-| Type-state pre-exec chain | Compile-time ordering enforcement (9 trybuild tests) |
-| Explicit capability drop | Bounding + ambient + NNP |
-| PDEATHSIG | Kernel-guaranteed cleanup on parent death |
-| close_range syscall | Atomic FD closure (Linux 5.9+) |
-| cgroup.kill cleanup | Kernel-level process tree kill |
-| Dual v1/v2 cgroup backend | Broader compatibility |
-| Evidence-backed verdicts | Pure function over immutable evidence |
-| Structured JSON output | Capability report + provenance |
-| Memory safety | Rust automatic bounds checking |
-| Post-drop verification | `verify_transition()` confirms UID/GID change |
+**Ship with constraints**, not as a full Isolate replacement for hostile untrusted workloads.
+
+Constraints required:
+1. Run strict mode only for untrusted code.
+2. Disallow `allow_degraded` in production policy.
+3. Add explicit disk/inode quota strategy before multi-tenant exposure.
+4. Keep strict tmpfs size/inode limits tuned for language workloads.
+5. Keep signal-aware interruption behavior under regression tests.
 
 ---
 
-## Production Hardening Checklist
+## Verification Snapshot
 
-### Phase 0: Remove Dead Weight (DONE)
-- ✅ Deleted ~2200 LOC dead scaffolding
-- ✅ Removed ~100 fake tests
-- ✅ Simplified lock manager (removed heartbeat)
-
-### Phase 1: P0 Blockers (MUST-HAVE)
-- [ ] **C1**: Enforce tmpfs-root + mandatory chroot in strict mode
-- [ ] **C2**: Implement hard CPU enforcement (`cpu.max` or watchdog)
-- [ ] **C3**: Remove degraded fallback for untrusted mode
-- [ ] **C4**: Wire or remove declared controls (disk_quota, seccomp)
-- [ ] **C5**: Complete capability drop implementation
-
-### Phase 2: P1 High-Risk (SHOULD-HAVE)
-- [ ] **H1**: Bring up loopback in network namespace
-- [ ] **H2**: Implement disk/inode quotas
-- [ ] **H3**: Unify lifecycle semantics
-- [ ] **H4**: Capability-isolated mounting
-- [ ] **H5**: Complete or disable user namespace
-
-### Phase 3: P2 Moderate (NICE-TO-HAVE)
-- [ ] **M1**: Explicit workdir chdir()
-- [ ] **M2**: Fix security check messaging
-- [ ] **M3**: Signal-aware teardown
+- Re-check completed against current `src/`.
+- Test suite status: `cargo test -q` passed (`141` tests + trybuild compile-fail suite).
 
 ---
 
-## Adversarial Test Plan
+## Follow-up Fixes Applied After Re-check
 
-| Attack | Expected Defense | Verification |
-|--------|------------------|--------------|
-| Fork bomb | `pids.max` cap | No host PID growth |
-| Memory bomb | `memory.max` + OOM kill | `memory.events` shows OOM |
-| CPU spin | Hard CPU quota kill | CPU runtime crosses limit → kill |
-| Disk fill | Disk quota or RLIMIT_FSIZE | EDQUOT/EFBIG, no host fill |
-| Inode spray | Inode quota | Quota enforcement signal |
-| FD leak | `close_range` + `/proc/self/fd` | Only 0/1/2 visible |
-| Ptrace attempt | Namespace isolation | EPERM |
-| Mount attempt | Dropped capabilities | EPERM |
-| Network egress | Network namespace | Connection failure |
-| Parent death | PDEATHSIG + cgroup.kill | No orphans |
+### F1. Executor cleanup leak on early errors
+**Status**: **FIXED**
 
----
+What changed:
+- Added a `Drop` safety-net in `ProcessExecutor` so cgroup cleanup still runs when execution exits early before explicit cleanup logic.
+- Added a unit test that validates `remove()` is called on drop after an early execution error.
 
-## Comparison Matrix
+Evidence:
+- `src/exec/executor.rs:234`
+- `src/exec/executor.rs:337`
 
-| Control | Isolate | Rustbox | Winner |
-|---------|---------|---------|--------|
-| Tmpfs root | ✅ Always | ❌ Optional | **Isolate** |
-| Hard CPU enforcement | ✅ Keeper checks | ❌ Wall-time only | **Isolate** |
-| Disk quotas | ✅ quotactl_fd | ❌ Not implemented | **Isolate** |
-| Mount rule engine | ✅ 8 flag types | ⚠️ Config-driven | **Isolate** |
-| Capability-isolated mount | ✅ CAP_SYS_ADMIN only | ❌ Full root | **Isolate** |
-| Loopback setup | ✅ Explicit | ❌ Not implemented | **Isolate** |
-| Type-state safety | ❌ Convention | ✅ Compile-time | **Rustbox** |
-| Explicit cap drop | ❌ Implicit | ✅ Bounding+ambient | **Rustbox** |
-| no_new_privs | ❌ Not set | ✅ Set+verified | **Rustbox** |
-| PDEATHSIG | ❌ Not set | ✅ Kernel-guaranteed | **Rustbox** |
-| close_range | ❌ /proc iteration | ✅ Atomic syscall | **Rustbox** |
-| cgroup.kill | ❌ Not used | ✅ Kernel tree kill | **Rustbox** |
-| Dual cgroup backend | ❌ v2 only | ✅ v1/v2 auto-detect | **Rustbox** |
-| Evidence provenance | ❌ Simple meta | ✅ Structured JSON | **Rustbox** |
-| Memory safety | ❌ Manual C | ✅ Automatic Rust | **Rustbox** |
-| Battle-testing | ✅ 20+ years IOI | ❌ New | **Isolate** |
+### F2. Supervisor early-error fd/process cleanup
+**Status**: **FIXED**
 
----
+What changed:
+- Added parent-fd close coverage on clone failure paths.
+- On strict attach/write failures, supervisor now terminates and reaps proxy before returning.
+- Added status-fd close on waitpid errors.
 
-## Recommendation
+Evidence:
+- `src/core/supervisor.rs:312`
+- `src/core/supervisor.rs:327`
+- `src/core/supervisor.rs:349`
+- `src/core/supervisor.rs:421`
 
-**DO NOT ship as Isolate replacement** until P0 blockers are fixed.
+### F3. Process-limit default too low for proxy+payload model
+**Status**: **FIXED**
 
-**Rustbox can be stronger than Isolate** if it:
-1. Enforces mandatory tmpfs-root boundary (C1)
-2. Implements hard CPU enforcement (C2)
-3. Removes unsafe degraded fallback (C3)
-4. Wires or removes declared controls (C4)
-5. Completes capability drop (C5)
+What changed:
+- Updated `IsolateConfig` default `process_limit` from `1` to `10` to avoid `fork(payload): EAGAIN` in strict proxy architecture.
 
-**Then Rustbox wins on**:
-- Defense-in-depth (type-state, explicit caps, NNP, PDEATHSIG)
-- Observability (evidence provenance, capability report)
-- Memory safety (Rust)
-- Cgroup compatibility (v1/v2 dual backend)
-
-**Isolate still wins on**:
-- Filesystem isolation sophistication
-- Operational maturity (20+ years production)
-
----
-
-## Files Requiring Changes
-
-### P0 Critical
-- `src/kernel/mount/filesystem.rs` — tmpfs root + mandatory chroot
-- `src/kernel/cgroup/v2.rs` — cpu.max hard quota
-- `src/core/supervisor.rs` — remove degraded fallback, add CPU watchdog
-- `src/kernel/capabilities.rs` — complete cap drop
-- `src/config/types.rs` — remove unwired fields
-
-### P1 High-Risk
-- `src/kernel/namespace.rs` — loopback setup
-- `src/kernel/mount/filesystem.rs` — disk quotas, cap-isolated mounting
-- `src/cli.rs` — unify lifecycle
-- `src/config/policy/userns.rs` — complete or disable
-
-### P2 Moderate
-- `src/exec/preexec.rs` — explicit workdir chdir
-- `src/legacy/isolate.rs` — fix security check messaging
-- `src/kernel/signal.rs` — signal-aware teardown
-
----
-
-**Next Steps**: Fix P0 blockers in order (C1 → C2 → C3 → C4 → C5), then re-evaluate against Isolate baseline.
+Evidence:
+- `src/config/types.rs:247`

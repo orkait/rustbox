@@ -15,15 +15,35 @@ pub struct FilesystemSecurity {
     workdir: PathBuf,
     /// Whether to apply strict filesystem isolation
     strict_mode: bool,
+    /// Size limit for auto-created strict tmpfs root.
+    tmpfs_size_bytes: u64,
+    /// Inode limit for auto-created strict tmpfs root.
+    tmpfs_inode_limit: u64,
 }
 
 impl FilesystemSecurity {
+    const DEFAULT_TMPFS_SIZE_BYTES: u64 = 256 * 1024 * 1024;
+
     /// Create a new filesystem security controller
-    pub fn new(chroot_dir: Option<PathBuf>, workdir: PathBuf, strict_mode: bool) -> Self {
+    pub fn new(
+        chroot_dir: Option<PathBuf>,
+        workdir: PathBuf,
+        strict_mode: bool,
+        tmpfs_size_bytes: Option<u64>,
+        tmpfs_inode_limit: Option<u64>,
+    ) -> Self {
+        let size = tmpfs_size_bytes
+            .unwrap_or(Self::DEFAULT_TMPFS_SIZE_BYTES)
+            .max(4 * 1024 * 1024);
+        let default_inodes = (size / 16_384).clamp(4_096, 1_048_576);
+        let inodes = tmpfs_inode_limit.unwrap_or(default_inodes).max(1_024);
+
         Self {
             chroot_dir,
             workdir,
             strict_mode,
+            tmpfs_size_bytes: size,
+            tmpfs_inode_limit: inodes,
         }
     }
 
@@ -31,10 +51,15 @@ impl FilesystemSecurity {
     /// In strict mode with no chroot_dir, auto-creates a tmpfs root and
     /// bind-mounts a minimal standard set of directories read-only.
     pub fn setup_isolation(&mut self) -> Result<()> {
-        // C1: In strict mode, if no chroot_dir was explicitly provided,
-        // auto-create a tmpfs root so the payload never runs on the host FS.
+        // In strict mode always use an auto-created tmpfs root so writable
+        // surfaces are bounded by size/inode limits and never hit host FS.
         #[cfg(unix)]
-        if self.strict_mode && self.chroot_dir.is_none() {
+        if self.strict_mode {
+            if self.chroot_dir.is_some() {
+                log::warn!(
+                    "Strict mode ignores explicit chroot_dir and uses auto tmpfs root for quota safety"
+                );
+            }
             let tmpfs_root = self.auto_create_tmpfs_root()?;
             self.chroot_dir = Some(tmpfs_root);
         }
@@ -64,6 +89,14 @@ impl FilesystemSecurity {
     #[cfg(unix)]
     fn setup_single_binding(&self, binding: &crate::config::types::DirectoryBinding) -> Result<()> {
         use crate::config::types::DirectoryPermissions;
+
+        if self.strict_mode && binding.permissions == DirectoryPermissions::ReadWrite {
+            return Err(IsolateError::Config(format!(
+                "Read-write directory bindings are disallowed in strict mode: {} -> {}",
+                binding.source.display(),
+                binding.target.display()
+            )));
+        }
 
         // Skip if source doesn't exist and maybe flag is set
         if binding.maybe && !binding.source.exists() {
@@ -109,20 +142,11 @@ impl FilesystemSecurity {
             return Ok(()); // No mounting needed for tmp directories
         }
 
-        // Prepare mount flags based on permissions
-        let mut mount_flags = libc::MS_BIND;
-
-        match binding.permissions {
-            DirectoryPermissions::ReadOnly => {
-                mount_flags |= libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV;
-            }
-            DirectoryPermissions::ReadWrite => {
-                mount_flags |= libc::MS_NOSUID | libc::MS_NODEV;
-            }
-            DirectoryPermissions::NoExec => {
-                mount_flags |= libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
-            }
-        }
+        let read_only = matches!(
+            binding.permissions,
+            DirectoryPermissions::ReadOnly | DirectoryPermissions::NoExec
+        );
+        let no_exec = binding.permissions == DirectoryPermissions::NoExec;
 
         // Perform bind mount
         let source_cstr = std::ffi::CString::new(binding.source.to_string_lossy().as_bytes())
@@ -130,17 +154,17 @@ impl FilesystemSecurity {
         let target_cstr = std::ffi::CString::new(target_path.to_string_lossy().as_bytes())
             .map_err(|e| IsolateError::Config(format!("Invalid target path: {}", e)))?;
 
-        let result = unsafe {
+        let bind_result = unsafe {
             libc::mount(
                 source_cstr.as_ptr(),
                 target_cstr.as_ptr(),
                 std::ptr::null(),
-                mount_flags,
+                libc::MS_BIND,
                 std::ptr::null(),
             )
         };
 
-        if result != 0 {
+        if bind_result != 0 {
             let errno = unsafe { *libc::__errno_location() };
             if self.strict_mode {
                 return Err(IsolateError::Config(format!(
@@ -165,14 +189,50 @@ impl FilesystemSecurity {
                     target_path.display()
                 );
             }
-        } else {
-            log::info!(
-                "Bound directory {} to {} with permissions {:?}",
-                binding.source.display(),
-                target_path.display(),
-                binding.permissions
-            );
         }
+
+        if read_only {
+            let mut remount_flags = libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY;
+            remount_flags |= libc::MS_NOSUID | libc::MS_NODEV;
+            if no_exec {
+                remount_flags |= libc::MS_NOEXEC;
+            }
+
+            let remount_result = unsafe {
+                libc::mount(
+                    std::ptr::null(),
+                    target_cstr.as_ptr(),
+                    std::ptr::null(),
+                    remount_flags,
+                    std::ptr::null(),
+                )
+            };
+
+            if remount_result != 0 {
+                let errno = unsafe { *libc::__errno_location() };
+                if self.strict_mode {
+                    return Err(IsolateError::Config(format!(
+                        "Failed to remount read-only bind {} to {}: errno {}",
+                        binding.source.display(),
+                        target_path.display(),
+                        errno
+                    )));
+                }
+                log::warn!(
+                    "Failed to remount read-only bind {} to {}: errno {}",
+                    binding.source.display(),
+                    target_path.display(),
+                    errno
+                );
+            }
+        }
+
+        log::info!(
+            "Bound directory {} to {} with permissions {:?}",
+            binding.source.display(),
+            target_path.display(),
+            binding.permissions
+        );
 
         Ok(())
     }
@@ -218,7 +278,7 @@ impl FilesystemSecurity {
     }
 
     /// Auto-create a tmpfs root for strict mode isolation.
-    /// Mounts a 256MB tmpfs at a unique path under /tmp and returns it.
+    /// Mounts a size-limited tmpfs at a unique path under /tmp and returns it.
     #[cfg(unix)]
     fn auto_create_tmpfs_root(&self) -> Result<PathBuf> {
         let tmpfs_root =
@@ -231,7 +291,12 @@ impl FilesystemSecurity {
             .map_err(|e| IsolateError::Config(format!("Invalid tmpfs root path: {}", e)))?;
         let fstype_cstr = std::ffi::CString::new("tmpfs").unwrap();
         let source_cstr = std::ffi::CString::new("tmpfs").unwrap();
-        let opts_cstr = std::ffi::CString::new("size=256m,mode=755").unwrap();
+        let mount_opts = format!(
+            "size={},nr_inodes={},mode=755",
+            self.tmpfs_size_bytes, self.tmpfs_inode_limit
+        );
+        let opts_cstr = std::ffi::CString::new(mount_opts.as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid tmpfs options: {}", e)))?;
 
         let flags = libc::MS_NOSUID | libc::MS_NODEV;
         let result = unsafe {
@@ -254,41 +319,22 @@ impl FilesystemSecurity {
         }
 
         log::info!(
-            "Auto-created tmpfs root for strict mode at {}",
-            tmpfs_root.display()
+            "Auto-created strict tmpfs root at {} (size={}, nr_inodes={})",
+            tmpfs_root.display(),
+            self.tmpfs_size_bytes,
+            self.tmpfs_inode_limit
         );
 
-        // Bind-mount workspace into tmpfs root so payload can write there
+        // Use workspace inside tmpfs root so writes and inode growth are bounded by tmpfs limits.
         let ws_in_root = tmpfs_root.join(self.workdir.strip_prefix("/").unwrap_or(&self.workdir));
         fs::create_dir_all(&ws_in_root).map_err(|e| {
             IsolateError::Config(format!("Failed to create workspace in tmpfs root: {}", e))
         })?;
 
         if self.workdir.exists() {
-            let src_cstr = std::ffi::CString::new(self.workdir.to_string_lossy().as_bytes())
-                .map_err(|e| IsolateError::Config(format!("Invalid workspace path: {}", e)))?;
-            let dst_cstr = std::ffi::CString::new(ws_in_root.to_string_lossy().as_bytes())
-                .map_err(|e| IsolateError::Config(format!("Invalid ws root path: {}", e)))?;
-
-            let bind_result = unsafe {
-                libc::mount(
-                    src_cstr.as_ptr(),
-                    dst_cstr.as_ptr(),
-                    std::ptr::null(),
-                    libc::MS_BIND,
-                    std::ptr::null(),
-                )
-            };
-
-            if bind_result != 0 {
-                let errno = unsafe { *libc::__errno_location() };
-                return Err(IsolateError::Config(format!(
-                    "Failed to bind-mount workspace into tmpfs root: errno {}",
-                    errno
-                )));
-            }
+            self.copy_directory_contents(&self.workdir, &ws_in_root)?;
             log::info!(
-                "Bind-mounted workspace {} into tmpfs root",
+                "Copied workspace {} into strict tmpfs root",
                 self.workdir.display()
             );
         }
@@ -867,5 +913,37 @@ impl FilesystemSecurity {
         } else {
             self.workdir.clone()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::{DirectoryBinding, DirectoryPermissions};
+
+    #[test]
+    fn strict_mode_rejects_read_write_directory_binding() {
+        let fs = FilesystemSecurity::new(
+            None,
+            PathBuf::from("/tmp/rustbox-test-workdir"),
+            true,
+            None,
+            None,
+        );
+
+        let binding = DirectoryBinding {
+            source: PathBuf::from("/tmp/host-data"),
+            target: PathBuf::from("/data"),
+            permissions: DirectoryPermissions::ReadWrite,
+            maybe: true,
+            is_tmp: false,
+        };
+
+        let result = fs.setup_directory_bindings(&[binding]);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Read-write directory bindings are disallowed in strict mode"));
     }
 }
