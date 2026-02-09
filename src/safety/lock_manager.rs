@@ -1,6 +1,8 @@
 /// Enhanced lock manager implementing file-based locking
 /// Simplified version without heartbeat thread (R4: heartbeat thread removed)
-use crate::config::types::{HealthStatus, LockError, LockInfo, LockManagerHealth, LockMetrics, LockResult};
+use crate::config::types::{
+    HealthStatus, LockError, LockInfo, LockManagerHealth, LockMetrics, LockResult,
+};
 use log::{info, warn};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -297,11 +299,11 @@ impl RustboxLockManager {
 
         // Step 2: Try to acquire exclusive lock (non-blocking)
         #[cfg(unix)]
-        let flock_result = unsafe { 
+        let flock_result = unsafe {
             use std::os::unix::io::AsRawFd;
-            flock(lock_file.as_raw_fd(), LOCK_EX | LOCK_NB) 
+            flock(lock_file.as_raw_fd(), LOCK_EX | LOCK_NB)
         };
-        
+
         #[cfg(not(unix))]
         let flock_result = {
             // Windows doesn't support flock, return error
@@ -309,7 +311,7 @@ impl RustboxLockManager {
                 message: "flock not supported on this platform".to_string(),
             });
         };
-        
+
         if flock_result != 0 {
             let errno = std::io::Error::last_os_error();
             return match errno.raw_os_error() {
@@ -462,7 +464,10 @@ impl RustboxLockManager {
                         if let Ok(box_id) = box_id_str.parse::<u32>() {
                             // Check if this lock is stale
                             if Self::is_lock_stale(&path, stale_timeout).unwrap_or(false) {
-                                warn!("Background cleanup: truncating stale lock for box {}", box_id);
+                                warn!(
+                                    "Background cleanup: truncating stale lock for box {}",
+                                    box_id
+                                );
                                 // Truncate to zero instead of removing — prevents inode-reuse races
                                 if let Ok(f) = OpenOptions::new().write(true).open(&path) {
                                     let _ = f.set_len(0);

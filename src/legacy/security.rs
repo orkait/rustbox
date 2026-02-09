@@ -95,7 +95,7 @@ pub mod command_validation {
             // not the controller's host working directory.
             return Ok(PathBuf::from("./solution"));
         }
-        
+
         // 2. Handle relative paths by checking PATH
         let resolved_path = if command.starts_with('/') {
             // Absolute path - validate directly
@@ -116,10 +116,9 @@ pub mod command_validation {
 
         // 4. Check against allowlist (accept canonical aliases such as /bin -> /usr/bin)
         if !is_allowed_path(&canonical) {
-            return Err(SecurityError::CommandNotAllowed(
-                canonical.to_string_lossy().to_string(),
-            )
-            .into());
+            return Err(
+                SecurityError::CommandNotAllowed(canonical.to_string_lossy().to_string()).into(),
+            );
         }
 
         // 4. Additional security checks

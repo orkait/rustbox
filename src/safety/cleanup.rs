@@ -3,10 +3,9 @@
 /// Implements P0-CLEAN-002: Failure-Injection Matrix (partial)
 /// Implements P0-CLEAN-003: Cleanup Failure Escalation
 /// Per plan.md Section 5.1: Failure-Path Discipline Contract
-
 use crate::config::types::{IsolateError, Result};
 use crate::safety::safe_cleanup;
-use log::{debug, info, warn, error};
+use log::{debug, error, info, warn};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -43,21 +42,26 @@ impl ResourceLedger {
             entries: Vec::new(),
         }
     }
-    
+
     /// Record resource creation
     /// Must be called immediately after successful creation
-    pub fn record(&mut self, resource_type: ResourceType, identifier: String, path: Option<PathBuf>) {
+    pub fn record(
+        &mut self,
+        resource_type: ResourceType,
+        identifier: String,
+        path: Option<PathBuf>,
+    ) {
         let entry = ResourceEntry {
             resource_type,
             identifier,
             path,
             created_at: std::time::SystemTime::now(),
         };
-        
+
         debug!("Recording resource: {:?}", entry);
         self.entries.push(entry);
     }
-    
+
     /// Get all entries of a specific type
     pub fn get_by_type(&self, resource_type: &ResourceType) -> Vec<&ResourceEntry> {
         self.entries
@@ -65,22 +69,22 @@ impl ResourceLedger {
             .filter(|e| &e.resource_type == resource_type)
             .collect()
     }
-    
+
     /// Get all entries in reverse creation order (for cleanup)
     pub fn reverse_order(&self) -> Vec<&ResourceEntry> {
         self.entries.iter().rev().collect()
     }
-    
+
     /// Remove entry after successful cleanup
     pub fn remove(&mut self, identifier: &str) {
         self.entries.retain(|e| e.identifier != identifier);
     }
-    
+
     /// Check if ledger is empty
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
-    
+
     /// Get count of resources
     pub fn count(&self) -> usize {
         self.entries.len()
@@ -102,20 +106,25 @@ impl CleanupManager {
             cleanup_errors: Vec::new(),
         }
     }
-    
+
     /// Record resource for cleanup
-    pub fn record_resource(&mut self, resource_type: ResourceType, identifier: String, path: Option<PathBuf>) {
+    pub fn record_resource(
+        &mut self,
+        resource_type: ResourceType,
+        identifier: String,
+        path: Option<PathBuf>,
+    ) {
         self.ledger.record(resource_type, identifier, path);
     }
-    
+
     /// Cleanup all resources in reverse creation order
     /// Idempotent: safe to call multiple times
     pub fn cleanup_all(&mut self) -> Result<()> {
         info!("Starting cleanup of {} resources", self.ledger.count());
-        
+
         let entries = self.ledger.reverse_order();
         let mut failed_cleanups = Vec::new();
-        
+
         for entry in entries {
             match self.cleanup_resource(entry) {
                 Ok(()) => {
@@ -129,7 +138,7 @@ impl CleanupManager {
                 }
             }
         }
-        
+
         if !failed_cleanups.is_empty() {
             return Err(IsolateError::Config(format!(
                 "Cleanup failed for {} resources: {:?}",
@@ -137,11 +146,11 @@ impl CleanupManager {
                 failed_cleanups
             )));
         }
-        
+
         info!("Cleanup complete");
         Ok(())
     }
-    
+
     /// Cleanup a single resource (idempotent)
     fn cleanup_resource(&self, entry: &ResourceEntry) -> Result<()> {
         match entry.resource_type {
@@ -153,7 +162,7 @@ impl CleanupManager {
             ResourceType::Workspace => self.cleanup_workspace(entry),
         }
     }
-    
+
     /// Cleanup mount (idempotent)
     fn cleanup_mount(&self, entry: &ResourceEntry) -> Result<()> {
         if let Some(path) = &entry.path {
@@ -167,7 +176,7 @@ impl CleanupManager {
         }
         Ok(())
     }
-    
+
     /// Cleanup cgroup (idempotent)
     fn cleanup_cgroup(&self, entry: &ResourceEntry) -> Result<()> {
         if let Some(path) = &entry.path {
@@ -176,7 +185,11 @@ impl CleanupManager {
                 if Self::is_cgroup_empty(path)? {
                     debug!("Removing cgroup: {}", path.display());
                     fs::remove_dir(path).map_err(|e| {
-                        IsolateError::Cgroup(format!("Failed to remove cgroup {}: {}", path.display(), e))
+                        IsolateError::Cgroup(format!(
+                            "Failed to remove cgroup {}: {}",
+                            path.display(),
+                            e
+                        ))
                     })?;
                 } else {
                     warn!("Cgroup not empty, cannot remove: {}", path.display());
@@ -191,13 +204,14 @@ impl CleanupManager {
         }
         Ok(())
     }
-    
+
     /// Cleanup process (idempotent)
     fn cleanup_process(&self, entry: &ResourceEntry) -> Result<()> {
-        let pid: u32 = entry.identifier.parse().map_err(|_| {
-            IsolateError::Process(format!("Invalid PID: {}", entry.identifier))
-        })?;
-        
+        let pid: u32 = entry
+            .identifier
+            .parse()
+            .map_err(|_| IsolateError::Process(format!("Invalid PID: {}", entry.identifier)))?;
+
         // Check if process still exists
         if Self::is_process_alive(pid) {
             debug!("Killing process: {}", pid);
@@ -205,10 +219,10 @@ impl CleanupManager {
         } else {
             debug!("Process already terminated: {}", pid);
         }
-        
+
         Ok(())
     }
-    
+
     /// Cleanup file descriptor (idempotent)
     fn cleanup_fd(&self, entry: &ResourceEntry) -> Result<()> {
         // FDs are automatically closed when dropped in Rust
@@ -216,7 +230,7 @@ impl CleanupManager {
         debug!("FD cleanup (no-op): {}", entry.identifier);
         Ok(())
     }
-    
+
     /// Cleanup temporary directory (idempotent)
     fn cleanup_temp_dir(&self, entry: &ResourceEntry) -> Result<()> {
         if let Some(path) = &entry.path {
@@ -235,7 +249,7 @@ impl CleanupManager {
         }
         Ok(())
     }
-    
+
     /// Cleanup workspace (idempotent)
     fn cleanup_workspace(&self, entry: &ResourceEntry) -> Result<()> {
         if let Some(path) = &entry.path {
@@ -254,7 +268,7 @@ impl CleanupManager {
         }
         Ok(())
     }
-    
+
     /// Check if path is mounted
     fn is_mounted(path: &Path) -> Result<bool> {
         // Read /proc/mounts to check if path is mounted
@@ -264,14 +278,14 @@ impl CleanupManager {
                 format!("Failed to read /proc/mounts: {}", e),
             ))
         })?;
-        
+
         let path_str = path.to_string_lossy();
         Ok(mounts.lines().any(|line| {
             let parts: Vec<&str> = line.split_whitespace().collect();
             parts.len() >= 2 && parts[1] == path_str
         }))
     }
-    
+
     /// Unmount path
     fn unmount(path: &Path) -> Result<()> {
         #[cfg(target_os = "linux")]
@@ -281,17 +295,17 @@ impl CleanupManager {
                 IsolateError::Config(format!("Failed to unmount {}: {}", path.display(), e))
             })?;
         }
-        
+
         #[cfg(not(target_os = "linux"))]
         {
             return Err(IsolateError::Config(
-                "Unmount not supported on this platform".to_string()
+                "Unmount not supported on this platform".to_string(),
             ));
         }
-        
+
         Ok(())
     }
-    
+
     /// Check if cgroup is empty
     fn is_cgroup_empty(path: &Path) -> Result<bool> {
         let procs_file = path.join("cgroup.procs");
@@ -301,53 +315,51 @@ impl CleanupManager {
             if !tasks_file.exists() {
                 return Ok(true); // Assume empty if neither file exists
             }
-            
-            let content = fs::read_to_string(&tasks_file).map_err(|e| {
-                IsolateError::Cgroup(format!("Failed to read tasks file: {}", e))
-            })?;
+
+            let content = fs::read_to_string(&tasks_file)
+                .map_err(|e| IsolateError::Cgroup(format!("Failed to read tasks file: {}", e)))?;
             return Ok(content.trim().is_empty());
         }
-        
-        let content = fs::read_to_string(&procs_file).map_err(|e| {
-            IsolateError::Cgroup(format!("Failed to read cgroup.procs: {}", e))
-        })?;
-        
+
+        let content = fs::read_to_string(&procs_file)
+            .map_err(|e| IsolateError::Cgroup(format!("Failed to read cgroup.procs: {}", e)))?;
+
         Ok(content.trim().is_empty())
     }
-    
+
     /// Check if process is alive
     fn is_process_alive(pid: u32) -> bool {
         std::path::Path::new(&format!("/proc/{}", pid)).exists()
     }
-    
+
     /// Kill process
     fn kill_process(pid: u32) -> Result<()> {
         #[cfg(target_os = "linux")]
         {
             use nix::sys::signal::{self, Signal};
             use nix::unistd::Pid;
-            
+
             let pid = Pid::from_raw(pid as i32);
             signal::kill(pid, Signal::SIGKILL).map_err(|e| {
                 IsolateError::Process(format!("Failed to kill process {}: {}", pid, e))
             })?;
         }
-        
+
         #[cfg(not(target_os = "linux"))]
         {
             return Err(IsolateError::Process(
-                "Process kill not supported on this platform".to_string()
+                "Process kill not supported on this platform".to_string(),
             ));
         }
-        
+
         Ok(())
     }
-    
+
     /// Get cleanup errors
     pub fn get_errors(&self) -> &[String] {
         &self.cleanup_errors
     }
-    
+
     /// Check if cleanup had errors
     pub fn has_errors(&self) -> bool {
         !self.cleanup_errors.is_empty()
@@ -371,29 +383,29 @@ impl BaselineChecker {
             baseline_processes: Self::get_processes()?,
         })
     }
-    
+
     /// Verify host-clean baseline after cleanup
     pub fn verify_baseline(&self) -> Result<()> {
         let current_mounts = Self::get_mounts()?;
         let current_cgroups = Self::get_cgroups()?;
         let current_processes = Self::get_processes()?;
-        
+
         let mut violations = Vec::new();
-        
+
         // Check for additional mounts
         for mount in &current_mounts {
             if !self.baseline_mounts.contains(mount) {
                 violations.push(format!("Additional mount: {}", mount));
             }
         }
-        
+
         // Check for additional cgroups
         for cgroup in &current_cgroups {
             if !self.baseline_cgroups.contains(cgroup) {
                 violations.push(format!("Additional cgroup: {}", cgroup.display()));
             }
         }
-        
+
         // Check for additional processes (sandbox-attributable)
         for pid in &current_processes {
             if !self.baseline_processes.contains(pid) {
@@ -403,7 +415,7 @@ impl BaselineChecker {
                 }
             }
         }
-        
+
         if !violations.is_empty() {
             error!("Baseline violations detected: {:?}", violations);
             return Err(IsolateError::Config(format!(
@@ -411,11 +423,11 @@ impl BaselineChecker {
                 violations.len()
             )));
         }
-        
+
         info!("Baseline verification passed");
         Ok(())
     }
-    
+
     /// Get current mounts
     fn get_mounts() -> Result<Vec<String>> {
         let content = fs::read_to_string("/proc/mounts").map_err(|e| {
@@ -424,14 +436,14 @@ impl BaselineChecker {
                 format!("Failed to read /proc/mounts: {}", e),
             ))
         })?;
-        
+
         Ok(content.lines().map(|s| s.to_string()).collect())
     }
-    
+
     /// Get current cgroups
     fn get_cgroups() -> Result<Vec<PathBuf>> {
         let mut cgroups = Vec::new();
-        
+
         // Check cgroup v1 controllers
         let cgroup_base = Path::new("/sys/fs/cgroup");
         if cgroup_base.exists() {
@@ -448,14 +460,14 @@ impl BaselineChecker {
                 }
             }
         }
-        
+
         Ok(cgroups)
     }
-    
+
     /// Get current processes
     fn get_processes() -> Result<Vec<u32>> {
         let mut processes = Vec::new();
-        
+
         if let Ok(entries) = fs::read_dir("/proc") {
             for entry in entries.flatten() {
                 if let Ok(file_name) = entry.file_name().into_string() {
@@ -465,10 +477,10 @@ impl BaselineChecker {
                 }
             }
         }
-        
+
         Ok(processes)
     }
-    
+
     /// Check if process is sandbox-related
     fn is_sandbox_process(pid: u32) -> bool {
         // Check if process cmdline contains "rustbox"
@@ -483,31 +495,31 @@ impl BaselineChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_resource_ledger() {
         let mut ledger = ResourceLedger::new();
         assert!(ledger.is_empty());
-        
+
         ledger.record(
             ResourceType::TempDirectory,
             "temp1".to_string(),
             Some(PathBuf::from("/tmp/test")),
         );
-        
+
         assert_eq!(ledger.count(), 1);
         assert!(!ledger.is_empty());
-        
+
         let entries = ledger.get_by_type(&ResourceType::TempDirectory);
         assert_eq!(entries.len(), 1);
     }
-    
+
     #[test]
     fn test_cleanup_manager_creation() {
         let manager = CleanupManager::new();
         assert!(!manager.has_errors());
     }
-    
+
     #[test]
     fn test_baseline_checker() {
         let baseline = BaselineChecker::capture_baseline();

@@ -167,7 +167,10 @@ impl FilesystemSecurity {
     }
 
     #[cfg(not(unix))]
-    fn setup_single_binding(&self, _binding: &crate::config::types::DirectoryBinding) -> Result<()> {
+    fn setup_single_binding(
+        &self,
+        _binding: &crate::config::types::DirectoryBinding,
+    ) -> Result<()> {
         Err(IsolateError::Config(
             "Directory binding is only supported on Unix systems".to_string(),
         ))

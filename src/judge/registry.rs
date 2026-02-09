@@ -7,7 +7,8 @@ pub fn adapter_for(language: &str) -> Result<Box<dyn JudgeAdapter>> {
         "python" | "py" => Ok(Box::new(PythonAdapter)),
         "cpp" | "c++" | "cxx" | "cc" | "c" => Ok(Box::new(CppAdapter)),
         "java" => Ok(Box::new(JavaAdapter)),
-        _ => Err(IsolateError::Config(format!("unsupported language adapter: {language}"))),
+        _ => Err(IsolateError::Config(format!(
+            "unsupported language adapter: {language}"
+        ))),
     }
 }
-

@@ -6,4 +6,3 @@
 pub mod adapter;
 pub mod languages;
 pub mod registry;
-

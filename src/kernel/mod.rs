@@ -3,9 +3,9 @@
 //! This module contains thin wrappers around Linux kernel interfaces.
 //! All `unsafe` code should be concentrated here with explicit safety preconditions.
 
-pub mod namespace;
-pub mod cgroup;
 pub mod capabilities;
-pub mod seccomp;
+pub mod cgroup;
 pub mod mount;
+pub mod namespace;
+pub mod seccomp;
 pub mod signal;

@@ -1,7 +1,6 @@
 /// Spawn-to-Cgroup Race Elimination
 /// Implements P1-RACE-001: Spawn-to-Cgroup Race Proof
 /// Per plan.md Section 8.7: Spawn-to-Cgroup Race Proof Contract
-
 use crate::config::types::{IsolateError, Result};
 use std::fs;
 use std::path::Path;
@@ -11,10 +10,10 @@ use std::path::Path;
 pub struct RaceProofConfig {
     /// Cgroup path for sandbox
     pub cgroup_path: String,
-    
+
     /// Strict mode (fail on any race condition)
     pub strict_mode: bool,
-    
+
     /// Number of test iterations
     pub test_iterations: usize,
 }
@@ -34,22 +33,22 @@ impl Default for RaceProofConfig {
 pub struct RaceProofResult {
     /// Total iterations run
     pub iterations: usize,
-    
+
     /// Number of successful iterations
     pub successes: usize,
-    
+
     /// Number of failed iterations
     pub failures: usize,
-    
+
     /// Detected race conditions
     pub race_conditions: Vec<String>,
-    
+
     /// Memory accounting violations
     pub memory_violations: Vec<String>,
-    
+
     /// CPU accounting violations
     pub cpu_violations: Vec<String>,
-    
+
     /// Process containment violations
     pub containment_violations: Vec<String>,
 }
@@ -66,27 +65,27 @@ impl RaceProofResult {
             containment_violations: Vec::new(),
         }
     }
-    
+
     pub fn is_pass(&self) -> bool {
-        self.failures == 0 && 
-        self.race_conditions.is_empty() &&
-        self.memory_violations.is_empty() &&
-        self.cpu_violations.is_empty() &&
-        self.containment_violations.is_empty()
+        self.failures == 0
+            && self.race_conditions.is_empty()
+            && self.memory_violations.is_empty()
+            && self.cpu_violations.is_empty()
+            && self.containment_violations.is_empty()
     }
 }
 
 /// Check if process is in cgroup
 pub fn check_process_in_cgroup(pid: u32, cgroup_path: &str) -> Result<bool> {
     let procs_path = format!("{}/cgroup.procs", cgroup_path);
-    
+
     if !Path::new(&procs_path).exists() {
         return Ok(false);
     }
-    
+
     let content = fs::read_to_string(&procs_path)
         .map_err(|e| IsolateError::Cgroup(format!("Failed to read cgroup.procs: {}", e)))?;
-    
+
     for line in content.lines() {
         if let Ok(cgroup_pid) = line.trim().parse::<u32>() {
             if cgroup_pid == pid {
@@ -94,28 +93,28 @@ pub fn check_process_in_cgroup(pid: u32, cgroup_path: &str) -> Result<bool> {
             }
         }
     }
-    
+
     Ok(false)
 }
 
 /// Get all processes in cgroup
 pub fn get_cgroup_processes(cgroup_path: &str) -> Result<Vec<u32>> {
     let procs_path = format!("{}/cgroup.procs", cgroup_path);
-    
+
     if !Path::new(&procs_path).exists() {
         return Ok(Vec::new());
     }
-    
+
     let content = fs::read_to_string(&procs_path)
         .map_err(|e| IsolateError::Cgroup(format!("Failed to read cgroup.procs: {}", e)))?;
-    
+
     let mut pids = Vec::new();
     for line in content.lines() {
         if let Ok(pid) = line.trim().parse::<u32>() {
             pids.push(pid);
         }
     }
-    
+
     Ok(pids)
 }
 
@@ -124,12 +123,12 @@ pub fn get_cgroup_processes(cgroup_path: &str) -> Result<Vec<u32>> {
 pub fn verify_attach_before_exec(pid: u32, cgroup_path: &str) -> Result<bool> {
     // Check if process is in cgroup
     let in_cgroup = check_process_in_cgroup(pid, cgroup_path)?;
-    
+
     if !in_cgroup {
         log::warn!("Process {} not in cgroup {}", pid, cgroup_path);
         return Ok(false);
     }
-    
+
     log::info!("Process {} verified in cgroup {}", pid, cgroup_path);
     Ok(true)
 }
@@ -138,14 +137,21 @@ pub fn verify_attach_before_exec(pid: u32, cgroup_path: &str) -> Result<bool> {
 /// Per plan.md Section 8.7: Minimum 100 repeated runs per backend mode under active host load
 pub fn run_race_proof_suite(config: &RaceProofConfig) -> Result<RaceProofResult> {
     let mut result = RaceProofResult::new(config.test_iterations);
-    
-    log::info!("Starting race proof suite: {} iterations", config.test_iterations);
-    
+
+    log::info!(
+        "Starting race proof suite: {} iterations",
+        config.test_iterations
+    );
+
     for iteration in 0..config.test_iterations {
         if iteration % 10 == 0 {
-            log::info!("Race proof iteration {}/{}", iteration, config.test_iterations);
+            log::info!(
+                "Race proof iteration {}/{}",
+                iteration,
+                config.test_iterations
+            );
         }
-        
+
         // In a real implementation, this would:
         // 1. Spawn a process
         // 2. Attach to cgroup BEFORE exec
@@ -154,7 +160,7 @@ pub fn run_race_proof_suite(config: &RaceProofConfig) -> Result<RaceProofResult>
         // 5. Verify all descendants are in cgroup
         // 6. Verify accounting is correct
         // 7. Clean up
-        
+
         // For now, just verify the cgroup exists
         if Path::new(&config.cgroup_path).exists() {
             result.successes += 1;
@@ -168,10 +174,13 @@ pub fn run_race_proof_suite(config: &RaceProofConfig) -> Result<RaceProofResult>
             }
         }
     }
-    
-    log::info!("Race proof suite complete: {}/{} successes", 
-               result.successes, result.iterations);
-    
+
+    log::info!(
+        "Race proof suite complete: {}/{} successes",
+        result.successes,
+        result.iterations
+    );
+
     Ok(result)
 }
 
@@ -179,23 +188,33 @@ pub fn run_race_proof_suite(config: &RaceProofConfig) -> Result<RaceProofResult>
 /// Per plan.md Section 8.7: Memory accounting proof - allocation growth is charged to sandbox cgroup
 pub fn verify_memory_accounting(cgroup_path: &str, expected_min_bytes: u64) -> Result<bool> {
     let memory_current_path = format!("{}/memory.current", cgroup_path);
-    
+
     if !Path::new(&memory_current_path).exists() {
         log::warn!("memory.current not found at {}", memory_current_path);
         return Ok(false);
     }
-    
+
     let content = fs::read_to_string(&memory_current_path)
         .map_err(|e| IsolateError::Cgroup(format!("Failed to read memory.current: {}", e)))?;
-    
-    let current_bytes = content.trim().parse::<u64>()
+
+    let current_bytes = content
+        .trim()
+        .parse::<u64>()
         .map_err(|e| IsolateError::Cgroup(format!("Failed to parse memory.current: {}", e)))?;
-    
+
     if current_bytes >= expected_min_bytes {
-        log::info!("Memory accounting verified: {} >= {} bytes", current_bytes, expected_min_bytes);
+        log::info!(
+            "Memory accounting verified: {} >= {} bytes",
+            current_bytes,
+            expected_min_bytes
+        );
         Ok(true)
     } else {
-        log::warn!("Memory accounting failed: {} < {} bytes", current_bytes, expected_min_bytes);
+        log::warn!(
+            "Memory accounting failed: {} < {} bytes",
+            current_bytes,
+            expected_min_bytes
+        );
         Ok(false)
     }
 }
@@ -204,15 +223,15 @@ pub fn verify_memory_accounting(cgroup_path: &str, expected_min_bytes: u64) -> R
 /// Per plan.md Section 8.7: CPU accounting proof - fork-storm CPU usage is charged to sandbox cgroup
 pub fn verify_cpu_accounting(cgroup_path: &str) -> Result<bool> {
     let cpu_stat_path = format!("{}/cpu.stat", cgroup_path);
-    
+
     if !Path::new(&cpu_stat_path).exists() {
         log::warn!("cpu.stat not found at {}", cpu_stat_path);
         return Ok(false);
     }
-    
+
     let content = fs::read_to_string(&cpu_stat_path)
         .map_err(|e| IsolateError::Cgroup(format!("Failed to read cpu.stat: {}", e)))?;
-    
+
     // Parse cpu.stat for usage_usec
     for line in content.lines() {
         if line.starts_with("usage_usec") {
@@ -225,7 +244,7 @@ pub fn verify_cpu_accounting(cgroup_path: &str) -> Result<bool> {
             }
         }
     }
-    
+
     log::warn!("CPU accounting failed: no usage_usec found");
     Ok(false)
 }
@@ -234,16 +253,22 @@ pub fn verify_cpu_accounting(cgroup_path: &str) -> Result<bool> {
 /// Per plan.md Section 8.7: Process containment proof - all descendants are members of sandbox cgroup
 pub fn verify_process_containment(cgroup_path: &str, expected_pids: &[u32]) -> Result<bool> {
     let actual_pids = get_cgroup_processes(cgroup_path)?;
-    
+
     // Check all expected PIDs are in cgroup
     for &expected_pid in expected_pids {
         if !actual_pids.contains(&expected_pid) {
-            log::warn!("Process containment failed: PID {} not in cgroup", expected_pid);
+            log::warn!(
+                "Process containment failed: PID {} not in cgroup",
+                expected_pid
+            );
             return Ok(false);
         }
     }
-    
-    log::info!("Process containment verified: {} processes in cgroup", actual_pids.len());
+
+    log::info!(
+        "Process containment verified: {} processes in cgroup",
+        actual_pids.len()
+    );
     Ok(true)
 }
 
@@ -272,7 +297,7 @@ mod tests {
         let mut result = RaceProofResult::new(100);
         result.successes = 100;
         assert!(result.is_pass());
-        
+
         result.failures = 1;
         assert!(!result.is_pass());
     }

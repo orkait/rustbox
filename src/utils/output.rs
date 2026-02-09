@@ -2,10 +2,9 @@
 /// Implements P1-IO-001: Output Boundaries and Collector Robustness
 /// Implements P1-IO-002: Output Integrity Classification
 /// Per plan.md Section 12: Output, FD, and Environment Hygiene
-
-use crate::config::types::{Result, OutputIntegrity};
-use std::io::{Read, BufReader};
-use std::process::{ChildStdout, ChildStderr};
+use crate::config::types::{OutputIntegrity, Result};
+use std::io::{BufReader, Read};
+use std::process::{ChildStderr, ChildStdout};
 use std::sync::mpsc::{channel, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -29,7 +28,7 @@ impl Default for OutputLimits {
             combined_limit: 10 * 1024 * 1024, // 10 MB combined
             stdout_limit: 8 * 1024 * 1024,    // 8 MB stdout
             stderr_limit: 2 * 1024 * 1024,    // 2 MB stderr
-            collection_timeout_ms: 5000,       // 5 seconds
+            collection_timeout_ms: 5000,      // 5 seconds
         }
     }
 }
@@ -61,7 +60,7 @@ impl OutputCollector {
     pub fn new(limits: OutputLimits) -> Self {
         OutputCollector { limits }
     }
-    
+
     /// Collect output from child process with bounded limits
     /// Returns (stdout, stderr, integrity_state)
     pub fn collect(
@@ -71,11 +70,11 @@ impl OutputCollector {
     ) -> Result<OutputResult> {
         let (stdout_tx, stdout_rx) = channel();
         let (stderr_tx, stderr_rx) = channel();
-        
+
         let stdout_limit = self.limits.stdout_limit;
         let stderr_limit = self.limits.stderr_limit;
         let combined_limit = self.limits.combined_limit;
-        
+
         // Spawn stdout collector thread
         let stdout_handle = if let Some(stdout) = stdout {
             Some(thread::spawn(move || {
@@ -84,7 +83,7 @@ impl OutputCollector {
         } else {
             None
         };
-        
+
         // Spawn stderr collector thread
         let stderr_handle = if let Some(stderr) = stderr {
             Some(thread::spawn(move || {
@@ -93,17 +92,17 @@ impl OutputCollector {
         } else {
             None
         };
-        
+
         // Collect with timeout
         let timeout = Duration::from_millis(self.limits.collection_timeout_ms);
         let start = Instant::now();
-        
+
         let mut stdout_data = Vec::new();
         let mut stderr_data = Vec::new();
         let mut stdout_integrity = OutputIntegrity::Complete;
         let mut stderr_integrity = OutputIntegrity::Complete;
         let mut combined_truncated = false;
-        
+
         // Wait for collectors with timeout
         loop {
             if start.elapsed() > timeout {
@@ -111,7 +110,7 @@ impl OutputCollector {
                 stderr_integrity = OutputIntegrity::TruncatedByJudgeLimit;
                 break;
             }
-            
+
             // Try to receive from stdout
             match stdout_rx.try_recv() {
                 Ok((data, integrity)) => {
@@ -121,7 +120,7 @@ impl OutputCollector {
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {}
             }
-            
+
             // Try to receive from stderr
             match stderr_rx.try_recv() {
                 Ok((data, integrity)) => {
@@ -131,29 +130,35 @@ impl OutputCollector {
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {}
             }
-            
+
             // Check if both collectors finished
-            let stdout_done = stdout_handle.is_none() || 
-                matches!(stdout_integrity, OutputIntegrity::Complete | 
-                         OutputIntegrity::TruncatedByJudgeLimit |
-                         OutputIntegrity::TruncatedByProgramClose |
-                         OutputIntegrity::CrashMidWrite |
-                         OutputIntegrity::WriteError);
-            
-            let stderr_done = stderr_handle.is_none() || 
-                matches!(stderr_integrity, OutputIntegrity::Complete | 
-                         OutputIntegrity::TruncatedByJudgeLimit |
-                         OutputIntegrity::TruncatedByProgramClose |
-                         OutputIntegrity::CrashMidWrite |
-                         OutputIntegrity::WriteError);
-            
+            let stdout_done = stdout_handle.is_none()
+                || matches!(
+                    stdout_integrity,
+                    OutputIntegrity::Complete
+                        | OutputIntegrity::TruncatedByJudgeLimit
+                        | OutputIntegrity::TruncatedByProgramClose
+                        | OutputIntegrity::CrashMidWrite
+                        | OutputIntegrity::WriteError
+                );
+
+            let stderr_done = stderr_handle.is_none()
+                || matches!(
+                    stderr_integrity,
+                    OutputIntegrity::Complete
+                        | OutputIntegrity::TruncatedByJudgeLimit
+                        | OutputIntegrity::TruncatedByProgramClose
+                        | OutputIntegrity::CrashMidWrite
+                        | OutputIntegrity::WriteError
+                );
+
             if stdout_done && stderr_done {
                 break;
             }
-            
+
             thread::sleep(Duration::from_millis(10));
         }
-        
+
         // Join threads
         if let Some(handle) = stdout_handle {
             let _ = handle.join();
@@ -161,12 +166,12 @@ impl OutputCollector {
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
         }
-        
+
         // Check combined limit
         let total_bytes = stdout_data.len() + stderr_data.len();
         if total_bytes > combined_limit {
             combined_truncated = true;
-            
+
             // Truncate to combined limit (prefer stdout)
             if stdout_data.len() > combined_limit {
                 stdout_data.truncate(combined_limit);
@@ -179,26 +184,30 @@ impl OutputCollector {
                 stderr_integrity = OutputIntegrity::TruncatedByJudgeLimit;
             }
         }
-        
+
         // Determine combined integrity
         let combined_integrity = if combined_truncated {
             OutputIntegrity::TruncatedByJudgeLimit
-        } else if matches!(stdout_integrity, OutputIntegrity::CrashMidWrite) ||
-                  matches!(stderr_integrity, OutputIntegrity::CrashMidWrite) {
+        } else if matches!(stdout_integrity, OutputIntegrity::CrashMidWrite)
+            || matches!(stderr_integrity, OutputIntegrity::CrashMidWrite)
+        {
             OutputIntegrity::CrashMidWrite
-        } else if matches!(stdout_integrity, OutputIntegrity::WriteError) ||
-                  matches!(stderr_integrity, OutputIntegrity::WriteError) {
+        } else if matches!(stdout_integrity, OutputIntegrity::WriteError)
+            || matches!(stderr_integrity, OutputIntegrity::WriteError)
+        {
             OutputIntegrity::WriteError
-        } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByJudgeLimit) ||
-                  matches!(stderr_integrity, OutputIntegrity::TruncatedByJudgeLimit) {
+        } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByJudgeLimit)
+            || matches!(stderr_integrity, OutputIntegrity::TruncatedByJudgeLimit)
+        {
             OutputIntegrity::TruncatedByJudgeLimit
-        } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByProgramClose) ||
-                  matches!(stderr_integrity, OutputIntegrity::TruncatedByProgramClose) {
+        } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByProgramClose)
+            || matches!(stderr_integrity, OutputIntegrity::TruncatedByProgramClose)
+        {
             OutputIntegrity::TruncatedByProgramClose
         } else {
             OutputIntegrity::Complete
         };
-        
+
         Ok(OutputResult {
             stdout: stdout_data,
             stderr: stderr_data,
@@ -220,7 +229,7 @@ fn collect_stream<R: Read + Send + 'static>(
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 4096];
     let mut integrity = OutputIntegrity::Complete;
-    
+
     loop {
         match reader.read(&mut chunk) {
             Ok(0) => {
@@ -249,7 +258,7 @@ fn collect_stream<R: Read + Send + 'static>(
             }
         }
     }
-    
+
     let _ = tx.send((buffer, integrity));
 }
 
@@ -280,12 +289,14 @@ mod tests {
             stderr_limit: 512,
             collection_timeout_ms: 100, // Short timeout for test
         };
-        
+
         let collector = OutputCollector::new(limits);
-        
+
         // Test with no output (None streams)
-        let result = collector.collect(None, None).expect("Failed to collect output");
-        
+        let result = collector
+            .collect(None, None)
+            .expect("Failed to collect output");
+
         // Should complete successfully with empty output
         assert_eq!(result.stdout.len(), 0);
         assert_eq!(result.stderr.len(), 0);
@@ -295,9 +306,18 @@ mod tests {
     #[test]
     fn test_output_integrity_display() {
         assert_eq!(format!("{}", OutputIntegrity::Complete), "complete");
-        assert_eq!(format!("{}", OutputIntegrity::TruncatedByJudgeLimit), "truncated_by_judge_limit");
-        assert_eq!(format!("{}", OutputIntegrity::TruncatedByProgramClose), "truncated_by_program_close");
-        assert_eq!(format!("{}", OutputIntegrity::CrashMidWrite), "crash_mid_write");
+        assert_eq!(
+            format!("{}", OutputIntegrity::TruncatedByJudgeLimit),
+            "truncated_by_judge_limit"
+        );
+        assert_eq!(
+            format!("{}", OutputIntegrity::TruncatedByProgramClose),
+            "truncated_by_program_close"
+        );
+        assert_eq!(
+            format!("{}", OutputIntegrity::CrashMidWrite),
+            "crash_mid_write"
+        );
         assert_eq!(format!("{}", OutputIntegrity::WriteError), "write_error");
     }
 }

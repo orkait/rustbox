@@ -11,15 +11,6 @@
       "env": {},
       "disabled": false,
       "autoApprove": []
-    },
-    "kiro": {
-      "command": "uvx",
-      "args": [
-        "kiro-mcp"
-      ],
-      "env": {},
-      "disabled": false,
-      "autoApprove": []
     }
   }
 }

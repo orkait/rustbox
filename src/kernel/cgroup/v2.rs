@@ -2,7 +2,6 @@
 /// Implements P1-CGROUP2-001: v2 OOM Semantics and memory.oom.group
 /// Implements P1-CGROUP2-002: v2 Peak Memory Accounting
 /// Per plan.md Section 8.3: v2 Required Semantics
-
 use crate::config::types::{CgroupEvidence, IsolateError, Result};
 use crate::kernel::cgroup::backend::CgroupBackend;
 use std::fs;
@@ -96,7 +95,10 @@ impl CgroupV2 {
         let procs_path = path.join("cgroup.procs");
         let content = fs::read_to_string(&procs_path)
             .map_err(|e| IsolateError::Cgroup(format!("Failed to read cgroup.procs: {}", e)))?;
-        Ok(content.lines().filter(|line| !line.trim().is_empty()).count() as u32)
+        Ok(content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count() as u32)
     }
 
     /// Read memory.peak (kernel 5.19+) with fallback to memory.current.
@@ -208,9 +210,8 @@ impl CgroupBackend for CgroupV2 {
         let path = self.instance_path(instance_id);
         let limit_path = path.join("pids.max");
 
-        fs::write(&limit_path, limit.to_string()).map_err(|e| {
-            IsolateError::Cgroup(format!("Failed to set process limit: {}", e))
-        })?;
+        fs::write(&limit_path, limit.to_string())
+            .map_err(|e| IsolateError::Cgroup(format!("Failed to set process limit: {}", e)))?;
 
         Ok(())
     }

@@ -8,4 +8,3 @@ pub trait JudgeAdapter: Send + Sync {
     fn compile_command(&self, workspace: &RunWorkspace) -> Vec<String>;
     fn run_command(&self, workspace: &RunWorkspace) -> Vec<String>;
 }
-

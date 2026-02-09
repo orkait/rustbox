@@ -619,52 +619,51 @@ pub fn cgroups_available() -> bool {
     Cgroup::cgroups_available()
 }
 
-
 // Implement CgroupBackend trait for Cgroup (v1)
 impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
     fn backend_name(&self) -> &str {
         "cgroup-v1"
     }
-    
+
     fn create(&self, _instance_id: &str) -> Result<()> {
         // Already created in new()
         Ok(())
     }
-    
+
     fn remove(&self, _instance_id: &str) -> Result<()> {
         self.cleanup()
     }
-    
+
     fn attach_process(&self, _instance_id: &str, pid: u32) -> Result<()> {
         self.add_process(pid)
     }
-    
+
     fn set_memory_limit(&self, _instance_id: &str, limit_bytes: u64) -> Result<()> {
         self.set_memory_limit(limit_bytes)
     }
-    
+
     fn set_process_limit(&self, _instance_id: &str, limit: u32) -> Result<()> {
         self.set_process_limit(limit as u64)
     }
-    
+
     fn set_cpu_limit(&self, _instance_id: &str, _limit_usec: u64) -> Result<()> {
         // CPU time limit is enforced via other mechanisms in v1
         Ok(())
     }
-    
+
     fn get_memory_usage(&self) -> Result<u64> {
         self.get_current_memory_usage()
     }
-    
+
     fn get_memory_peak(&self) -> Result<u64> {
         self.get_peak_memory_usage()
     }
-    
+
     fn get_cpu_usage(&self) -> Result<u64> {
         // Convert seconds to microseconds
         self.get_cpu_usage().map(|secs| (secs * 1_000_000.0) as u64)
     }
-    
+
     fn get_process_count(&self) -> Result<u32> {
         if !self.has_cgroup_support || !self.available_controllers.contains("pids") {
             return Ok(0);
@@ -675,19 +674,19 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
         })?;
 
         let current_file = pids_path.join("pids.current");
-        let content = fs::read_to_string(&current_file).map_err(|e| {
-            IsolateError::Cgroup(format!("Failed to read process count: {}", e))
-        })?;
+        let content = fs::read_to_string(&current_file)
+            .map_err(|e| IsolateError::Cgroup(format!("Failed to read process count: {}", e)))?;
 
-        content.trim().parse().map_err(|e| {
-            IsolateError::Cgroup(format!("Failed to parse process count: {}", e))
-        })
+        content
+            .trim()
+            .parse()
+            .map_err(|e| IsolateError::Cgroup(format!("Failed to parse process count: {}", e)))
     }
-    
+
     fn check_oom(&self) -> Result<bool> {
         Ok(self.check_oom_killed())
     }
-    
+
     fn get_oom_kill_count(&self) -> Result<u64> {
         if !self.has_cgroup_support || !self.available_controllers.contains("memory") {
             return Ok(0);
@@ -698,9 +697,8 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
         })?;
 
         let memory_stat_file = memory_path.join("memory.stat");
-        let memory_stat = fs::read_to_string(&memory_stat_file).map_err(|e| {
-            IsolateError::Cgroup(format!("Failed to read memory.stat: {}", e))
-        })?;
+        let memory_stat = fs::read_to_string(&memory_stat_file)
+            .map_err(|e| IsolateError::Cgroup(format!("Failed to read memory.stat: {}", e)))?;
 
         for line in memory_stat.lines() {
             if line.starts_with("oom_kill ") {
@@ -715,13 +713,13 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
 
         Ok(0)
     }
-    
+
     fn collect_evidence(&self, _instance_id: &str) -> Result<crate::config::types::CgroupEvidence> {
         let (_current, peak, limit) = self.get_memory_stats()?;
         let oom_events = self.get_oom_kill_count()?;
         let cpu_usage = self.get_cpu_usage()?;
         let process_count = self.get_process_count().ok();
-        
+
         // Get process limit
         let process_limit = if let Some(pids_path) = self.cgroup_paths.get("pids") {
             let max_file = pids_path.join("pids.max");
@@ -742,7 +740,7 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
             process_limit,
         })
     }
-    
+
     fn get_cgroup_path(&self, _instance_id: &str) -> PathBuf {
         // Return memory controller path as representative
         self.cgroup_paths
@@ -750,7 +748,7 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
             .cloned()
             .unwrap_or_else(|| PathBuf::from("/sys/fs/cgroup"))
     }
-    
+
     fn is_empty(&self) -> Result<bool> {
         let count = self.get_process_count()?;
         Ok(count == 0)

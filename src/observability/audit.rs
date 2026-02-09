@@ -5,9 +5,7 @@
 /// - Correlation IDs (request_id, run_id, box_id, root PID/session)
 /// - Event types: start, capability decision, limit violations, signal escalation, cleanup outcome, final status
 /// - Integration with provenance and envelope systems
-use crate::config::types::{
-    CapabilityReport, IsolateError, Result, VerdictProvenance,
-};
+use crate::config::types::{CapabilityReport, IsolateError, Result, VerdictProvenance};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -407,10 +405,9 @@ pub fn init_security_logger(audit_path: Option<PathBuf>) -> Result<()> {
             // If caller did not force a path, attempt user-writable fallback paths.
             if audit_path.is_none() {
                 let fallback_paths = vec![
-                    std::env::temp_dir().join(format!(
-                        "rustbox-security-audit-{}.log",
-                        unsafe { libc::geteuid() }
-                    )),
+                    std::env::temp_dir().join(format!("rustbox-security-audit-{}.log", unsafe {
+                        libc::geteuid()
+                    })),
                     std::env::var_os("HOME")
                         .map(PathBuf::from)
                         .unwrap_or_else(std::env::temp_dir)
