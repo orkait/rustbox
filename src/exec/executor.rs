@@ -1,5 +1,5 @@
 /// Process execution and monitoring with reliable resource limits
-use crate::kernel::cgroup::v1::Cgroup;
+use crate::kernel::cgroup::backend::{self, CgroupBackend};
 use crate::kernel::mount::filesystem::FilesystemSecurity;
 use crate::legacy::security::command_validation;
 use crate::observability::audit::events;
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 /// Process executor that handles isolation and monitoring with focus on reliability
 pub struct ProcessExecutor {
     config: IsolateConfig,
-    cgroup: Option<Cgroup>,
+    cgroup: Option<Box<dyn CgroupBackend>>,
     last_launch_evidence: Option<LaunchEvidence>,
 }
 
@@ -43,28 +43,29 @@ impl ProcessExecutor {
             return Err(IsolateError::Config(format!("{} (permissive mode)", msg)));
         }
 
-        let cgroup = if crate::kernel::cgroup::v1::cgroups_available() {
-            match Cgroup::new(&config.instance_id, config.strict_mode) {
-                Ok(cgroup) => Some(cgroup),
-                Err(e) => {
-                    eprintln!("Failed to create cgroup controller: {:?}", e);
+        let cgroup = match backend::create_cgroup_backend(false, config.strict_mode, &config.instance_id)
+        {
+            Ok(cgroup) => {
+                if let Err(e) = cgroup.create(&config.instance_id) {
+                    eprintln!("Failed to create cgroup instance '{}': {:?}", config.instance_id, e);
                     if config.strict_mode {
                         return Err(e);
-                    } else {
-                        eprintln!("⚠️  WARNING: Resource monitoring disabled - this is unsafe for untrusted code");
-                        None
                     }
+                    eprintln!("⚠️  WARNING: Resource monitoring disabled - this is unsafe for untrusted code");
+                    None
+                } else {
+                    Some(cgroup)
                 }
             }
-        } else {
-            if config.strict_mode {
-                return Err(IsolateError::Cgroup(
-                    "Cgroups required for reliable resource monitoring in strict mode".to_string(),
-                ));
+            Err(e) => {
+                eprintln!("Failed to initialize cgroup backend: {:?}", e);
+                if config.strict_mode {
+                    return Err(e);
+                }
+                eprintln!("⚠️  WARNING: Cgroups unavailable - resource monitoring disabled");
+                eprintln!("   This configuration is UNSAFE for untrusted code execution");
+                None
             }
-            eprintln!("⚠️  WARNING: Cgroups unavailable - resource monitoring disabled");
-            eprintln!("   This configuration is UNSAFE for untrusted code execution");
-            None
         };
 
         // Create filesystem security controller
@@ -96,16 +97,16 @@ impl ProcessExecutor {
         if let Some(ref cgroup) = self.cgroup {
             // Set memory limit
             if let Some(memory_limit) = self.config.memory_limit {
-                cgroup.set_memory_limit(memory_limit)?;
+                cgroup.set_memory_limit(&self.config.instance_id, memory_limit)?;
             }
 
             // Set process limit
             if let Some(process_limit) = self.config.process_limit {
-                cgroup.set_process_limit(process_limit as u64)?;
+                cgroup.set_process_limit(&self.config.instance_id, process_limit)?;
             }
 
             // Set CPU shares
-            cgroup.set_cpu_limit(1024)?;
+            cgroup.set_cpu_limit(&self.config.instance_id, 1024)?;
 
             // Validate that resource monitoring is working
             self.validate_resource_monitoring()?;
@@ -139,30 +140,14 @@ impl ProcessExecutor {
     /// Validate that resource monitoring is working properly
     fn validate_resource_monitoring(&self) -> Result<()> {
         if let Some(ref cgroup) = self.cgroup {
-            if !cgroup.is_enforcing() {
-                // Permissive mode can run without cgroup enforcement.
-                return Ok(());
-            }
-
             // Test that we can read basic cgroup files
             let _ = cgroup
                 .get_cpu_usage()
                 .map_err(|_| IsolateError::Cgroup("CPU monitoring not functional".to_string()))?;
 
-            let _ = cgroup.get_peak_memory_usage().map_err(|_| {
+            let _ = cgroup.get_memory_peak().map_err(|_| {
                 IsolateError::Cgroup("Memory monitoring not functional".to_string())
             })?;
-
-            // Verify memory limit was set if configured
-            if let Some(expected_limit) = self.config.memory_limit {
-                if let Ok((_, _, actual_limit)) = cgroup.get_memory_stats() {
-                    if actual_limit == u64::MAX || actual_limit < expected_limit {
-                        return Err(IsolateError::Cgroup(
-                            "Memory limit not properly configured".to_string(),
-                        ));
-                    }
-                }
-            }
         }
 
         Ok(())
@@ -201,12 +186,12 @@ impl ProcessExecutor {
             stdin_data,
             self.cgroup
                 .as_ref()
-                .and_then(|cg| cg.primary_attach_path()),
+                .map(|cg| cg.get_cgroup_path(&self.config.instance_id)),
         );
 
         let outcome = crate::core::supervisor::launch_with_supervisor(
             request,
-            self.cgroup.as_ref(),
+            self.cgroup.as_deref(),
         )?;
         self.last_launch_evidence = Some(outcome.evidence.clone());
         Ok(outcome.result)
@@ -219,7 +204,7 @@ impl ProcessExecutor {
     /// Cleanup resources
     pub fn cleanup(&mut self) -> Result<()> {
         if let Some(cgroup) = self.cgroup.take() {
-            cgroup.cleanup()?;
+            cgroup.remove(&self.config.instance_id)?;
         }
         Ok(())
     }

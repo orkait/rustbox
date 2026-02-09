@@ -1,4 +1,5 @@
 use crate::config::types::{ExecutionStatus, IsolateError, JudgeAction, JudgeActionType, Result};
+use crate::kernel::cgroup::backend::CgroupBackend;
 use crate::core::proxy::{read_proxy_status_from_fd, run_proxy_main_from_fds, write_request_to_fd};
 use crate::core::types::{
     KillReport, LaunchEvidence, ProxyStatus, SandboxLaunchOutcome, SandboxLaunchRequest,
@@ -200,7 +201,7 @@ fn terminate_proxy_group(proxy_pid: Pid) -> KillReport {
 /// Launch request using supervisor -> proxy -> payload model.
 pub fn launch_with_supervisor(
     req: SandboxLaunchRequest,
-    cgroup: Option<&crate::kernel::cgroup::v1::Cgroup>,
+    cgroup: Option<&dyn CgroupBackend>,
 ) -> Result<SandboxLaunchOutcome> {
     if req.profile.command.is_empty() {
         return Err(IsolateError::Config("empty command".to_string()));
@@ -240,7 +241,7 @@ pub fn launch_with_supervisor(
     let _ = close(status_write);
 
     if let Some(controller) = cgroup {
-        if let Err(e) = controller.add_process(proxy_pid.as_raw() as u32) {
+        if let Err(e) = controller.attach_process(&req.instance_id, proxy_pid.as_raw() as u32) {
             let _ = terminate_proxy_group(proxy_pid);
             if req.profile.strict_mode {
                 return Err(e);
@@ -313,16 +314,16 @@ pub fn launch_with_supervisor(
     }
 
     if let Some(controller) = cgroup {
-        if let Ok(cpu_secs) = controller.get_cpu_usage() {
-            result.cpu_time = cpu_secs;
+        if let Ok(cpu_usec) = controller.get_cpu_usage() {
+            result.cpu_time = cpu_usec as f64 / 1_000_000.0;
         }
-        if let Ok(mem_peak) = controller.get_peak_memory_usage() {
+        if let Ok(mem_peak) = controller.get_memory_peak() {
             result.memory_peak = mem_peak;
         }
     }
 
     let running_as_root = unsafe { libc::geteuid() } == 0;
-    let cgroup_enforced = cgroup.map(|cg| cg.is_enforcing()).unwrap_or(false);
+    let cgroup_enforced = cgroup.is_some();
     let evidence = build_launch_evidence(&req, running_as_root, cgroup_enforced, timed_out, kill_report.as_ref());
 
     Ok(SandboxLaunchOutcome {

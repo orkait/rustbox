@@ -88,6 +88,7 @@ pub fn detect_cgroup_backend() -> Option<CgroupBackendType> {
 pub fn create_cgroup_backend(
     force_v1: bool,
     strict_mode: bool,
+    instance_id: &str,
 ) -> Result<Box<dyn CgroupBackend>> {
     let detected = detect_cgroup_backend();
     
@@ -101,7 +102,10 @@ pub fn create_cgroup_backend(
         match detected {
             Some(CgroupBackendType::V1) => {
                 log::info!("Using cgroup v1 backend (explicit override)");
-                Ok(Box::new(crate::kernel::cgroup::v1::Cgroup::new("", false)?))
+                Ok(Box::new(crate::kernel::cgroup::v1::Cgroup::new(
+                    instance_id,
+                    strict_mode,
+                )?))
             }
             Some(CgroupBackendType::V2) => {
                 if strict_mode {
@@ -110,7 +114,10 @@ pub fn create_cgroup_backend(
                     ))
                 } else {
                     log::warn!("Cgroup v1 forced but only v2 available, using v2 anyway");
-                    Ok(Box::new(crate::kernel::cgroup::v2::CgroupV2::new("", false)?))
+                    Ok(Box::new(crate::kernel::cgroup::v2::CgroupV2::new(
+                        instance_id,
+                        false,
+                    )?))
                 }
             }
             None => {
@@ -131,11 +138,17 @@ pub fn create_cgroup_backend(
         match detected {
             Some(CgroupBackendType::V2) => {
                 log::info!("Using cgroup v2 backend (default, v2 detected)");
-                Ok(Box::new(crate::kernel::cgroup::v2::CgroupV2::new("", strict_mode)?))
+                Ok(Box::new(crate::kernel::cgroup::v2::CgroupV2::new(
+                    instance_id,
+                    strict_mode,
+                )?))
             }
             Some(CgroupBackendType::V1) => {
                 log::info!("Using cgroup v1 backend (fallback, v2 not available)");
-                Ok(Box::new(crate::kernel::cgroup::v1::Cgroup::new("", false)?))
+                Ok(Box::new(crate::kernel::cgroup::v1::Cgroup::new(
+                    instance_id,
+                    strict_mode,
+                )?))
             }
             None => {
                 if strict_mode {
@@ -175,7 +188,7 @@ mod tests {
     #[test]
     fn test_backend_selection() {
         // Test with strict mode disabled
-        let result = create_cgroup_backend(false, false);
+        let result = create_cgroup_backend(false, false, "backend-selection-test");
         println!("Backend creation result: {:?}", result.is_ok());
     }
     
@@ -188,7 +201,7 @@ mod tests {
     #[test]
     fn test_backend_selection_force_v1() {
         // Test forcing v1 in permissive mode
-        let result = create_cgroup_backend(true, false);
+        let result = create_cgroup_backend(true, false, "force-v1-test");
         // Should either succeed with v1 or fail gracefully
         println!("Force v1 result: {:?}", result.is_ok());
     }
@@ -196,7 +209,7 @@ mod tests {
     #[test]
     fn test_backend_selection_default() {
         // Test default selection (v2 preferred, v1 fallback)
-        let result = create_cgroup_backend(false, false);
+        let result = create_cgroup_backend(false, false, "default-selection-test");
         // Should either succeed or fail gracefully in permissive mode
         println!("Default selection result: {:?}", result.is_ok());
     }
