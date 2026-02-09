@@ -278,6 +278,8 @@ pub struct ExecutionResult {
     pub stdout: String,
     /// Standard error
     pub stderr: String,
+    /// Output integrity state from runtime collector
+    pub output_integrity: OutputIntegrity,
     /// CPU time used (in seconds)
     pub cpu_time: f64,
     /// Wall clock time used (in seconds)
@@ -421,6 +423,12 @@ impl std::fmt::Display for OutputIntegrity {
             OutputIntegrity::CrashMidWrite => write!(f, "crash_mid_write"),
             OutputIntegrity::WriteError => write!(f, "write_error"),
         }
+    }
+}
+
+impl Default for OutputIntegrity {
+    fn default() -> Self {
+        OutputIntegrity::Complete
     }
 }
 
@@ -579,6 +587,7 @@ impl From<std::process::Output> for ExecutionResult {
             status,
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            output_integrity: OutputIntegrity::Complete,
             cpu_time: 0.0,  // Not available from std::process::Output
             wall_time: 0.0, // Not available from std::process::Output
             memory_peak: 0, // Not available from std::process::Output

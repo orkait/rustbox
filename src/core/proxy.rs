@@ -1,4 +1,4 @@
-use crate::config::types::{IsolateError, Result};
+use crate::config::types::{IsolateError, OutputIntegrity, Result};
 use crate::core::types::{ProxyStatus, SandboxLaunchRequest};
 use crate::exec::preexec::{FreshChild, Sandbox};
 use nix::errno::Errno;
@@ -47,12 +47,39 @@ fn write_proxy_status(fd: RawFd, status: &ProxyStatus) -> Result<()> {
     write_json_to_fd(fd, status)
 }
 
-fn read_fd_async(fd: RawFd) -> thread::JoinHandle<Vec<u8>> {
+fn read_fd_async(fd: RawFd, limit: usize) -> thread::JoinHandle<(Vec<u8>, OutputIntegrity)> {
     thread::spawn(move || {
         let mut file = unsafe { File::from_raw_fd(fd) };
         let mut out = Vec::new();
-        let _ = file.read_to_end(&mut out);
-        out
+        let mut buf = [0u8; 4096];
+        let mut integrity = OutputIntegrity::Complete;
+
+        loop {
+            match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if out.len() + n > limit {
+                        let remaining = limit.saturating_sub(out.len());
+                        if remaining > 0 {
+                            out.extend_from_slice(&buf[..remaining]);
+                        }
+                        integrity = OutputIntegrity::TruncatedByJudgeLimit;
+                        break;
+                    }
+                    out.extend_from_slice(&buf[..n]);
+                }
+                Err(e) => {
+                    integrity = if e.kind() == std::io::ErrorKind::BrokenPipe {
+                        OutputIntegrity::TruncatedByProgramClose
+                    } else {
+                        OutputIntegrity::WriteError
+                    };
+                    break;
+                }
+            }
+        }
+
+        (out, integrity)
     })
 }
 
@@ -170,11 +197,39 @@ fn run_proxy(req: SandboxLaunchRequest) -> Result<ProxyStatus> {
         let _ = close(stdin_write);
     }
 
-    let stdout_handle = read_fd_async(stdout_read);
-    let stderr_handle = read_fd_async(stderr_read);
+    let stream_limit = req.profile.file_size_limit.unwrap_or(64 * 1024 * 1024) as usize;
+    let stdout_handle = read_fd_async(stdout_read, stream_limit);
+    let stderr_handle = read_fd_async(stderr_read, stream_limit);
     let (exit_code, term_signal, reaped_descendants) = wait_for_payload_and_reap(payload_pid)?;
-    let stdout = String::from_utf8_lossy(&stdout_handle.join().unwrap_or_default()).to_string();
-    let stderr = String::from_utf8_lossy(&stderr_handle.join().unwrap_or_default()).to_string();
+    let (stdout_bytes, stdout_integrity) = stdout_handle
+        .join()
+        .unwrap_or_else(|_| (Vec::new(), OutputIntegrity::WriteError));
+    let (stderr_bytes, stderr_integrity) = stderr_handle
+        .join()
+        .unwrap_or_else(|_| (Vec::new(), OutputIntegrity::WriteError));
+
+    let output_integrity = if matches!(stdout_integrity, OutputIntegrity::WriteError)
+        || matches!(stderr_integrity, OutputIntegrity::WriteError)
+    {
+        OutputIntegrity::WriteError
+    } else if matches!(stdout_integrity, OutputIntegrity::CrashMidWrite)
+        || matches!(stderr_integrity, OutputIntegrity::CrashMidWrite)
+    {
+        OutputIntegrity::CrashMidWrite
+    } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByJudgeLimit)
+        || matches!(stderr_integrity, OutputIntegrity::TruncatedByJudgeLimit)
+    {
+        OutputIntegrity::TruncatedByJudgeLimit
+    } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByProgramClose)
+        || matches!(stderr_integrity, OutputIntegrity::TruncatedByProgramClose)
+    {
+        OutputIntegrity::TruncatedByProgramClose
+    } else {
+        OutputIntegrity::Complete
+    };
+
+    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
 
     Ok(ProxyStatus {
         payload_pid: Some(payload_pid.as_raw()),
@@ -184,6 +239,7 @@ fn run_proxy(req: SandboxLaunchRequest) -> Result<ProxyStatus> {
         wall_time_ms: start.elapsed().as_millis() as u64,
         stdout,
         stderr,
+        output_integrity,
         internal_error: None,
         reaped_descendants,
     })

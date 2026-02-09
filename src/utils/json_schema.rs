@@ -173,10 +173,7 @@ impl JudgeResultV1 {
     ) -> Self {
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Do not infer truncation from arbitrary output length thresholds.
-        // Until collector-backed integrity is plumbed through runtime results,
-        // keep this field non-heuristic.
-        let output_integrity = OutputIntegrity::Complete;
+        let output_integrity = result.output_integrity.clone();
 
         // Build immutable evidence bundle from runtime artifacts.
         let wait_outcome = WaitOutcome {

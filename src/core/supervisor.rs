@@ -349,6 +349,7 @@ pub fn launch_with_supervisor(
         wall_time_ms: started.elapsed().as_millis() as u64,
         stdout: String::new(),
         stderr: String::new(),
+        output_integrity: crate::config::types::OutputIntegrity::WriteError,
         internal_error: Some(e.to_string()),
         payload_pid: None,
         reaped_descendants: 0,

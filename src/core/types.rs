@@ -1,6 +1,6 @@
 use crate::config::types::{
-    CapabilityReport, CgroupEvidence, DirectoryBinding, ExecutionResult, JudgeAction, PidfdMode,
-    ProcessLifecycleEvidence, SecurityMode, SyscallFilterSource,
+    CapabilityReport, CgroupEvidence, DirectoryBinding, ExecutionResult, JudgeAction,
+    OutputIntegrity, PidfdMode, ProcessLifecycleEvidence, SecurityMode, SyscallFilterSource,
 };
 use crate::config::types::{ExecutionStatus, IsolateConfig};
 use serde::{Deserialize, Serialize};
@@ -173,6 +173,7 @@ pub struct ProxyStatus {
     pub wall_time_ms: u64,
     pub stdout: String,
     pub stderr: String,
+    pub output_integrity: OutputIntegrity,
     pub internal_error: Option<String>,
     pub reaped_descendants: u32,
 }
@@ -196,6 +197,7 @@ impl ProxyStatus {
             status: status.clone(),
             stdout: self.stdout.clone(),
             stderr: self.stderr.clone(),
+            output_integrity: self.output_integrity.clone(),
             cpu_time: 0.0,
             wall_time: self.wall_time_ms as f64 / 1000.0,
             memory_peak: 0,
