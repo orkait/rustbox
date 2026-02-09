@@ -208,3 +208,41 @@ Phase-1 status:
 - Runtime cgroup backend wiring: complete
 - CLI/config v1 override: complete
 - v2 read placeholders removed: complete
+
+## 10) Phase-2 Enforcement Progress (2026-02-09)
+
+Phase 2 implementation commits:
+
+1. `39bf51c` - `phase2: enforce pre-exec step7 hygiene in runtime path`
+- Added active runtime Step-7 enforcement before credential drop in typestate chain:
+  - `RLIMIT_AS` from memory limit
+  - `RLIMIT_FSIZE` from file-size limit
+  - `RLIMIT_CORE` (default 0)
+  - `RLIMIT_MEMLOCK=0`
+  - `RLIMIT_NPROC` from process limit
+  - `RLIMIT_STACK` from stack limit
+  - `RLIMIT_NOFILE` from fd limit
+- Wired `fd_closure::close_inherited_fds(...)` into runtime path.
+- Wired env sanitization + deterministic umask into runtime path and applied sanitized environment before exec.
+- Plumbed additional runtime profile fields required by Step-7 (`inherit_fds`, file/stack/core limits).
+
+2. `5ac299a` - `phase2: enforce procfs hidepid=2 in active mount path`
+- Hardened `/proc` mount path to apply `hidepid=2` in active filesystem path.
+- Strict mode now fails if hardened proc mount with `hidepid=2` cannot be applied.
+- Permissive mode logs explicit fallback behavior.
+
+3. `a9e9b37` - `phase2: replace remove_dir_all with symlink-safe cleanup walker`
+- Added symlink-safe tree removal using `openat/fstatat/unlinkat` in `src/safety/safe_cleanup.rs`.
+- Replaced runtime-sensitive `remove_dir_all` calls in:
+  - `src/safety/cleanup.rs`
+  - `src/safety/workspace.rs`
+  - `src/cli.rs`
+
+WSL validation after Phase-2 commits:
+- `cargo build -q` -> PASS
+- `cargo test --all -q` -> PASS (141 tests)
+
+Runtime smoke check status (timeout/fork-bomb containment):
+- Attempted in WSL via CLI runtime path.
+- Blocked in this environment due missing root privileges and non-interactive sudo (`clone(proxy): EPERM`).
+- Strict containment smoke requires root-capable run context; current runner is non-root and cannot provide passwordless sudo.
