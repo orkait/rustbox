@@ -173,12 +173,10 @@ impl JudgeResultV1 {
     ) -> Self {
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Determine output integrity
-        let output_integrity = if result.stdout.len() + result.stderr.len() > 1024 * 1024 {
-            OutputIntegrity::TruncatedByJudgeLimit
-        } else {
-            OutputIntegrity::Complete
-        };
+        // Do not infer truncation from arbitrary output length thresholds.
+        // Until collector-backed integrity is plumbed through runtime results,
+        // keep this field non-heuristic.
+        let output_integrity = OutputIntegrity::Complete;
 
         // Build immutable evidence bundle from runtime artifacts.
         let wait_outcome = WaitOutcome {
