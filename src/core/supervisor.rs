@@ -71,6 +71,7 @@ fn build_configured_controls(req: &SandboxLaunchRequest) -> Vec<String> {
 fn build_launch_evidence(
     req: &SandboxLaunchRequest,
     running_as_root: bool,
+    cgroup_backend_selected: Option<String>,
     cgroup_enforced: bool,
     timed_out: bool,
     kill_report: Option<&KillReport>,
@@ -164,9 +165,7 @@ fn build_launch_evidence(
         missing_controls: missing,
         mode_decision_reason,
         unsafe_execution_reason,
-        cgroup_backend_selected: crate::kernel::cgroup::backend::detect_cgroup_backend()
-            .map(crate::kernel::cgroup::backend::backend_type_name)
-            .map(str::to_string),
+        cgroup_backend_selected,
         pidfd_mode: detect_pidfd_mode(),
         proc_policy_applied: if req.profile.enable_mount_namespace {
             "hardened".to_string()
@@ -246,6 +245,8 @@ pub fn launch_with_supervisor(
     }
 
     let mut evidence_collection_errors = Vec::new();
+    let cgroup_backend_selected = cgroup.map(|controller| controller.backend_name().to_string());
+    let mut cgroup_enforced = false;
 
     let (launch_read, launch_write) = pipe().map_err(|e| to_process_error("pipe(launch)", e))?;
     let (status_read, status_write) = pipe().map_err(|e| to_process_error("pipe(status)", e))?;
@@ -277,9 +278,12 @@ pub fn launch_with_supervisor(
     if let Some(controller) = cgroup {
         if let Err(e) = controller.attach_process(&req.instance_id, proxy_pid.as_raw() as u32) {
             let _ = terminate_proxy_group(proxy_pid);
+            evidence_collection_errors.push(format!("cgroup_attach: {}", e));
             if req.profile.strict_mode {
                 return Err(e);
             }
+        } else {
+            cgroup_enforced = true;
         }
     } else if req.profile.strict_mode
         && (req.profile.memory_limit.is_some() || req.profile.process_limit.is_some())
@@ -350,24 +354,32 @@ pub fn launch_with_supervisor(
     }
 
     let mut cgroup_evidence = None;
-    if let Some(controller) = cgroup {
-        if let Ok(cpu_usec) = controller.get_cpu_usage() {
-            result.cpu_time = cpu_usec as f64 / 1_000_000.0;
+    if cgroup_enforced {
+        if let Some(controller) = cgroup {
+            if let Ok(cpu_usec) = controller.get_cpu_usage() {
+                result.cpu_time = cpu_usec as f64 / 1_000_000.0;
+            }
+            if let Ok(mem_peak) = controller.get_memory_peak() {
+                result.memory_peak = mem_peak;
+            }
+            match controller.collect_evidence(&req.instance_id) {
+                Ok(evidence) => cgroup_evidence = Some(evidence),
+                Err(err) => evidence_collection_errors.push(format!("cgroup_evidence: {}", err)),
+            }
         }
-        if let Ok(mem_peak) = controller.get_memory_peak() {
-            result.memory_peak = mem_peak;
-        }
-        match controller.collect_evidence(&req.instance_id) {
-            Ok(evidence) => cgroup_evidence = Some(evidence),
-            Err(err) => evidence_collection_errors.push(format!("cgroup_evidence: {}", err)),
-        }
+    } else if (req.profile.memory_limit.is_some() || req.profile.process_limit.is_some())
+        && cgroup_backend_selected.is_some()
+    {
+        evidence_collection_errors.push(
+            "cgroup_limits_unenforced: process was not attached to selected backend".to_string(),
+        );
     }
 
     let running_as_root = unsafe { libc::geteuid() } == 0;
-    let cgroup_enforced = cgroup.is_some();
     let evidence = build_launch_evidence(
         &req,
         running_as_root,
+        cgroup_backend_selected,
         cgroup_enforced,
         timed_out,
         kill_report.as_ref(),
