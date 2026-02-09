@@ -634,6 +634,11 @@ impl Isolate {
         &self.instance.config
     }
 
+    /// Get mutable configuration for runtime overrides.
+    pub fn config_mut(&mut self) -> &mut IsolateConfig {
+        &mut self.instance.config
+    }
+
     /// Consume launch evidence from the most recent execution.
     pub fn take_last_launch_evidence(&mut self) -> Option<LaunchEvidence> {
         self.last_launch_evidence.take()

@@ -43,8 +43,11 @@ impl ProcessExecutor {
             return Err(IsolateError::Config(format!("{} (permissive mode)", msg)));
         }
 
-        let cgroup = match backend::create_cgroup_backend(false, config.strict_mode, &config.instance_id)
-        {
+        let cgroup = match backend::create_cgroup_backend(
+            config.force_cgroup_v1,
+            config.strict_mode,
+            &config.instance_id,
+        ) {
             Ok(cgroup) => {
                 if let Err(e) = cgroup.create(&config.instance_id) {
                     eprintln!("Failed to create cgroup instance '{}': {:?}", config.instance_id, e);

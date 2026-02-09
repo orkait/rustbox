@@ -82,6 +82,9 @@ enum Commands {
         /// Maximum number of processes
         #[arg(long)]
         processes: Option<u32>,
+        /// Force cgroup v1 backend (overrides default v2-preferred selection)
+        #[arg(long = "cgroup-v1")]
+        cgroup_v1: bool,
         /// Directory bindings (format: source=target:options)
         #[arg(long = "dir", value_name = "BINDING")]
         directory_bindings: Vec<String>,
@@ -117,6 +120,9 @@ enum Commands {
         /// Maximum number of processes
         #[arg(long)]
         processes: Option<u32>,
+        /// Force cgroup v1 backend (overrides default v2-preferred selection)
+        #[arg(long = "cgroup-v1")]
+        cgroup_v1: bool,
         /// Strict mode: require root privileges and fail if security features unavailable
         #[arg(long)]
         strict: bool,
@@ -294,6 +300,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             cpu,
             wall_time,
             processes,
+            cgroup_v1,
             directory_bindings,
             command,
         } => {
@@ -314,10 +321,14 @@ pub fn run(mode: CliMode) -> Result<()> {
             if let Some(processes) = processes {
                 eprintln!("Process limit: {}", processes);
             }
+            if cgroup_v1 {
+                eprintln!("Cgroup backend override: forcing cgroup v1");
+            }
 
             let instance_id = format!("rustbox/{}", box_id);
             let mut isolate = crate::legacy::isolate::Isolate::load(&instance_id)?
                 .ok_or_else(|| anyhow::anyhow!("Sandbox {} not found. Run init first.", box_id))?;
+            isolate.config_mut().force_cgroup_v1 = cgroup_v1;
 
             // Acquire lock for exclusive execution to prevent concurrent access
             if let Err(e) = isolate.acquire_execution_lock() {
@@ -703,6 +714,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             cpu,
             wall_time,
             processes,
+            cgroup_v1,
             strict,
             permissive,
             enable_syscall_filtering,
@@ -776,6 +788,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                 format!("rustbox/{}", box_id),
             )?;
             config.strict_mode = strict; // Use user-specified strict mode
+            config.force_cgroup_v1 = cgroup_v1;
 
             // Apply CLI overrides if specified (these override config.json values)
             if let Some(mem) = mem {
@@ -798,6 +811,9 @@ pub fn run(mode: CliMode) -> Result<()> {
             if enable_syscall_filtering {
                 config.enable_syscall_filtering = true;
                 eprintln!("🔧 CLI Override - Syscall filtering: enabled");
+            }
+            if cgroup_v1 {
+                eprintln!("🔧 CLI Override - Cgroup backend: forced v1");
             }
 
             let mut isolate = crate::legacy::isolate::Isolate::new(config)?;

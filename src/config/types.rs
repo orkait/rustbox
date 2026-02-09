@@ -176,6 +176,9 @@ pub struct IsolateConfig {
     pub environment: Vec<(String, String)>,
     /// Strict mode: fail hard if cgroups unavailable or permission denied
     pub strict_mode: bool,
+    /// Force cgroup v1 backend selection (`--cgroup-v1` override)
+    #[serde(default)]
+    pub force_cgroup_v1: bool,
     /// Inherit file descriptors from parent process
     #[serde(default)]
     pub inherit_fds: bool,
@@ -244,6 +247,7 @@ impl Default for IsolateConfig {
             enable_network: false, // Network disabled by default (judge-v1)
             environment: Vec::new(),
             strict_mode: true, // Strict mode by default (judge-v1)
+            force_cgroup_v1: false,
             inherit_fds: false,
             stdout_file: None,
             stderr_file: None,
