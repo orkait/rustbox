@@ -3,6 +3,7 @@
 /// Per plan.md: No cross-instance artifact collision
 
 use crate::config::types::{IsolateError, Result};
+use crate::safety::safe_cleanup;
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -142,7 +143,7 @@ impl Workspace {
         
         // Remove run directory
         if self.run_dir.exists() {
-            if let Err(e) = fs::remove_dir_all(&self.run_dir) {
+            if let Err(e) = safe_cleanup::remove_tree_secure(&self.run_dir) {
                 log::warn!("Failed to remove run directory {}: {}", self.run_dir.display(), e);
                 // Don't fail - this is cleanup
             }
@@ -237,7 +238,7 @@ impl WorkspaceManager {
             
             if age > max_age {
                 log::info!("Cleaning up old workspace: {}", path.display());
-                if let Err(e) = fs::remove_dir_all(&path) {
+                if let Err(e) = safe_cleanup::remove_tree_secure(&path) {
                     log::warn!("Failed to remove old workspace {}: {}", path.display(), e);
                 } else {
                     cleaned += 1;
@@ -264,7 +265,7 @@ mod tests {
         
         // Cleanup
         workspace.cleanup().unwrap();
-        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = safe_cleanup::remove_tree_secure(&temp_dir);
     }
     
     #[test]
@@ -291,7 +292,7 @@ mod tests {
         assert!(!source.exists());
         assert!(!temp.exists());
         
-        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = safe_cleanup::remove_tree_secure(&temp_dir);
     }
     
     #[test]
@@ -312,6 +313,6 @@ mod tests {
         // May or may not clean depending on timing, just verify it doesn't error
         assert!(cleaned >= 0);
         
-        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = safe_cleanup::remove_tree_secure(&temp_dir);
     }
 }

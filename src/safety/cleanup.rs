@@ -5,6 +5,7 @@
 /// Per plan.md Section 5.1: Failure-Path Discipline Contract
 
 use crate::config::types::{IsolateError, Result};
+use crate::safety::safe_cleanup;
 use log::{debug, info, warn, error};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -221,10 +222,11 @@ impl CleanupManager {
         if let Some(path) = &entry.path {
             if path.exists() {
                 debug!("Removing temp directory: {}", path.display());
-                fs::remove_dir_all(path).map_err(|e| {
-                    IsolateError::Io(std::io::Error::new(
-                        e.kind(),
-                        format!("Failed to remove temp directory {}: {}", path.display(), e),
+                safe_cleanup::remove_tree_secure(path).map_err(|e| {
+                    IsolateError::Filesystem(format!(
+                        "Failed to remove temp directory {}: {}",
+                        path.display(),
+                        e
                     ))
                 })?;
             } else {
@@ -239,10 +241,11 @@ impl CleanupManager {
         if let Some(path) = &entry.path {
             if path.exists() {
                 debug!("Removing workspace: {}", path.display());
-                fs::remove_dir_all(path).map_err(|e| {
-                    IsolateError::Io(std::io::Error::new(
-                        e.kind(),
-                        format!("Failed to remove workspace {}: {}", path.display(), e),
+                safe_cleanup::remove_tree_secure(path).map_err(|e| {
+                    IsolateError::Filesystem(format!(
+                        "Failed to remove workspace {}: {}",
+                        path.display(),
+                        e
                     ))
                 })?;
             } else {

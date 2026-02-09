@@ -403,7 +403,9 @@ pub fn run(mode: CliMode) -> Result<()> {
                             // Also clean up the standardized files we created
                             let sandbox_work_dir = sandbox_box_work_dir(box_id);
                             if sandbox_work_dir.exists() {
-                                if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
+                                if let Err(e) =
+                                    crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
+                                {
                                     eprintln!(
                                         "Warning: Failed to remove sandbox files {}: {}",
                                         sandbox_work_dir.display(),
@@ -550,7 +552,9 @@ pub fn run(mode: CliMode) -> Result<()> {
                             // Also clean up the standardized files we created
                             let sandbox_work_dir = sandbox_box_work_dir(box_id);
                             if sandbox_work_dir.exists() {
-                                if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
+                                if let Err(e) =
+                                    crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
+                                {
                                     eprintln!(
                                         "Warning: Failed to remove sandbox files {}: {}",
                                         sandbox_work_dir.display(),
@@ -618,7 +622,9 @@ pub fn run(mode: CliMode) -> Result<()> {
                             // Also clean up the standardized files we created
                             let sandbox_work_dir = sandbox_box_work_dir(box_id);
                             if sandbox_work_dir.exists() {
-                                if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
+                                if let Err(e) =
+                                    crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
+                                {
                                     eprintln!(
                                         "Warning: Failed to remove sandbox files {}: {}",
                                         sandbox_work_dir.display(),
@@ -675,7 +681,9 @@ pub fn run(mode: CliMode) -> Result<()> {
                         // Also clean up the standardized files we created (if any)
                         let sandbox_work_dir = sandbox_box_work_dir(box_id);
                         if sandbox_work_dir.exists() {
-                            if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
+                            if let Err(e) =
+                                crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
+                            {
                                 eprintln!(
                                     "Warning: Failed to remove sandbox files {}: {}",
                                     sandbox_work_dir.display(),
