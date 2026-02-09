@@ -170,3 +170,41 @@ Current status after cleanup:
 - Compilation blockers are resolved.
 - Dead scaffolding surface is reduced.
 - Next phase should focus on enforcement gaps (rlimits/fd/env step-7, cgroup backend runtime integration, cleanup safety, deterministic verdict pipeline).
+
+## 9) Phase-1 Stop-Ship Applied (2026-02-09)
+
+Phase 1 implementation was completed in incremental commits:
+
+1. `c22d519` - `phase1: remove remaining heartbeat lock path`
+- Removed leftover heartbeat-path plumbing from `src/safety/lock_manager.rs` so locking is strictly flock-based.
+
+2. `68ae4f4` - `phase1: wire runtime to cgroup backend abstraction`
+- `src/exec/executor.rs` no longer hardcodes `v1::Cgroup`.
+- Runtime now constructs backend via `create_cgroup_backend(...)` and uses `dyn CgroupBackend` in production path.
+- `src/core/supervisor.rs` now consumes backend trait object instead of v1 concrete type.
+- `src/kernel/cgroup/backend.rs` now takes `instance_id` during backend construction.
+
+3. `0f005a4` - `phase1: add cgroup v1 CLI override and config plumbing`
+- Added `--cgroup-v1` to `run` and `execute-code` CLI commands.
+- Added `force_cgroup_v1` to `IsolateConfig` and plumbed it into executor backend selection.
+- Added mutable config accessor on isolate for runtime override wiring.
+
+4. `2bf6e71` - `phase1: implement real cgroup v2 runtime reads`
+- Replaced v2 placeholder reads with real parsing of:
+  - `memory.current`
+  - `memory.peak` (fallback to `memory.current`)
+  - `cpu.stat` (`usage_usec`)
+  - `pids.current` (fallback `cgroup.procs` counting)
+  - `memory.events` (`oom`, `oom_kill`)
+  - `memory.max` / `pids.max` evidence extraction
+- Fixed v2 backend construction semantics to bind explicit `instance_id` + default base path.
+
+WSL gate results after Phase 1 commits:
+- `cargo build -q` -> PASS
+- `cargo test --all -q` -> PASS
+
+Phase-1 status:
+- Compile unblock: complete
+- Runtime cgroup backend wiring: complete
+- CLI/config v1 override: complete
+- v2 read placeholders removed: complete
