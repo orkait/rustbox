@@ -1,0 +1,8 @@
+error[E0599]: no method named `exec_payload` found for struct `Sandbox<FreshChild>` in the current scope
+  --> tests/typestate_compile_fail/early_exec_from_fresh.rs:10:13
+   |
+10 |     sandbox.exec_payload(&["echo".to_string()]);
+   |             ^^^^^^^^^^^^ method not found in `Sandbox<FreshChild>`
+   |
+   = note: the method was found for
+           - `Sandbox<ExecReady>`

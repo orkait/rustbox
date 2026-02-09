@@ -71,7 +71,7 @@
 				"wall_time_seconds": 10
 			},
 			"processes": {
-				"max_processes": 16,
+				"max_processes": 256,
 				"max_threads": 32,
 				"max_forks": 0
 			},

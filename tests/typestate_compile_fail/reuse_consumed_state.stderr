@@ -1,0 +1,25 @@
+warning: unused variable: `sandbox2`
+  --> tests/typestate_compile_fail/reuse_consumed_state.rs:10:9
+   |
+10 |     let sandbox2 = sandbox.setup_namespaces(false, false, false, false)
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_sandbox2`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+error[E0382]: use of moved value: `sandbox`
+  --> tests/typestate_compile_fail/reuse_consumed_state.rs:14:5
+   |
+7  |     let sandbox = Sandbox::<FreshChild>::new("test".to_string(), false);
+   |         ------- move occurs because `sandbox` has type `Sandbox<FreshChild>`, which does not implement the `Copy` trait
+...
+10 |     let sandbox2 = sandbox.setup_namespaces(false, false, false, false)
+   |                            -------------------------------------------- `sandbox` moved due to this method call
+...
+14 |     sandbox.setup_namespaces(false, false, false, false);
+   |     ^^^^^^^ value used here after move
+   |
+note: `Sandbox::<FreshChild>::setup_namespaces` takes ownership of the receiver `self`, which moves `sandbox`
+  --> src/exec/preexec.rs
+   |
+   |         self,
+   |         ^^^^

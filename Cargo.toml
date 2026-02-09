@@ -23,7 +23,26 @@ nix = { version = "0.27", features = ["process", "signal", "fs", "user", "sched"
 libc = "0.2"
 fastrand = "2.0"
 crossbeam-channel = "0.5"
+sha2 = "0.10"
+caps = "0.5"
+once_cell = "1.19"
+
+[dev-dependencies]
+trybuild = "1.0"
 
 [[bin]]
 name = "rustbox"
 path = "src/main.rs"
+
+[[bin]]
+name = "isolate"
+path = "src/bin/isolate.rs"
+
+[[bin]]
+name = "judge"
+path = "src/bin/judge.rs"
+
+[[bench]]
+name = "cold_start_bench"
+path = "benches/cold_start_bench.rs"
+harness = false

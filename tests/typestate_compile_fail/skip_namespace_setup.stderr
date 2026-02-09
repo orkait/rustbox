@@ -1,0 +1,8 @@
+error[E0599]: no method named `harden_mount_propagation` found for struct `Sandbox<FreshChild>` in the current scope
+  --> tests/typestate_compile_fail/skip_namespace_setup.rs:11:13
+   |
+11 |     sandbox.harden_mount_propagation();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `Sandbox<FreshChild>`
+   |
+   = note: the method was found for
+           - `Sandbox<NamespacesReady>`

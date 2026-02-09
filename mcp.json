@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "rustbox": {
+      "command": "wsl",
+      "args": [
+        "-e",
+        "bash",
+        "-lc",
+        "/mnt/c/codingFiles/orkait/rustbox/scripts/mcp/start-rustbox-mcp.sh"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": []
+    },
+    "kiro": {
+      "command": "uvx",
+      "args": [
+        "kiro-mcp"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}

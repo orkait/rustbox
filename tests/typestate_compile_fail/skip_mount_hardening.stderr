@@ -1,0 +1,8 @@
+error[E0599]: no method named `attach_to_cgroup` found for struct `Sandbox<NamespacesReady>` in the current scope
+  --> tests/typestate_compile_fail/skip_mount_hardening.rs:14:13
+   |
+14 |     sandbox.attach_to_cgroup(None);
+   |             ^^^^^^^^^^^^^^^^ method not found in `Sandbox<NamespacesReady>`
+   |
+   = note: the method was found for
+           - `Sandbox<MountsPrivate>`

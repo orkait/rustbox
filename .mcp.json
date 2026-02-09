@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "rustbox-mcp": {
+      "command": "node",
+      "args": ["/mnt/c/codingFiles/orkait/rustbox/tools/rustbox-mcp/dist/server.js"],
+      "env": {
+        "RUSTBOX_ROOT": "/mnt/c/codingFiles/orkait/rustbox"
+      }
+    },
+    "cgc": {
+      "command": "/mnt/c/codingFiles/orkait/rustbox/tools/codegraphcontext/.venv/bin/cgc",
+      "args": ["mcp", "start"],
+      "env": {
+        "RUSTBOX_ROOT": "/mnt/c/codingFiles/orkait/rustbox"
+      },
+      "cwd": "/mnt/c/codingFiles/orkait/rustbox"
+    }
+  }
+}

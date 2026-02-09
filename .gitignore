@@ -106,3 +106,10 @@ flake.lock
 AgentReadme.md
 .env
 forge.yaml
+
+.tmp/*
+.quirks/*
+.github/*
+
+
+CLAUDE.md
