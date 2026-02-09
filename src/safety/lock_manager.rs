@@ -237,7 +237,6 @@ impl RustboxLockManager {
 
         let start_time = Instant::now();
         let lock_path = self.lock_dir.join(format!("box-{}.lock", box_id));
-        let heartbeat_path = self.lock_dir.join(format!("box-{}.heartbeat", box_id));
 
         info!(
             "Attempting to acquire lock for box {} (active locks: {})",
@@ -252,7 +251,7 @@ impl RustboxLockManager {
         // Step 2: Retry loop with exponential backoff
         let mut retry_delay = Duration::from_millis(10);
         loop {
-            match self.try_acquire_immediate(box_id, &lock_path, &heartbeat_path) {
+            match self.try_acquire_immediate(box_id, &lock_path) {
                 Ok(lock_guard) => {
                     let elapsed = start_time.elapsed();
                     info!("Acquired lock for box {} in {:?}", box_id, elapsed);
@@ -288,12 +287,7 @@ impl RustboxLockManager {
     }
 
     /// Atomic lock acquisition attempt (simplified - no heartbeat)
-    fn try_acquire_immediate(
-        &self,
-        box_id: u32,
-        lock_path: &Path,
-        _heartbeat_path: &Path,
-    ) -> LockResult<BoxLockGuard> {
+    fn try_acquire_immediate(&self, box_id: u32, lock_path: &Path) -> LockResult<BoxLockGuard> {
         // Step 1: Open lock file without truncating — never destroy data before holding flock
         let lock_file = OpenOptions::new()
             .create(true)
@@ -473,9 +467,6 @@ impl RustboxLockManager {
                                 if let Ok(f) = OpenOptions::new().write(true).open(&path) {
                                     let _ = f.set_len(0);
                                 }
-                                let heartbeat_path =
-                                    lock_dir.join(format!("box-{}.heartbeat", box_id));
-                                let _ = std::fs::remove_file(heartbeat_path);
                                 cleaned_count += 1;
                             }
                         }
