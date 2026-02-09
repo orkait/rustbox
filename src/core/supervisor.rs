@@ -97,6 +97,16 @@ fn build_launch_evidence(
                 // Filtering remains explicit opt-in and unsupported in strict mode.
                 missing.push(control.clone());
             }
+            "pid_namespace" | "mount_namespace" | "network_namespace" | "user_namespace"
+            | "no_new_privileges" => {
+                if req.profile.strict_mode {
+                    applied.push(control.clone());
+                } else {
+                    // In permissive mode these controls may log-and-continue on failure.
+                    // Do not over-claim enforcement when runtime verification is absent.
+                    missing.push(control.clone());
+                }
+            }
             _ => applied.push(control.clone()),
         }
     }
