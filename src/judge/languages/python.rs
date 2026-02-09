@@ -12,6 +12,7 @@ fn base_profile() -> ExecutionProfile {
         environment: Vec::new(),
         inherit_fds: false,
         workdir: PathBuf::from("."),
+        chroot_dir: None,
         uid: Some(65534),
         gid: Some(65534),
         strict_mode: true,
@@ -28,6 +29,7 @@ fn base_profile() -> ExecutionProfile {
         cpu_time_limit_ms: Some(10_000),
         wall_time_limit_ms: Some(15_000),
         fd_limit: Some(64),
+        directory_bindings: Vec::new(),
     }
 }
 

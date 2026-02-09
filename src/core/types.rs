@@ -1,5 +1,5 @@
 use crate::config::types::{
-    CapabilityReport, CgroupEvidence, ExecutionResult, JudgeAction, PidfdMode,
+    CapabilityReport, CgroupEvidence, DirectoryBinding, ExecutionResult, JudgeAction, PidfdMode,
     ProcessLifecycleEvidence, SecurityMode, SyscallFilterSource,
 };
 use crate::config::types::{ExecutionStatus, IsolateConfig};
@@ -14,6 +14,7 @@ pub struct ExecutionProfile {
     pub environment: Vec<(String, String)>,
     pub inherit_fds: bool,
     pub workdir: PathBuf,
+    pub chroot_dir: Option<PathBuf>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     pub strict_mode: bool,
@@ -30,6 +31,7 @@ pub struct ExecutionProfile {
     pub cpu_time_limit_ms: Option<u64>,
     pub wall_time_limit_ms: Option<u64>,
     pub fd_limit: Option<u64>,
+    pub directory_bindings: Vec<DirectoryBinding>,
 }
 
 impl ExecutionProfile {
@@ -44,6 +46,7 @@ impl ExecutionProfile {
             environment: config.environment.clone(),
             inherit_fds: config.inherit_fds,
             workdir: config.workdir.clone(),
+            chroot_dir: config.chroot_dir.clone(),
             uid: config.uid,
             gid: config.gid,
             strict_mode: config.strict_mode,
@@ -60,6 +63,7 @@ impl ExecutionProfile {
             cpu_time_limit_ms: config.cpu_time_limit.map(|d| d.as_millis() as u64),
             wall_time_limit_ms: config.wall_time_limit.map(|d| d.as_millis() as u64),
             fd_limit: config.fd_limit,
+            directory_bindings: config.directory_bindings.clone(),
         }
     }
 }

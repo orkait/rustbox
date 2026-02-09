@@ -438,6 +438,39 @@ impl Sandbox<NamespacesReady> {
 }
 
 impl Sandbox<MountsPrivate> {
+    /// Step 5: mount/bind setup and root transition (pivot_root/chroot fallback).
+    /// This runs in the active runtime path before cgroup attach and exec.
+    pub fn setup_mounts_and_root(self, profile: &ExecutionProfile) -> Result<Sandbox<MountsPrivate>> {
+        let fs_security = crate::kernel::mount::filesystem::FilesystemSecurity::new(
+            profile.chroot_dir.clone(),
+            profile.workdir.clone(),
+            self.strict_mode,
+        );
+
+        if let Err(e) = fs_security.setup_isolation() {
+            if self.strict_mode {
+                return Err(e);
+            }
+            log::warn!("Filesystem isolation setup failed (permissive mode): {}", e);
+        }
+
+        if let Err(e) = fs_security.setup_directory_bindings(&profile.directory_bindings) {
+            if self.strict_mode {
+                return Err(e);
+            }
+            log::warn!("Directory binding setup failed (permissive mode): {}", e);
+        }
+
+        if let Err(e) = fs_security.apply_chroot() {
+            if self.strict_mode {
+                return Err(e);
+            }
+            log::warn!("Root transition failed (permissive mode): {}", e);
+        }
+
+        Ok(self)
+    }
+
     /// Transition to CgroupAttached state
     /// This attaches the process to its cgroup before any user code runs
     pub fn attach_to_cgroup(self, cgroup_path: Option<&str>) -> Result<Sandbox<CgroupAttached>> {

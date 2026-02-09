@@ -3,7 +3,6 @@ use crate::config::validator::validate_config;
 use crate::core::types::{LaunchEvidence, SandboxLaunchRequest};
 /// Process execution and monitoring with reliable resource limits
 use crate::kernel::cgroup::backend::{self, CgroupBackend};
-use crate::kernel::mount::filesystem::FilesystemSecurity;
 use crate::legacy::security::command_validation;
 use crate::observability::audit::events;
 use crate::safety::cleanup::BaselineChecker;
@@ -81,23 +80,6 @@ impl ProcessExecutor {
                 None
             }
         };
-
-        // Create filesystem security controller
-        let filesystem_security = FilesystemSecurity::new(
-            config.chroot_dir.clone(),
-            config.workdir.clone(),
-            config.strict_mode,
-        );
-
-        // Set up filesystem isolation if chroot is specified
-        if config.chroot_dir.is_some() {
-            filesystem_security.setup_isolation()?;
-        }
-
-        // Set up directory bindings
-        if !config.directory_bindings.is_empty() {
-            filesystem_security.setup_directory_bindings(&config.directory_bindings)?;
-        }
 
         Ok(Self {
             config,

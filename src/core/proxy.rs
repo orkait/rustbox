@@ -65,6 +65,7 @@ fn exec_payload_with_typestate(req: &SandboxLaunchRequest) -> Result<()> {
         req.profile.enable_user_namespace,
     )?;
     let sandbox = sandbox.harden_mount_propagation()?;
+    let sandbox = sandbox.setup_mounts_and_root(&req.profile)?;
     let cgroup_attach = req.cgroup_attach_path.as_ref().and_then(|p| p.to_str());
     let sandbox = sandbox.attach_to_cgroup(cgroup_attach)?;
     let sandbox = sandbox.apply_runtime_hygiene(&req.profile)?;

@@ -12,6 +12,7 @@ fn profile(memory_mb: u64, process_limit: u32, cpu_ms: u64, wall_ms: u64) -> Exe
         environment: vec![("JAVA_TOOL_OPTIONS".to_string(), "-Dfile.encoding=UTF-8".to_string())],
         inherit_fds: false,
         workdir: PathBuf::from("."),
+        chroot_dir: None,
         uid: Some(65534),
         gid: Some(65534),
         strict_mode: true,
@@ -28,6 +29,7 @@ fn profile(memory_mb: u64, process_limit: u32, cpu_ms: u64, wall_ms: u64) -> Exe
         cpu_time_limit_ms: Some(cpu_ms),
         wall_time_limit_ms: Some(wall_ms),
         fd_limit: Some(256),
+        directory_bindings: Vec::new(),
     }
 }
 
