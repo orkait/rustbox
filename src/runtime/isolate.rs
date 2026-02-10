@@ -19,6 +19,52 @@ struct IsolateInstance {
     last_used: chrono::DateTime<chrono::Utc>,
 }
 
+/// Per-run execution overrides applied on top of persisted instance config.
+#[derive(Clone, Debug, Default)]
+pub struct ExecutionOverrides {
+    pub stdin_data: Option<String>,
+    pub max_cpu: Option<u64>,
+    pub max_memory: Option<u64>,
+    pub max_time: Option<u64>,
+    pub max_wall_time: Option<u64>,
+    pub fd_limit: Option<u64>,
+    pub process_limit: Option<u32>,
+}
+
+pub(crate) fn apply_overrides_to_config(
+    base: &IsolateConfig,
+    overrides: &ExecutionOverrides,
+) -> IsolateConfig {
+    let mut config = base.clone();
+
+    if let Some(cpu_seconds) = overrides.max_cpu {
+        config.cpu_time_limit = Some(Duration::from_secs(cpu_seconds));
+        config.time_limit = Some(Duration::from_secs(cpu_seconds));
+    }
+
+    if let Some(memory_mb) = overrides.max_memory {
+        config.memory_limit = Some(memory_mb * 1024 * 1024); // Convert MB to bytes
+    }
+
+    if let Some(time_seconds) = overrides.max_time {
+        config.cpu_time_limit = Some(Duration::from_secs(time_seconds));
+    }
+
+    if let Some(wall_time_seconds) = overrides.max_wall_time {
+        config.wall_time_limit = Some(Duration::from_secs(wall_time_seconds));
+    }
+
+    if let Some(fd_limit_val) = overrides.fd_limit {
+        config.fd_limit = Some(fd_limit_val);
+    }
+
+    if let Some(proc_limit) = overrides.process_limit {
+        config.process_limit = Some(proc_limit);
+    }
+
+    config
+}
+
 /// Atomically write content to a file: write to temp → fsync → rename → fsync parent dir.
 /// Prevents data loss on crash (ext4/xfs can lose renames without parent dir fsync).
 fn atomic_write(target: &Path, content: &[u8]) -> std::io::Result<()> {
@@ -221,6 +267,19 @@ impl Isolate {
         command: &[String],
         stdin_data: Option<&str>,
     ) -> Result<ExecutionResult> {
+        let overrides = ExecutionOverrides {
+            stdin_data: stdin_data.map(str::to_string),
+            ..ExecutionOverrides::default()
+        };
+        self.execute_with_overrides(command, &overrides)
+    }
+
+    /// Execute a command in this isolate with runtime resource overrides
+    pub fn execute_with_overrides(
+        &mut self,
+        command: &[String],
+        overrides: &ExecutionOverrides,
+    ) -> Result<ExecutionResult> {
         // Acquire lock for execution to prevent conflicts
         if self.box_lock_guard.is_none() {
             self.acquire_lock(false)?;
@@ -232,72 +291,14 @@ impl Isolate {
         self.instance.last_used = chrono::Utc::now();
         self.save()?;
 
-        // Create executor with current config
-        let mut executor = ProcessExecutor::new(self.instance.config.clone())?;
-
-        // Execute the command
-        let result = executor.execute(command, stdin_data)?;
-        self.last_launch_evidence = executor.take_launch_evidence();
-        Ok(result)
-    }
-
-    /// Execute a command in this isolate with runtime resource overrides
-    pub fn execute_with_overrides(
-        &mut self,
-        command: &[String],
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        max_wall_time: Option<u64>,
-        fd_limit: Option<u64>,
-        process_limit: Option<u32>,
-    ) -> Result<ExecutionResult> {
-        // Acquire lock for execution to prevent cross-run conflicts.
-        if self.box_lock_guard.is_none() {
-            self.acquire_lock(false)?;
-        }
-
-        self.ensure_instance_workdir()?;
-
-        // Update last used timestamp
-        self.instance.last_used = chrono::Utc::now();
-        self.save()?;
-
         // Clone config and apply overrides
-        let mut config = self.instance.config.clone();
-
-        if let Some(cpu_seconds) = max_cpu {
-            config.cpu_time_limit = Some(Duration::from_secs(cpu_seconds));
-            config.time_limit = Some(Duration::from_secs(cpu_seconds));
-        }
-
-        if let Some(memory_mb) = max_memory {
-            config.memory_limit = Some(memory_mb * 1024 * 1024); // Convert MB to bytes
-        }
-
-        if let Some(time_seconds) = max_time {
-            config.cpu_time_limit = Some(Duration::from_secs(time_seconds));
-        }
-
-        if let Some(wall_time_seconds) = max_wall_time {
-            config.wall_time_limit = Some(Duration::from_secs(wall_time_seconds));
-        }
-
-        if let Some(fd_limit_val) = fd_limit {
-            config.fd_limit = Some(fd_limit_val);
-        }
-
-        // P0-CLI-001: Apply process limit override
-        if let Some(proc_limit) = process_limit {
-            config.process_limit = Some(proc_limit);
-        }
+        let config = apply_overrides_to_config(&self.instance.config, overrides);
 
         // Create executor with modified config
         let mut executor = ProcessExecutor::new(config)?;
 
         // Execute the command
-        let result = executor.execute(command, stdin_data)?;
+        let result = executor.execute(command, overrides.stdin_data.as_deref())?;
         self.last_launch_evidence = executor.take_launch_evidence();
         Ok(result)
     }
@@ -307,45 +308,12 @@ impl Isolate {
         &mut self,
         language: &str,
         code: &str,
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        max_wall_time: Option<u64>,
-        fd_limit: Option<u64>,
-        process_limit: Option<u32>,
+        overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
         match language.to_lowercase().as_str() {
-            "python" | "py" => self.execute_python_string(
-                code,
-                stdin_data,
-                max_cpu,
-                max_memory,
-                max_time,
-                max_wall_time,
-                fd_limit,
-                process_limit,
-            ),
-            "cpp" | "c++" | "cxx" => self.compile_and_execute_cpp(
-                code,
-                stdin_data,
-                max_cpu,
-                max_memory,
-                max_time,
-                max_wall_time,
-                fd_limit,
-                process_limit,
-            ),
-            "java" => self.compile_and_execute_java(
-                code,
-                stdin_data,
-                max_cpu,
-                max_memory,
-                max_time,
-                max_wall_time,
-                fd_limit,
-                process_limit,
-            ),
+            "python" | "py" => self.execute_python_string(code, overrides),
+            "cpp" | "c++" | "cxx" => self.compile_and_execute_cpp(code, overrides),
+            "java" => self.compile_and_execute_java(code, overrides),
             _ => Err(IsolateError::Config(format!(
                 "Unsupported language: {}",
                 language
@@ -357,13 +325,7 @@ impl Isolate {
     fn execute_python_string(
         &mut self,
         code: &str,
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        max_wall_time: Option<u64>,
-        fd_limit: Option<u64>,
-        process_limit: Option<u32>,
+        overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
         let command = vec![
             "/usr/bin/python3".to_string(),
@@ -371,66 +333,102 @@ impl Isolate {
             "-c".to_string(),
             code.to_string(),
         ];
-        self.execute_with_overrides(
-            &command,
-            stdin_data,
-            max_cpu,
-            max_memory,
-            max_time,
-            max_wall_time,
-            fd_limit,
-            process_limit,
-        )
+        self.execute_with_overrides(&command, overrides)
+    }
+
+    fn build_compile_failure_result(
+        compile_result: ExecutionResult,
+        stderr_prefix: &str,
+        error_message: &str,
+    ) -> ExecutionResult {
+        let status = match compile_result.status {
+            crate::config::types::ExecutionStatus::TimeLimit => {
+                crate::config::types::ExecutionStatus::TimeLimit
+            }
+            crate::config::types::ExecutionStatus::MemoryLimit => {
+                crate::config::types::ExecutionStatus::MemoryLimit
+            }
+            _ => crate::config::types::ExecutionStatus::RuntimeError,
+        };
+        let detail = if !compile_result.stderr.trim().is_empty() {
+            compile_result.stderr.clone()
+        } else if !compile_result.stdout.trim().is_empty() {
+            compile_result.stdout.clone()
+        } else {
+            compile_result
+                .error_message
+                .clone()
+                .unwrap_or_else(|| "no compiler stderr".to_string())
+        };
+
+        ExecutionResult {
+            status,
+            exit_code: compile_result.exit_code,
+            stdout: "".to_string(),
+            stderr: format!("{}:\n{}", stderr_prefix, detail),
+            output_integrity: compile_result.output_integrity,
+            wall_time: compile_result.wall_time,
+            cpu_time: compile_result.cpu_time,
+            memory_peak: compile_result.memory_peak,
+            success: false,
+            signal: None,
+            error_message: Some(error_message.to_string()),
+        }
+    }
+
+    fn compile_and_execute_with_spec<F>(
+        &mut self,
+        code: &str,
+        source_file: PathBuf,
+        compile_command: Vec<String>,
+        execute_command: Vec<String>,
+        overrides: &ExecutionOverrides,
+        stderr_prefix: &str,
+        error_message: &str,
+        restore_before_execute: bool,
+        restore_on_return: bool,
+        mut configure_compile: F,
+    ) -> Result<ExecutionResult>
+    where
+        F: FnMut(&mut IsolateConfig, &IsolateConfig, &ExecutionOverrides),
+    {
+        self.ensure_instance_workdir()?;
+        fs::write(&source_file, code)?;
+
+        let original_config = self.instance.config.clone();
+        configure_compile(&mut self.instance.config, &original_config, overrides);
+
+        let compile_result = self.execute(&compile_command, None)?;
+        if !compile_result.success {
+            if restore_on_return {
+                self.instance.config = original_config;
+            }
+            return Ok(Self::build_compile_failure_result(
+                compile_result,
+                stderr_prefix,
+                error_message,
+            ));
+        }
+
+        if restore_before_execute {
+            self.instance.config = original_config.clone();
+        }
+
+        let result = self.execute_with_overrides(&execute_command, overrides);
+        if restore_on_return {
+            self.instance.config = original_config;
+        }
+
+        result
     }
 
     /// Compile and execute C++ code from string
     fn compile_and_execute_cpp(
         &mut self,
         code: &str,
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        max_wall_time: Option<u64>,
-        fd_limit: Option<u64>,
-        process_limit: Option<u32>,
+        overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        self.ensure_instance_workdir()?;
-
-        // Write source code to file in sandbox
         let source_file = self.instance.config.workdir.join("solution.cpp");
-        fs::write(&source_file, code)?;
-
-        // Temporarily increase process limit for C++ compilation
-        let original_config = self.instance.config.clone();
-
-        // C++ toolchain can fan out many helper processes/threads (cc1plus/as/ld).
-        // Keep compile phase process headroom well above runtime defaults.
-        self.instance.config.process_limit = Some(120);
-
-        if let Some(memory) = max_memory {
-            self.instance.config.memory_limit = Some(memory * 1024 * 1024);
-        } else {
-            self.instance.config.memory_limit = Some(256 * 1024 * 1024); // 256MB for C++
-        }
-
-        // Compilation is a host-toolchain phase and needs a wider window than
-        // execution defaults to avoid false compile failures on slower hosts.
-        let original_cpu_secs = original_config
-            .cpu_time_limit
-            .map(|d| d.as_secs())
-            .unwrap_or(8);
-        let original_wall_secs = original_config
-            .wall_time_limit
-            .map(|d| d.as_secs())
-            .unwrap_or(10);
-        let compile_cpu_secs = max_cpu.or(max_time).unwrap_or(original_cpu_secs).max(15);
-        let compile_wall_secs = max_wall_time.unwrap_or(original_wall_secs).max(30);
-        self.instance.config.cpu_time_limit = Some(Duration::from_secs(compile_cpu_secs));
-        self.instance.config.time_limit = Some(Duration::from_secs(compile_cpu_secs));
-        self.instance.config.wall_time_limit = Some(Duration::from_secs(compile_wall_secs));
-
-        // Compile the code
         let compile_command = vec![
             "/usr/bin/g++".to_string(),
             "-o".to_string(),
@@ -439,81 +437,60 @@ impl Isolate {
             "-std=c++17".to_string(),
             "-O2".to_string(),
         ];
-
-        let compile_result = self.execute(&compile_command, None)?;
-
-        if !compile_result.success {
-            // Restore original config
-            self.instance.config = original_config;
-            let status = match compile_result.status {
-                crate::config::types::ExecutionStatus::TimeLimit => {
-                    crate::config::types::ExecutionStatus::TimeLimit
-                }
-                crate::config::types::ExecutionStatus::MemoryLimit => {
-                    crate::config::types::ExecutionStatus::MemoryLimit
-                }
-                _ => crate::config::types::ExecutionStatus::RuntimeError,
-            };
-            let detail = if !compile_result.stderr.trim().is_empty() {
-                compile_result.stderr.clone()
-            } else if !compile_result.stdout.trim().is_empty() {
-                compile_result.stdout.clone()
-            } else {
-                compile_result
-                    .error_message
-                    .clone()
-                    .unwrap_or_else(|| "no compiler stderr".to_string())
-            };
-            return Ok(ExecutionResult {
-                status,
-                exit_code: compile_result.exit_code,
-                stdout: "".to_string(),
-                stderr: format!("Compilation Error:\n{}", detail),
-                output_integrity: compile_result.output_integrity.clone(),
-                wall_time: compile_result.wall_time,
-                cpu_time: compile_result.cpu_time,
-                memory_peak: compile_result.memory_peak,
-                success: false,
-                signal: None,
-                error_message: Some("Compilation failed".to_string()),
-            });
-        }
-
-        // Restore runtime isolation contract before executing submission payload.
-        self.instance.config = original_config.clone();
-
-        // Execute the compiled binary
         let execute_command = vec!["./solution".to_string()];
-        let result = self.execute_with_overrides(
-            &execute_command,
-            stdin_data,
-            max_cpu,
-            max_memory,
-            max_time,
-            max_wall_time,
-            fd_limit,
-            process_limit,
-        );
 
-        // Restore original config
-        self.instance.config = original_config;
-        result
+        self.compile_and_execute_with_spec(
+            code,
+            source_file,
+            compile_command,
+            execute_command,
+            overrides,
+            "Compilation Error",
+            "Compilation failed",
+            true,
+            true,
+            |config, original_config, runtime_overrides| {
+                // C++ toolchain can fan out many helper processes/threads (cc1plus/as/ld).
+                // Keep compile phase process headroom well above runtime defaults.
+                config.process_limit = Some(120);
+
+                if let Some(memory) = runtime_overrides.max_memory {
+                    config.memory_limit = Some(memory * 1024 * 1024);
+                } else {
+                    config.memory_limit = Some(256 * 1024 * 1024); // 256MB for C++
+                }
+
+                // Compilation needs a wider window than execution defaults.
+                let original_cpu_secs = original_config
+                    .cpu_time_limit
+                    .map(|d| d.as_secs())
+                    .unwrap_or(8);
+                let original_wall_secs = original_config
+                    .wall_time_limit
+                    .map(|d| d.as_secs())
+                    .unwrap_or(10);
+                let compile_cpu_secs = runtime_overrides
+                    .max_cpu
+                    .or(runtime_overrides.max_time)
+                    .unwrap_or(original_cpu_secs)
+                    .max(15);
+                let compile_wall_secs = runtime_overrides
+                    .max_wall_time
+                    .unwrap_or(original_wall_secs)
+                    .max(30);
+                config.cpu_time_limit = Some(Duration::from_secs(compile_cpu_secs));
+                config.time_limit = Some(Duration::from_secs(compile_cpu_secs));
+                config.wall_time_limit = Some(Duration::from_secs(compile_wall_secs));
+            },
+        )
     }
 
     /// Compile and execute Java code from string
     fn compile_and_execute_java(
         &mut self,
         code: &str,
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        max_wall_time: Option<u64>,
-        fd_limit: Option<u64>,
-        process_limit: Option<u32>,
+        overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        self.ensure_instance_workdir()?;
-
         // Extract class name from code (simple heuristic)
         let class_name = self
             .extract_java_class_name(code)
@@ -523,73 +500,12 @@ impl Isolate {
             .config
             .workdir
             .join(format!("{}.java", class_name));
-        fs::write(&source_file, code)?;
-
-        // Temporarily modify config for Java compilation and execution.
-        let original_config = self.instance.config.clone();
-
-        // Keep strict isolation for Java under the proxy/init model.
-
-        // Increase resource limits for JVM
-        if let Some(memory) = max_memory {
-            self.instance.config.memory_limit = Some(memory * 1024 * 1024);
-        } else {
-            self.instance.config.memory_limit = Some(512 * 1024 * 1024); // 512MB default for Java
-        }
-
-        // JVM/Javac can fan out many threads; too-low pids.max causes hard launch failures.
-        // Keep a higher floor while still allowing user overrides to increase further.
-        let requested_process_limit = process_limit
-            .or(original_config.process_limit)
-            .unwrap_or(16);
-        self.instance.config.process_limit = Some(requested_process_limit.max(256));
-
-        // Compile the code with relaxed settings
         let compile_command = vec![
             "javac".to_string(),
             "-cp".to_string(),
             ".".to_string(),
             format!("{}.java", class_name),
         ];
-
-        let compile_result = self.execute(&compile_command, None)?;
-
-        if !compile_result.success {
-            let status = match compile_result.status {
-                crate::config::types::ExecutionStatus::TimeLimit => {
-                    crate::config::types::ExecutionStatus::TimeLimit
-                }
-                crate::config::types::ExecutionStatus::MemoryLimit => {
-                    crate::config::types::ExecutionStatus::MemoryLimit
-                }
-                _ => crate::config::types::ExecutionStatus::RuntimeError,
-            };
-            let detail = if !compile_result.stderr.trim().is_empty() {
-                compile_result.stderr.clone()
-            } else if !compile_result.stdout.trim().is_empty() {
-                compile_result.stdout.clone()
-            } else {
-                compile_result
-                    .error_message
-                    .clone()
-                    .unwrap_or_else(|| "no compiler stderr".to_string())
-            };
-            return Ok(ExecutionResult {
-                status,
-                exit_code: compile_result.exit_code,
-                stdout: "".to_string(),
-                stderr: format!("Java Compilation Error:\n{}", detail),
-                output_integrity: compile_result.output_integrity.clone(),
-                wall_time: compile_result.wall_time,
-                cpu_time: compile_result.cpu_time,
-                memory_peak: compile_result.memory_peak,
-                success: false,
-                signal: None,
-                error_message: Some("Java compilation failed".to_string()),
-            });
-        }
-
-        // Execute the compiled class with relaxed settings
         let execute_command = vec![
             "java".to_string(),
             "-cp".to_string(),
@@ -597,18 +513,33 @@ impl Isolate {
             class_name,
         ];
 
-        let result = self.execute_with_overrides(
-            &execute_command,
-            stdin_data,
-            max_cpu,
-            max_memory,
-            max_time,
-            max_wall_time,
-            fd_limit,
-            process_limit,
-        );
+        self.compile_and_execute_with_spec(
+            code,
+            source_file,
+            compile_command,
+            execute_command,
+            overrides,
+            "Java Compilation Error",
+            "Java compilation failed",
+            false,
+            false,
+            |config, original_config, runtime_overrides| {
+                // Increase resource limits for JVM
+                if let Some(memory) = runtime_overrides.max_memory {
+                    config.memory_limit = Some(memory * 1024 * 1024);
+                } else {
+                    config.memory_limit = Some(512 * 1024 * 1024); // 512MB default for Java
+                }
 
-        result
+                // JVM/Javac can fan out many threads; too-low pids.max causes hard launch failures.
+                // Keep a higher floor while still allowing user overrides to increase further.
+                let requested_process_limit = runtime_overrides
+                    .process_limit
+                    .or(original_config.process_limit)
+                    .unwrap_or(16);
+                config.process_limit = Some(requested_process_limit.max(256));
+            },
+        )
     }
 
     /// Extract Java class name from source code (simple regex-based extraction)

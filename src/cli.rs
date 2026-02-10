@@ -206,6 +206,61 @@ fn sandbox_box_work_dir(box_id: u32) -> std::path::PathBuf {
     crate::config::types::IsolateConfig::runtime_root_dir().join(format!("rustbox-{}", box_id))
 }
 
+fn cleanup_after_execution(
+    box_id: u32,
+    isolate: crate::runtime::isolate::Isolate,
+    remove_sandbox_files: bool,
+) {
+    if let Err(e) = isolate.cleanup() {
+        eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e);
+        return;
+    }
+
+    if remove_sandbox_files {
+        let sandbox_work_dir = sandbox_box_work_dir(box_id);
+        if sandbox_work_dir.exists() {
+            if let Err(e) = crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir) {
+                eprintln!(
+                    "Warning: Failed to remove sandbox files {}: {}",
+                    sandbox_work_dir.display(),
+                    e
+                );
+            } else {
+                eprintln!(
+                    "Automatically cleaned up sandbox {} files and instance",
+                    box_id
+                );
+            }
+            return;
+        }
+    }
+
+    eprintln!(
+        "Automatically cleaned up sandbox {} after execution",
+        box_id
+    );
+}
+
+fn build_execution_overrides(
+    stdin: Option<&str>,
+    max_cpu: Option<u64>,
+    max_memory: Option<u64>,
+    max_time: Option<u64>,
+    max_wall_time: Option<u64>,
+    fd_limit: Option<u64>,
+    process_limit: Option<u32>,
+) -> crate::runtime::isolate::ExecutionOverrides {
+    crate::runtime::isolate::ExecutionOverrides {
+        stdin_data: stdin.map(str::to_string),
+        max_cpu,
+        max_memory,
+        max_time,
+        max_wall_time,
+        fd_limit,
+        process_limit,
+    }
+}
+
 fn source_language_for_path(path: &std::path::Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
@@ -415,6 +470,8 @@ pub fn run(mode: CliMode) -> Result<()> {
                 isolate.add_directory_bindings(bindings)?;
             }
 
+            let overrides =
+                build_execution_overrides(None, cpu, mem, time, wall_time, None, processes);
             let execution_outcome: anyhow::Result<crate::config::types::ExecutionStatus> = (|| {
                 if command.is_empty() {
                     // No command specified - look for standardized pattern /tmp/<box-id>.py in sandbox
@@ -438,20 +495,12 @@ pub fn run(mode: CliMode) -> Result<()> {
                             e
                         )
                     })?;
-                    let result = isolate.execute_code_string(
-                        "python", &code, None, // stdin
-                        cpu, mem, time, wall_time, None,      // fd_limit
-                        processes, // process_limit
-                    )?;
-                    return emit_run_result(
+                    let result = isolate.execute_code_string("python", &code, &overrides)?;
+                    return emit_execution_result(
                         &mut isolate,
                         &result,
                         Some("python"),
-                        cpu,
-                        mem,
-                        time,
-                        wall_time,
-                        processes,
+                        &overrides,
                     );
                 }
 
@@ -467,74 +516,26 @@ pub fn run(mode: CliMode) -> Result<()> {
                                     e
                                 )
                             })?;
-                            let result = isolate.execute_code_string(
-                                language, &code, None, // stdin
-                                cpu, mem, time, wall_time, None,      // fd_limit
-                                processes, // process_limit
-                            )?;
-                            return emit_run_result(
+                            let result =
+                                isolate.execute_code_string(language, &code, &overrides)?;
+                            return emit_execution_result(
                                 &mut isolate,
                                 &result,
                                 Some(language),
-                                cpu,
-                                mem,
-                                time,
-                                wall_time,
-                                processes,
+                                &overrides,
                             );
                         }
                     }
                 }
 
                 // Execute command directly (binary/script path or argv command).
-                let result = isolate.execute_with_overrides(
-                    &command, None, // stdin
-                    cpu, mem, time, wall_time, None,      // fd_limit
-                    processes, // process_limit
-                )?;
-                emit_run_result(
-                    &mut isolate,
-                    &result,
-                    None,
-                    cpu,
-                    mem,
-                    time,
-                    wall_time,
-                    processes,
-                )
+                let result = isolate.execute_with_overrides(&command, &overrides)?;
+                emit_execution_result(&mut isolate, &result, None, &overrides)
             })(
             );
 
             // Cleanup always runs after isolate creation, even when execution failed.
-            let cleanup_result = isolate.cleanup();
-            match cleanup_result {
-                Ok(_) => {
-                    // Also clean up any standardized sandbox files if present.
-                    let sandbox_work_dir = sandbox_box_work_dir(box_id);
-                    if sandbox_work_dir.exists() {
-                        if let Err(e) =
-                            crate::safety::safe_cleanup::remove_tree_secure(&sandbox_work_dir)
-                        {
-                            eprintln!(
-                                "Warning: Failed to remove sandbox files {}: {}",
-                                sandbox_work_dir.display(),
-                                e
-                            );
-                        } else {
-                            eprintln!(
-                                "Automatically cleaned up sandbox {} files and instance",
-                                box_id
-                            );
-                        }
-                    } else {
-                        eprintln!(
-                            "Automatically cleaned up sandbox {} after execution",
-                            box_id
-                        );
-                    }
-                }
-                Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
-            }
+            cleanup_after_execution(box_id, isolate, true);
 
             let reported_status = execution_outcome?;
             if reported_status != crate::config::types::ExecutionStatus::Ok {
@@ -632,20 +633,15 @@ pub fn run(mode: CliMode) -> Result<()> {
 
             // Apply CLI overrides if specified (these override config.json values)
             if let Some(mem) = mem {
-                config.memory_limit = Some(mem * 1024 * 1024); // Convert MB to bytes
                 eprintln!("🔧 CLI Override - Memory limit: {} MB", mem);
             }
             if let Some(cpu_limit) = cpu.or(time) {
-                config.cpu_time_limit = Some(std::time::Duration::from_secs(cpu_limit));
-                config.time_limit = Some(std::time::Duration::from_secs(cpu_limit));
                 eprintln!("🔧 CLI Override - CPU time limit: {} seconds", cpu_limit);
             }
             if let Some(wall_limit) = wall_time {
-                config.wall_time_limit = Some(std::time::Duration::from_secs(wall_limit));
                 eprintln!("🔧 CLI Override - Wall time limit: {} seconds", wall_limit);
             }
             if let Some(proc_limit) = processes {
-                config.process_limit = Some(proc_limit);
                 eprintln!("🔧 CLI Override - Process limit: {}", proc_limit);
             }
             if allow_degraded {
@@ -660,49 +656,24 @@ pub fn run(mode: CliMode) -> Result<()> {
 
             // Keep execution+reporting result separate so isolate cleanup always runs,
             // even when execution fails and we return an error.
+            let overrides = build_execution_overrides(
+                stdin.as_deref(),
+                cpu.or(time),
+                mem,
+                time,
+                wall_time,
+                None,
+                processes,
+            );
             let execution_outcome: anyhow::Result<crate::config::types::ExecutionStatus> =
-                match isolate.execute_code_string(
-                    &language,
-                    &code,
-                    stdin.as_deref(),
-                    cpu.or(time),
-                    mem,
-                    time,
-                    wall_time,
-                    None,      // fd_limit
-                    processes, // P0-CLI-001: Pass process limit
-                ) {
+                match isolate.execute_code_string(&language, &code, &overrides) {
                     Ok(result) => {
-                        let output_config = build_overridden_config(
-                            isolate.config(),
-                            cpu.or(time),
-                            mem,
-                            time,
-                            wall_time,
-                            None,
-                            processes,
-                        );
-
-                        let launch_evidence = isolate.take_last_launch_evidence();
-                        emit_judge_json(
-                            &result,
-                            &output_config,
-                            Some(&language),
-                            launch_evidence.as_ref(),
-                        )
+                        emit_execution_result(&mut isolate, &result, Some(&language), &overrides)
                     }
                     Err(err) => Err(err.into()),
                 };
 
-            let cleanup_result = isolate.cleanup();
-            if let Err(e) = cleanup_result {
-                eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e);
-            } else {
-                eprintln!(
-                    "Automatically cleaned up sandbox {} after execution",
-                    box_id
-                );
-            }
+            cleanup_after_execution(box_id, isolate, false);
 
             let reported_status = execution_outcome?;
 
@@ -744,64 +715,14 @@ pub fn run(mode: CliMode) -> Result<()> {
     command_result
 }
 
-fn build_overridden_config(
-    base: &crate::config::types::IsolateConfig,
-    max_cpu: Option<u64>,
-    max_memory: Option<u64>,
-    max_time: Option<u64>,
-    max_wall_time: Option<u64>,
-    fd_limit: Option<u64>,
-    process_limit: Option<u32>,
-) -> crate::config::types::IsolateConfig {
-    let mut config = base.clone();
-
-    if let Some(cpu_seconds) = max_cpu {
-        config.cpu_time_limit = Some(std::time::Duration::from_secs(cpu_seconds));
-        config.time_limit = Some(std::time::Duration::from_secs(cpu_seconds));
-    }
-
-    if let Some(memory_mb) = max_memory {
-        config.memory_limit = Some(memory_mb * 1024 * 1024);
-    }
-
-    if let Some(time_seconds) = max_time {
-        config.cpu_time_limit = Some(std::time::Duration::from_secs(time_seconds));
-    }
-
-    if let Some(wall_time_seconds) = max_wall_time {
-        config.wall_time_limit = Some(std::time::Duration::from_secs(wall_time_seconds));
-    }
-
-    if let Some(fd_limit_val) = fd_limit {
-        config.fd_limit = Some(fd_limit_val);
-    }
-
-    if let Some(proc_limit) = process_limit {
-        config.process_limit = Some(proc_limit);
-    }
-
-    config
-}
-
-fn emit_run_result(
+fn emit_execution_result(
     isolate: &mut crate::runtime::isolate::Isolate,
     result: &crate::config::types::ExecutionResult,
     language: Option<&str>,
-    max_cpu: Option<u64>,
-    max_memory: Option<u64>,
-    max_time: Option<u64>,
-    max_wall_time: Option<u64>,
-    process_limit: Option<u32>,
+    overrides: &crate::runtime::isolate::ExecutionOverrides,
 ) -> Result<crate::config::types::ExecutionStatus> {
-    let output_config = build_overridden_config(
-        isolate.config(),
-        max_cpu,
-        max_memory,
-        max_time,
-        max_wall_time,
-        None,
-        process_limit,
-    );
+    let output_config =
+        crate::runtime::isolate::apply_overrides_to_config(isolate.config(), overrides);
     let launch_evidence = isolate.take_last_launch_evidence();
     emit_judge_json(result, &output_config, language, launch_evidence.as_ref())
 }
