@@ -1,9 +1,10 @@
-//! Linux kernel primitive wrappers
+//! Thin wrappers around Linux kernel primitives.
 //!
-//! This module contains thin wrappers around Linux kernel interfaces.
-//! All `unsafe` code should be concentrated here with explicit safety preconditions.
+//! All `unsafe` code is concentrated here with explicit SAFETY comments.
+//! Dependency direction: signal -> namespace -> capabilities -> credentials -> mount -> cgroup
 
 pub mod capabilities;
+pub mod credentials;
 pub mod cgroup;
 pub mod mount;
 pub mod namespace;

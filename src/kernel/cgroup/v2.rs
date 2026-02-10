@@ -1,13 +1,10 @@
-/// Cgroup v2 backend implementation
-/// Implements P1-CGROUP2-001: v2 OOM Semantics and memory.oom.group
-/// Implements P1-CGROUP2-002: v2 Peak Memory Accounting
-/// Per plan.md Section 8.3: v2 Required Semantics
+//! Cgroup v2 (unified hierarchy) backend.
+
 use crate::config::types::{CgroupEvidence, IsolateError, Result};
 use crate::kernel::cgroup::backend::CgroupBackend;
 use std::fs;
 use std::path::PathBuf;
 
-/// Cgroup v2 backend
 pub struct CgroupV2 {
     base_path: PathBuf,
     instance_id: String,
@@ -15,12 +12,10 @@ pub struct CgroupV2 {
 }
 
 impl CgroupV2 {
-    /// Create new cgroup v2 backend with default base path.
     pub fn new(instance_id: &str, strict_mode: bool) -> Result<Self> {
         Self::with_base_path("/sys/fs/cgroup/rustbox", instance_id, strict_mode)
     }
 
-    /// Create new cgroup v2 backend with explicit base path (used by tests).
     pub fn with_base_path(base_path: &str, instance_id: &str, strict_mode: bool) -> Result<Self> {
         Ok(CgroupV2 {
             base_path: PathBuf::from(base_path),
@@ -29,7 +24,6 @@ impl CgroupV2 {
         })
     }
 
-    /// Get cgroup path for instance.
     fn instance_path(&self, instance_id: &str) -> PathBuf {
         self.base_path.join(instance_id)
     }
@@ -77,9 +71,7 @@ impl CgroupV2 {
             }
         }
 
-        Err(IsolateError::Cgroup(
-            "cpu.stat missing usage_usec".to_string(),
-        ))
+        Err(IsolateError::Cgroup("cpu.stat missing usage_usec".to_string()))
     }
 
     fn read_process_count_internal(&self, instance_id: &str) -> Result<u32> {
@@ -95,10 +87,7 @@ impl CgroupV2 {
         let procs_path = path.join("cgroup.procs");
         let content = fs::read_to_string(&procs_path)
             .map_err(|e| IsolateError::Cgroup(format!("Failed to read cgroup.procs: {}", e)))?;
-        Ok(content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count() as u32)
+        Ok(content.lines().filter(|line| !line.trim().is_empty()).count() as u32)
     }
 
     /// Read memory.peak (kernel 5.19+) with fallback to memory.current.
@@ -114,11 +103,9 @@ impl CgroupV2 {
         Self::read_u64_file(&current_path, "memory.current")
     }
 
-    /// Parse memory.events for OOM detection.
-    /// Returns (oom_count, oom_kill_count).
+    /// Returns (oom_count, oom_kill_count) from memory.events.
     fn check_oom_events_internal(&self, instance_id: &str) -> Result<(u64, u64)> {
-        let path = self.instance_path(instance_id);
-        let events_path = path.join("memory.events");
+        let events_path = self.instance_path(instance_id).join("memory.events");
 
         if !events_path.exists() {
             return Ok((0, 0));
@@ -153,18 +140,16 @@ impl CgroupBackend for CgroupV2 {
     fn create(&self, instance_id: &str) -> Result<()> {
         let path = self.instance_path(instance_id);
 
-        // Create cgroup directory
         fs::create_dir_all(&path)
             .map_err(|e| IsolateError::Cgroup(format!("Failed to create cgroup: {}", e)))?;
 
-        // Set memory.oom.group=1 in strict mode (when supported)
+        // Enable group-level OOM semantics in strict mode
         let oom_group_path = path.join("memory.oom.group");
         if oom_group_path.exists() {
             if let Err(e) = fs::write(&oom_group_path, "1") {
                 if self.strict_mode {
                     return Err(IsolateError::Cgroup(format!(
-                        "Failed to set memory.oom.group: {}",
-                        e
+                        "Failed to set memory.oom.group: {}", e
                     )));
                 }
                 log::warn!("Failed to set memory.oom.group (permissive mode): {}", e);
@@ -178,12 +163,10 @@ impl CgroupBackend for CgroupV2 {
         let path = self.instance_path(instance_id);
 
         if path.exists() {
-            // Kill all processes in cgroup before removal (kernel 5.14+).
-            // Without this, rmdir fails with EBUSY if processes are still running.
+            // Kill all processes before removal (kernel 5.14+) to prevent EBUSY
             let kill_path = path.join("cgroup.kill");
             if kill_path.exists() {
                 let _ = fs::write(&kill_path, "1");
-                // Brief wait for kernel to propagate the kill.
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
 
@@ -195,8 +178,7 @@ impl CgroupBackend for CgroupV2 {
     }
 
     fn attach_process(&self, instance_id: &str, pid: u32) -> Result<()> {
-        let path = self.instance_path(instance_id);
-        let procs_path = path.join("cgroup.procs");
+        let procs_path = self.instance_path(instance_id).join("cgroup.procs");
 
         fs::write(&procs_path, pid.to_string()).map_err(|e| {
             IsolateError::Cgroup(format!("Failed to attach process to cgroup: {}", e))
@@ -207,19 +189,15 @@ impl CgroupBackend for CgroupV2 {
 
     fn set_memory_limit(&self, instance_id: &str, limit_bytes: u64) -> Result<()> {
         let path = self.instance_path(instance_id);
-        let limit_path = path.join("memory.max");
 
-        fs::write(&limit_path, limit_bytes.to_string())
+        fs::write(path.join("memory.max"), limit_bytes.to_string())
             .map_err(|e| IsolateError::Cgroup(format!("Failed to set memory limit: {}", e)))?;
 
-        // Disable swap to prevent processes from escaping the memory limit.
-        // Without this, the kernel moves pages to swap instead of triggering OOM.
-        let swap_path = path.join("memory.swap.max");
-        if let Err(e) = fs::write(&swap_path, "0") {
+        // Disable swap to prevent memory limit escape
+        if let Err(e) = fs::write(path.join("memory.swap.max"), "0") {
             if self.strict_mode {
                 return Err(IsolateError::Cgroup(format!(
-                    "Failed to set memory.swap.max=0: {}",
-                    e
+                    "Failed to set memory.swap.max=0: {}", e
                 )));
             }
             log::warn!("Failed to set memory.swap.max=0 (permissive mode): {}", e);
@@ -229,8 +207,7 @@ impl CgroupBackend for CgroupV2 {
     }
 
     fn set_process_limit(&self, instance_id: &str, limit: u32) -> Result<()> {
-        let path = self.instance_path(instance_id);
-        let limit_path = path.join("pids.max");
+        let limit_path = self.instance_path(instance_id).join("pids.max");
 
         fs::write(&limit_path, limit.to_string())
             .map_err(|e| IsolateError::Cgroup(format!("Failed to set process limit: {}", e)))?;
@@ -241,15 +218,9 @@ impl CgroupBackend for CgroupV2 {
     fn set_cpu_limit(&self, instance_id: &str, _limit_usec: u64) -> Result<()> {
         let path = self.instance_path(instance_id);
 
-        // C2: Use CFS bandwidth control via cpu.max instead of cpu.weight.
-        // cpu.max format: "{quota_us} {period_us}"
-        // 100000 100000 = 1 full CPU core per 100ms period.
-        let period_us: u64 = 100_000;
-        let quota_us: u64 = 100_000; // Cap at 1 CPU core
-
-        let max_path = path.join("cpu.max");
-        let max_value = format!("{} {}", quota_us, period_us);
-        fs::write(&max_path, &max_value)
+        // CFS bandwidth: 100ms period, 100ms quota = 1 CPU core cap
+        let max_value = "100000 100000";
+        fs::write(path.join("cpu.max"), max_value)
             .map_err(|e| IsolateError::Cgroup(format!("Failed to set cpu.max: {}", e)))?;
 
         log::info!("Set cpu.max={} (1 CPU core bandwidth cap)", max_value);
@@ -325,7 +296,9 @@ mod tests {
     fn test_instance_path() {
         let cgroup =
             CgroupV2::with_base_path("/tmp/test_cgroup_v2", "test_instance", false).unwrap();
-        let path = cgroup.instance_path("test_instance");
-        assert_eq!(path, PathBuf::from("/tmp/test_cgroup_v2/test_instance"));
+        assert_eq!(
+            cgroup.instance_path("test_instance"),
+            PathBuf::from("/tmp/test_cgroup_v2/test_instance")
+        );
     }
 }

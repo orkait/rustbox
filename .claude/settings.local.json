@@ -16,7 +16,13 @@
       "mcp__rustbox-mcp__open_file_span",
       "Bash(sudo -S strace -f -e trace=mount,chroot,clone,fork,execve,write -o /tmp/rustbox_strace.log timeout 10 target/debug/judge execute-code --strict --box-id 1 --language python --code 'print\\(\"\"hello\"\"\\)')",
       "Bash(sudo -S bash -c 'strace -f -e trace=mount,chroot,clone,clone3,fork,execve,unshare,pivot_root -o /tmp/rustbox_strace2.log target/debug/judge execute-code --strict --box-id 1 --language python --code \"\"print\\(\\\\\"\"hello\\\\\"\"\\)\"\" &\nBGPID=$!\nsleep 12\nkill -9 $BGPID 2>/dev/null\nwait $BGPID 2>/dev/null\necho \"\"=== STRACE DONE ===\"\"')",
-      "Bash(sudo -S bash -c 'strace -ff -o /tmp/rustbox_trace target/debug/judge execute-code --strict --box-id 1 --language python --code \"\"print\\(\\\\\"\"hello\\\\\"\"\\)\"\" &\nBGPID=$!\nsleep 12\nkill -9 $BGPID 2>/dev/null\nwait $BGPID 2>/dev/null\necho \"\"=== DONE ===\"\"\nls -la /tmp/rustbox_trace*')"
+      "Bash(sudo -S bash -c 'strace -ff -o /tmp/rustbox_trace target/debug/judge execute-code --strict --box-id 1 --language python --code \"\"print\\(\\\\\"\"hello\\\\\"\"\\)\"\" &\nBGPID=$!\nsleep 12\nkill -9 $BGPID 2>/dev/null\nwait $BGPID 2>/dev/null\necho \"\"=== DONE ===\"\"\nls -la /tmp/rustbox_trace*')",
+      "Bash(find:*)",
+      "Bash(sort:*)",
+      "Skill(unsafe-checker)",
+      "Bash(rustc:*)",
+      "Bash(cargo --version:*)",
+      "Bash(rustup show:*)"
     ]
   }
 }

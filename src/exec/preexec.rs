@@ -16,7 +16,8 @@ use crate::core::types::ExecutionProfile;
 /// 9. setresgid then setresuid
 /// 10. prctl(PR_SET_NO_NEW_PRIVS, 1)
 /// 11. exec payload
-use crate::kernel::capabilities;
+use crate::kernel::capabilities::{self, drop_all_capabilities, set_no_new_privs, check_no_new_privs};
+use crate::kernel::credentials::transition_to_unprivileged;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::marker::PhantomData;
@@ -561,9 +562,9 @@ impl Sandbox<CgroupAttached> {
         if let (Some(uid_val), Some(gid_val)) = (uid, gid) {
             log::info!("Transitioning to UID={}, GID={}", uid_val, gid_val);
 
-            // Use capabilities module for complete transition
+            // Use credentials module for complete transition
             // This handles: setgroups([]), setresgid, setresuid, verification
-            capabilities::transition_to_unprivileged(uid_val, gid_val, self.strict_mode)?;
+            transition_to_unprivileged(uid_val, gid_val, self.strict_mode)?;
 
             // Log current IDs for debugging
             let current_ids = capabilities::get_current_ids();
@@ -591,14 +592,14 @@ impl Sandbox<CredsDropped> {
         // P15-PRIV-002: Drop all capabilities
         // Per plan.md Section 6: Drop bounding/ambient/effective/permitted/inheritable caps
         if self.strict_mode {
-            capabilities::drop_all_capabilities().map_err(|e| {
+            drop_all_capabilities().map_err(|e| {
                 log::error!("Failed to drop capabilities: {:?}", e);
                 e
             })?;
             log::info!("Dropped all capabilities");
         } else {
             // Permissive mode: attempt but don't fail
-            if let Err(e) = capabilities::drop_all_capabilities() {
+            if let Err(e) = drop_all_capabilities() {
                 log::warn!("Failed to drop capabilities (permissive mode): {:?}", e);
             }
         }
@@ -606,10 +607,10 @@ impl Sandbox<CredsDropped> {
         // P15-PRIV-001: Set PR_SET_NO_NEW_PRIVS
         // Per plan.md Section 6: prctl(PR_SET_NO_NEW_PRIVS, 1) is mandatory in strict mode
         // This prevents privilege escalation after exec
-        capabilities::set_no_new_privs()?;
+        set_no_new_privs()?;
 
         // Verify no_new_privs is set
-        let is_set = capabilities::check_no_new_privs()?;
+        let is_set = check_no_new_privs()?;
         if !is_set && self.strict_mode {
             return Err(IsolateError::Privilege(
                 "PR_SET_NO_NEW_PRIVS verification failed".to_string(),

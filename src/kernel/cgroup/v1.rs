@@ -1,4 +1,5 @@
-/// Enhanced Cgroup management for resource control with improved reliability
+//! Cgroup v1 resource governance.
+
 use crate::config::types::{IsolateError, Result};
 use std::collections::HashSet;
 use std::fs;
@@ -14,17 +15,12 @@ pub struct Cgroup {
 
 impl Cgroup {
     pub fn new(name: &str, strict_mode: bool) -> Result<Self> {
-        // Validate and sanitize the name
         if name.is_empty() || name.len() > 255 {
-            return Err(IsolateError::Cgroup(
-                "Invalid cgroup name length".to_string(),
-            ));
+            return Err(IsolateError::Cgroup("Invalid cgroup name length".to_string()));
         }
 
         let sanitized_name = name.replace("/", "_").replace("..", "_");
         let cgroup_base = "/sys/fs/cgroup";
-
-        // Initialize paths for all controllers
         let mut cgroup_paths = std::collections::HashMap::new();
 
         let cgroups_available = Self::cgroups_available();
@@ -49,8 +45,7 @@ impl Cgroup {
             Err(e) => {
                 if strict_mode {
                     return Err(IsolateError::Cgroup(format!(
-                        "Failed to get available controllers: {}",
-                        e
+                        "Failed to get available controllers: {}", e
                     )));
                 } else {
                     eprintln!("Warning: Failed to get available controllers: {}", e);
@@ -59,7 +54,6 @@ impl Cgroup {
             }
         };
 
-        // Create controller paths and directories
         let controllers_to_use = ["memory", "cpu", "cpuacct", "pids"];
         let mut creation_errors = Vec::new();
 
@@ -85,7 +79,7 @@ impl Cgroup {
             for controller in &required_controllers {
                 if !available_controllers.contains(*controller) {
                     return Err(IsolateError::Cgroup(format!(
-                        "Required controller '{}' not available. Available controllers: {:?}",
+                        "Required controller '{}' not available. Available: {:?}",
                         controller, available_controllers
                     )));
                 }
@@ -105,10 +99,7 @@ impl Cgroup {
                     creation_errors
                 )));
             } else {
-                eprintln!(
-                    "Warning: Failed to create cgroup directories: {:?}",
-                    creation_errors
-                );
+                eprintln!("Warning: Failed to create cgroup directories: {:?}", creation_errors);
                 return Ok(Self {
                     name: sanitized_name,
                     cgroup_paths: std::collections::HashMap::new(),
@@ -119,28 +110,21 @@ impl Cgroup {
         }
 
         Ok(Self {
-            name: sanitized_name.clone(),
+            name: sanitized_name,
             cgroup_paths,
             available_controllers,
             has_cgroup_support: true,
         })
     }
 
-    /// Validate memory limit value
     fn validate_memory_limit(limit_bytes: u64) -> Result<()> {
         if limit_bytes == 0 {
-            return Err(IsolateError::Cgroup(
-                "Memory limit cannot be zero".to_string(),
-            ));
+            return Err(IsolateError::Cgroup("Memory limit cannot be zero".to_string()));
         }
         if limit_bytes < 1024 * 1024 {
-            // 1MB minimum
-            return Err(IsolateError::Cgroup(
-                "Memory limit too small (minimum 1MB)".to_string(),
-            ));
+            return Err(IsolateError::Cgroup("Memory limit too small (minimum 1MB)".to_string()));
         }
         if limit_bytes > (1u64 << 50) {
-            // 1PB maximum (reasonable upper bound)
             return Err(IsolateError::Cgroup("Memory limit too large".to_string()));
         }
         Ok(())
@@ -157,12 +141,11 @@ impl Cgroup {
             IsolateError::Cgroup("Memory controller path not available".to_string())
         })?;
 
-        // Set memory limit
         let limit_file = memory_path.join("memory.limit_in_bytes");
         fs::write(&limit_file, limit_bytes.to_string())
             .map_err(|e| IsolateError::Cgroup(format!("Failed to set memory limit: {}", e)))?;
 
-        // Set memory+swap limit (if available) - this is critical for security
+        // Set memory+swap limit to prevent swap escape
         let memsw_file = memory_path.join("memory.memsw.limit_in_bytes");
         if memsw_file.exists() {
             fs::write(&memsw_file, limit_bytes.to_string()).map_err(|e| {
@@ -170,7 +153,6 @@ impl Cgroup {
             })?;
         }
 
-        // Disable swap accounting if available (for better predictability)
         let swappiness_file = memory_path.join("memory.swappiness");
         if swappiness_file.exists() {
             let _ = fs::write(&swappiness_file, "0");
@@ -184,20 +166,16 @@ impl Cgroup {
             return Ok(());
         }
 
-        // Validate CPU shares (standard range is 2-262144)
         if cpu_shares < 2 || cpu_shares > 262144 {
             return Err(IsolateError::Cgroup(format!(
-                "Invalid CPU shares: {} (must be between 2 and 262144)",
-                cpu_shares
+                "Invalid CPU shares: {} (must be 2-262144)", cpu_shares
             )));
         }
 
-        let cpu_path = self
-            .cgroup_paths
-            .get("cpu")
-            .ok_or_else(|| IsolateError::Cgroup("CPU controller path not available".to_string()))?;
+        let cpu_path = self.cgroup_paths.get("cpu").ok_or_else(|| {
+            IsolateError::Cgroup("CPU controller path not available".to_string())
+        })?;
 
-        // Set CPU shares
         let shares_file = cpu_path.join("cpu.shares");
         fs::write(&shares_file, cpu_shares.to_string())
             .map_err(|e| IsolateError::Cgroup(format!("Failed to set CPU shares: {}", e)))?;
@@ -210,17 +188,11 @@ impl Cgroup {
             return Ok(());
         }
 
-        // Validate process limit
         if limit == 0 {
-            return Err(IsolateError::Cgroup(
-                "Process limit cannot be zero".to_string(),
-            ));
+            return Err(IsolateError::Cgroup("Process limit cannot be zero".to_string()));
         }
         if limit > 32768 {
-            // Reasonable upper bound
-            return Err(IsolateError::Cgroup(
-                "Process limit too high (maximum 32768)".to_string(),
-            ));
+            return Err(IsolateError::Cgroup("Process limit too high (maximum 32768)".to_string()));
         }
 
         let pids_path = self.cgroup_paths.get("pids").ok_or_else(|| {
@@ -234,20 +206,14 @@ impl Cgroup {
         Ok(())
     }
 
-    /// Validate PID exists and is accessible
     fn validate_pid(pid: u32) -> Result<()> {
         if pid == 0 {
             return Err(IsolateError::Cgroup("Invalid PID: 0".to_string()));
         }
-
         let proc_path = format!("/proc/{}", pid);
         if !Path::new(&proc_path).exists() {
-            return Err(IsolateError::Cgroup(format!(
-                "Process {} does not exist",
-                pid
-            )));
+            return Err(IsolateError::Cgroup(format!("Process {} does not exist", pid)));
         }
-
         Ok(())
     }
 
@@ -261,9 +227,7 @@ impl Cgroup {
         let mut errors = Vec::new();
         let mut successful_controllers = Vec::new();
 
-        // Try to add process to all available controllers atomically
         let controllers = ["memory", "cpu", "cpuacct", "pids"];
-
         for controller in &controllers {
             if let Some(controller_path) = self.cgroup_paths.get(*controller) {
                 let tasks_file = controller_path.join("tasks");
@@ -274,7 +238,6 @@ impl Cgroup {
             }
         }
 
-        // If any critical controller failed, this is an error
         let critical_controllers = ["memory", "cpu"];
         let failed_critical = critical_controllers.iter().any(|c| {
             self.available_controllers.contains(*c) && !successful_controllers.contains(c)
@@ -288,27 +251,21 @@ impl Cgroup {
         }
 
         if !errors.is_empty() {
-            log::warn!(
-                "Some non-critical cgroup operations failed for PID {}: {:?}",
-                pid,
-                errors
-            );
+            log::warn!("Some non-critical cgroup operations failed for PID {}: {:?}", pid, errors);
         }
 
         Ok(())
     }
 
-    /// Attach the current process to this cgroup set.
     pub fn add_current_process(&self) -> Result<()> {
-        let pid = unsafe { libc::getpid() as u32 };
-        self.add_process(pid)
+        self.add_process(std::process::id())
     }
 
     pub fn is_enforcing(&self) -> bool {
         self.has_cgroup_support
     }
 
-    /// Return one writable controller directory path suitable for pre-exec attach bookkeeping.
+    /// Return one writable controller path for pre-exec attach bookkeeping.
     pub fn primary_attach_path(&self) -> Option<PathBuf> {
         for controller in ["pids", "memory", "cpu", "cpuacct"] {
             if let Some(path) = self.cgroup_paths.get(controller) {
@@ -338,7 +295,6 @@ impl Cgroup {
             .map_err(|e| IsolateError::Cgroup(format!("Failed to parse peak memory usage: {}", e)))
     }
 
-    /// Get current memory usage (more reliable than peak for live monitoring)
     pub fn get_current_memory_usage(&self) -> Result<u64> {
         if !self.has_cgroup_support || !self.available_controllers.contains("memory") {
             return Ok(0);
@@ -358,7 +314,7 @@ impl Cgroup {
         })
     }
 
-    /// Get comprehensive memory statistics from cgroup
+    /// Returns (current, peak, limit).
     pub fn get_memory_stats(&self) -> Result<(u64, u64, u64)> {
         if !self.has_cgroup_support || !self.available_controllers.contains("memory") {
             return Ok((0, 0, 0));
@@ -367,7 +323,6 @@ impl Cgroup {
         let current = self.get_current_memory_usage().unwrap_or(0);
         let peak = self.get_peak_memory_usage().unwrap_or(0);
 
-        // Try to get memory limit
         let memory_path = self.cgroup_paths.get("memory").ok_or_else(|| {
             IsolateError::Cgroup("Memory controller path not available".to_string())
         })?;
@@ -384,7 +339,6 @@ impl Cgroup {
         Ok((current, peak, limit))
     }
 
-    /// Check if the process hit the memory limit (OOM condition)
     pub fn check_oom_killed(&self) -> bool {
         if !self.has_cgroup_support || !self.available_controllers.contains("memory") {
             return false;
@@ -403,7 +357,7 @@ impl Cgroup {
             }
         }
 
-        // Also check memory.stat for oom_kill events
+        // Check memory.stat for oom_kill events
         let memory_stat_file = memory_path.join("memory.stat");
         if let Ok(memory_stat) = fs::read_to_string(&memory_stat_file) {
             for line in memory_stat.lines() {
@@ -420,7 +374,7 @@ impl Cgroup {
             }
         }
 
-        // Check if current memory usage equals the limit (potential OOM)
+        // Check if usage equals limit (potential OOM)
         let limit_file = memory_path.join("memory.limit_in_bytes");
         let usage_file = memory_path.join("memory.usage_in_bytes");
 
@@ -432,8 +386,7 @@ impl Cgroup {
                 limit_content.trim().parse::<u64>(),
                 usage_content.trim().parse::<u64>(),
             ) {
-                // If usage is very close to limit (within 1MB or 95% of limit), consider it OOM
-                let threshold = std::cmp::min(1024 * 1024, limit / 20); // 1MB or 5% of limit
+                let threshold = std::cmp::min(1024 * 1024, limit / 20);
                 if limit > 0 && usage >= limit.saturating_sub(threshold) {
                     return true;
                 }
@@ -448,7 +401,7 @@ impl Cgroup {
             return Ok(0.0);
         }
 
-        // Method 1: Try cpuacct.usage (nanoseconds, most accurate)
+        // Try cpuacct.usage (nanoseconds)
         let cpuacct_usage_path = Path::new("/sys/fs/cgroup/cpuacct")
             .join(&self.name)
             .join("cpuacct.usage");
@@ -456,13 +409,12 @@ impl Cgroup {
         if cpuacct_usage_path.exists() {
             if let Ok(usage_content) = fs::read_to_string(&cpuacct_usage_path) {
                 if let Ok(usage_ns) = usage_content.trim().parse::<u64>() {
-                    let cpu_time = usage_ns as f64 / 1_000_000_000.0;
-                    return Ok(cpu_time);
+                    return Ok(usage_ns as f64 / 1_000_000_000.0);
                 }
             }
         }
 
-        // Method 2: Try cpuacct.stat (USER_HZ units, fallback)
+        // Fallback: cpuacct.stat (USER_HZ units)
         let cpuacct_stat_path = Path::new("/sys/fs/cgroup/cpuacct")
             .join(&self.name)
             .join("cpuacct.stat");
@@ -476,22 +428,15 @@ impl Cgroup {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() >= 2 {
                         match parts[0] {
-                            "user" => {
-                                user_time = parts[1].parse().unwrap_or(0);
-                            }
-                            "system" => {
-                                sys_time = parts[1].parse().unwrap_or(0);
-                            }
+                            "user" => user_time = parts[1].parse().unwrap_or(0),
+                            "system" => sys_time = parts[1].parse().unwrap_or(0),
                             _ => {}
                         }
                     }
                 }
 
                 if user_time > 0 || sys_time > 0 {
-                    let total_time = user_time + sys_time;
-                    // Convert USER_HZ to seconds (typically USER_HZ = 100)
-                    let cpu_time = total_time as f64 / 100.0;
-                    return Ok(cpu_time);
+                    return Ok((user_time + sys_time) as f64 / 100.0);
                 }
             }
         }
@@ -499,26 +444,24 @@ impl Cgroup {
         Ok(0.0)
     }
 
-    /// Get comprehensive resource usage statistics from cgroups exclusively
+    /// Returns (cpu_time_seconds, memory_peak_bytes, oom_killed).
     pub fn get_resource_stats(&self) -> (f64, u64, bool) {
         let cpu_time = self.get_cpu_usage().unwrap_or(0.0);
         let memory_peak = self.get_peak_memory_usage().unwrap_or(0);
         let oom_killed = self.check_oom_killed();
-
         (cpu_time, memory_peak, oom_killed)
     }
 
-    /// Check if cgroup is in a resource limit violation state
+    /// Returns (memory_limited, cpu_limited).
     pub fn is_resource_limited(&self) -> (bool, bool) {
         let oom_killed = self.check_oom_killed();
 
-        // Check if memory usage is at or near limit
         let memory_limited = if let Ok(current) = self.get_current_memory_usage() {
             if let Some(memory_path) = self.cgroup_paths.get("memory") {
                 let limit_file = memory_path.join("memory.limit_in_bytes");
                 if let Ok(limit_content) = fs::read_to_string(&limit_file) {
                     if let Ok(limit) = limit_content.trim().parse::<u64>() {
-                        let threshold = std::cmp::min(1024 * 1024, limit / 20); // 1MB or 5% of limit
+                        let threshold = std::cmp::min(1024 * 1024, limit / 20);
                         limit > 0 && current >= limit.saturating_sub(threshold)
                     } else {
                         false
@@ -533,7 +476,7 @@ impl Cgroup {
             false
         };
 
-        (oom_killed || memory_limited, false) // (memory_limited, cpu_limited)
+        (oom_killed || memory_limited, false)
     }
 
     pub fn cleanup(&self) -> Result<()> {
@@ -543,14 +486,13 @@ impl Cgroup {
 
         let mut cleanup_errors = Vec::new();
 
-        // First, try to move any remaining processes out of the cgroups
+        // Move remaining processes back to root cgroup
         for (controller, path) in &self.cgroup_paths {
             let tasks_file = path.join("tasks");
             if tasks_file.exists() {
                 if let Ok(tasks_content) = fs::read_to_string(&tasks_file) {
                     for line in tasks_content.lines() {
                         if let Ok(pid) = line.trim().parse::<u32>() {
-                            // Try to move process back to root cgroup
                             let root_tasks =
                                 Path::new("/sys/fs/cgroup").join(controller).join("tasks");
                             let _ = fs::write(&root_tasks, pid.to_string());
@@ -560,24 +502,16 @@ impl Cgroup {
             }
         }
 
-        // Now remove the cgroup directories
         for (controller, path) in &self.cgroup_paths {
             if path.exists() {
-                match fs::remove_dir(path) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        cleanup_errors.push(format!("{}: {}", controller, e));
-                    }
+                if let Err(e) = fs::remove_dir(path) {
+                    cleanup_errors.push(format!("{}: {}", controller, e));
                 }
             }
         }
 
         if !cleanup_errors.is_empty() {
-            log::warn!(
-                "Some cgroup cleanup operations failed: {:?}",
-                cleanup_errors
-            );
-            // Don't return error for cleanup issues, just log them
+            log::warn!("Some cgroup cleanup operations failed: {:?}", cleanup_errors);
         }
 
         Ok(())
@@ -588,19 +522,12 @@ impl Cgroup {
             .map_err(|e| IsolateError::Cgroup(format!("Failed to read /proc/cgroups: {}", e)))?;
 
         let mut controllers = HashSet::new();
-
         for line in content.lines().skip(1) {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 4 {
-                let controller_name = parts[0];
-                let enabled = parts[3] == "1";
-
-                if enabled {
-                    controllers.insert(controller_name.to_string());
-                }
+            if parts.len() >= 4 && parts[3] == "1" {
+                controllers.insert(parts[0].to_string());
             }
         }
-
         Ok(controllers)
     }
 
@@ -619,15 +546,13 @@ pub fn cgroups_available() -> bool {
     Cgroup::cgroups_available()
 }
 
-// Implement CgroupBackend trait for Cgroup (v1)
 impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
     fn backend_name(&self) -> &str {
         "cgroup-v1"
     }
 
     fn create(&self, _instance_id: &str) -> Result<()> {
-        // Already created in new()
-        Ok(())
+        Ok(()) // Already created in new()
     }
 
     fn remove(&self, _instance_id: &str) -> Result<()> {
@@ -647,23 +572,18 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
     }
 
     fn set_cpu_limit(&self, _instance_id: &str, _limit_usec: u64) -> Result<()> {
-        // C2: Use CFS bandwidth control via cpu.cfs_period_us / cpu.cfs_quota_us.
-        // 100000 / 100000 = 1 full CPU core per 100ms period.
         if !self.has_cgroup_support || !self.available_controllers.contains("cpu") {
             return Ok(());
         }
 
-        let cpu_path = self
-            .cgroup_paths
-            .get("cpu")
-            .ok_or_else(|| IsolateError::Cgroup("CPU controller path not available".to_string()))?;
+        let cpu_path = self.cgroup_paths.get("cpu").ok_or_else(|| {
+            IsolateError::Cgroup("CPU controller path not available".to_string())
+        })?;
 
-        let period_file = cpu_path.join("cpu.cfs_period_us");
-        fs::write(&period_file, "100000")
+        // CFS bandwidth: 100ms period, 100ms quota = 1 CPU core cap
+        fs::write(cpu_path.join("cpu.cfs_period_us"), "100000")
             .map_err(|e| IsolateError::Cgroup(format!("Failed to set cpu.cfs_period_us: {}", e)))?;
-
-        let quota_file = cpu_path.join("cpu.cfs_quota_us");
-        fs::write(&quota_file, "100000")
+        fs::write(cpu_path.join("cpu.cfs_quota_us"), "100000")
             .map_err(|e| IsolateError::Cgroup(format!("Failed to set cpu.cfs_quota_us: {}", e)))?;
 
         log::info!("Set CFS bandwidth: period=100000us, quota=100000us (1 CPU core cap)");
@@ -679,7 +599,6 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
     }
 
     fn get_cpu_usage(&self) -> Result<u64> {
-        // Convert seconds to microseconds
         self.get_cpu_usage().map(|secs| (secs * 1_000_000.0) as u64)
     }
 
@@ -739,7 +658,6 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
         let cpu_usage = self.get_cpu_usage()?;
         let process_count = self.get_process_count().ok();
 
-        // Get process limit
         let process_limit = if let Some(pids_path) = self.cgroup_paths.get("pids") {
             let max_file = pids_path.join("pids.max");
             fs::read_to_string(&max_file)
@@ -761,7 +679,6 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
     }
 
     fn get_cgroup_path(&self, _instance_id: &str) -> PathBuf {
-        // Return memory controller path as representative
         self.cgroup_paths
             .get("memory")
             .cloned()
@@ -769,7 +686,6 @@ impl crate::kernel::cgroup::backend::CgroupBackend for Cgroup {
     }
 
     fn is_empty(&self) -> Result<bool> {
-        let count = self.get_process_count()?;
-        Ok(count == 0)
+        Ok(self.get_process_count()? == 0)
     }
 }
