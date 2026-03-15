@@ -26,6 +26,15 @@ from pathlib import Path
 ROOT = Path(__file__).parent.resolve()
 WEB_DIR = ROOT / "web"
 
+# Dev-only defaults (never used in production — docker-compose requires env vars)
+DEV_DEFAULTS = {
+    "POSTGRES_DB": "rustbox",
+    "POSTGRES_USER": "rustbox",
+    "POSTGRES_PASSWORD": "rustbox_dev",
+    "REDIS_PASSWORD": "rustbox_dev",
+    "RUSTBOX_API_KEY": "",
+}
+
 # Colors
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -39,6 +48,30 @@ def log(msg, color=GREEN):
 
 def err(msg):
     print(f"{RED}{BOLD}!!! {msg}{RESET}")
+
+def dev_env():
+    """Return env dict with dev defaults applied (only if not already set)."""
+    env = {**os.environ}
+    for key, default in DEV_DEFAULTS.items():
+        if key not in env:
+            env[key] = default
+    return env
+
+def backend_env():
+    """Return env dict for running judge-service locally."""
+    env = dev_env()
+    db_user = env["POSTGRES_USER"]
+    db_pass = env["POSTGRES_PASSWORD"]
+    db_name = env["POSTGRES_DB"]
+    redis_pass = env["REDIS_PASSWORD"]
+    return {
+        "RUSTBOX_DATABASE_URL": f"postgres://{db_user}:{db_pass}@localhost:5433/{db_name}",
+        "RUSTBOX_REDIS_URL": f"redis://:{redis_pass}@127.0.0.1:6379",
+        "RUSTBOX_PORT": "8080",
+        "RUSTBOX_WORKERS": env.get("RUSTBOX_WORKERS", "2"),
+        "RUST_LOG": env.get("RUST_LOG", "info"),
+        "RUSTBOX_API_KEY": env.get("RUSTBOX_API_KEY", ""),
+    }
 
 def run(cmd, cwd=None, check=True, capture=False, env=None):
     """Run a command, printing it first."""
@@ -63,12 +96,13 @@ def check_tool(name):
 def cmd_infra():
     """Start Postgres + Redis via docker compose."""
     log("Starting Postgres + Redis...")
-    run("docker compose up -d postgres redis")
+    env = dev_env()
+    run("docker compose up -d postgres redis", env=env)
     log("Waiting for services to be healthy...")
     for _ in range(30):
         result = run(
             "docker compose ps --format json",
-            capture=True, check=False,
+            capture=True, check=False, env=env,
         )
         if result.returncode != 0:
             time.sleep(1)
@@ -120,26 +154,22 @@ def cmd_backend():
     log("Starting judge-service on :8080 ...")
     log("  (Ctrl+C to stop)", YELLOW)
 
-    env = {
-        "RUSTBOX_DATABASE_URL": "postgres://rustbox:rustbox@localhost:5433/rustbox",
-        "RUSTBOX_REDIS_URL": "redis://127.0.0.1:6379",
-        "RUSTBOX_PORT": "8080",
-        "RUSTBOX_WORKERS": os.environ.get("RUSTBOX_WORKERS", "2"),
-        "RUST_LOG": os.environ.get("RUST_LOG", "info"),
-    }
+    be_env = backend_env()
 
     euid = os.geteuid() if hasattr(os, "geteuid") else 1
-    cmd = str(binary)
     if euid != 0:
         log("Not root — running with sudo (sandbox needs root)", YELLOW)
-        env_args = " ".join(f"{k}={v}" for k, v in env.items())
+        env_args = " ".join(f"{k}={v}" for k, v in be_env.items())
         cmd = f"sudo {env_args} {binary}"
-        env = None  # sudo handles env
-
-    try:
-        run(cmd, env=env)
-    except KeyboardInterrupt:
-        log("judge-service stopped.")
+        try:
+            run(cmd)
+        except KeyboardInterrupt:
+            log("judge-service stopped.")
+    else:
+        try:
+            run(str(binary), env={**os.environ, **be_env})
+        except KeyboardInterrupt:
+            log("judge-service stopped.")
 
 
 def cmd_frontend():
@@ -174,33 +204,18 @@ def cmd_up():
             log("Building judge-service...", YELLOW)
             run("cargo build -p judge-service")
 
-        backend_env = {
-            **os.environ,
-            "RUSTBOX_DATABASE_URL": "postgres://rustbox:rustbox@localhost:5433/rustbox",
-            "RUSTBOX_REDIS_URL": "redis://127.0.0.1:6379",
-            "RUSTBOX_PORT": "8080",
-            "RUSTBOX_WORKERS": os.environ.get("RUSTBOX_WORKERS", "2"),
-            "RUST_LOG": os.environ.get("RUST_LOG", "info"),
-        }
+        be_env = backend_env()
 
         euid = os.geteuid() if hasattr(os, "geteuid") else 1
         if euid != 0:
-            env_args = " ".join(
-                f"{k}={v}" for k, v in {
-                    "RUSTBOX_DATABASE_URL": "postgres://rustbox:rustbox@localhost:5433/rustbox",
-                    "RUSTBOX_REDIS_URL": "redis://127.0.0.1:6379",
-                    "RUSTBOX_PORT": "8080",
-                    "RUSTBOX_WORKERS": os.environ.get("RUSTBOX_WORKERS", "2"),
-                    "RUST_LOG": os.environ.get("RUST_LOG", "info"),
-                }.items()
-            )
+            env_args = " ".join(f"{k}={v}" for k, v in be_env.items())
             backend_cmd = f"sudo {env_args} {binary}"
             backend_proc = subprocess.Popen(
                 backend_cmd, shell=True, cwd=str(ROOT),
             )
         else:
             backend_proc = subprocess.Popen(
-                [str(binary)], cwd=str(ROOT), env=backend_env,
+                [str(binary)], cwd=str(ROOT), env={**os.environ, **be_env},
             )
         procs.append(("backend", backend_proc))
 
@@ -237,15 +252,18 @@ def cmd_up():
 def cmd_down():
     """Stop all Docker containers."""
     log("Stopping Docker containers...")
-    run("docker compose down")
+    run("docker compose down", env=dev_env())
     log("Done.")
 
 
 def cmd_status():
     """Show status of all components."""
     log("Docker containers:")
-    run("docker compose ps", check=False)
+    run("docker compose ps", check=False, env=dev_env())
     print()
+
+    api_key = os.environ.get("RUSTBOX_API_KEY", DEV_DEFAULTS["RUSTBOX_API_KEY"])
+    key_header = f"-H 'x-api-key: {api_key}'" if api_key else ""
 
     # Check backend
     result = run(
@@ -286,11 +304,15 @@ def cmd_test():
 
 def cmd_curl():
     """Quick smoke test via curl."""
+    api_key = os.environ.get("RUSTBOX_API_KEY", DEV_DEFAULTS["RUSTBOX_API_KEY"])
+    key_header = f"-H 'x-api-key: {api_key}'" if api_key else ""
+
     log("Submitting Python hello world...")
     result = run(
-        """curl -s -X POST http://localhost:8080/api/submit \
+        f"""curl -s -X POST http://localhost:8080/api/submit \
            -H 'Content-Type: application/json' \
-           -d '{"language":"python","code":"print(42)","stdin":""}'""",
+           {key_header} \
+           -d '{{"language":"python","code":"print(42)","stdin":""}}'""",
         capture=True, check=False,
     )
     if result.returncode != 0 or not result.stdout:
@@ -309,7 +331,7 @@ def cmd_curl():
     for i in range(30):
         time.sleep(0.5)
         result = run(
-            f"curl -s http://localhost:8080/api/result/{job_id}",
+            f"curl -s {key_header} http://localhost:8080/api/result/{job_id}",
             capture=True, check=False,
         )
         if result.returncode != 0:
