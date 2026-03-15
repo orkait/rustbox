@@ -1,5 +1,8 @@
 use crate::config::types::{IsolateError, Result};
 use crate::core::types::ExecutionProfile;
+use crate::utils::fork_safe_log::{
+    fs_debug, fs_info_parts, fs_warn, fs_warn_parts, itoa_buf, itoa_i32,
+};
 /// Pre-Exec Ordering Enforcement
 /// Implements P1-ORDER-001: Locked Pre-Exec Ordering Enforcement
 /// Per plan.md Section 6: Locked Pre-Exec Sequence
@@ -16,7 +19,7 @@ use crate::core::types::ExecutionProfile;
 /// 9. setresgid then setresuid
 /// 10. prctl(PR_SET_NO_NEW_PRIVS, 1)
 /// 11. exec payload
-use crate::kernel::capabilities::{self, drop_all_capabilities, set_no_new_privs, check_no_new_privs};
+use crate::kernel::capabilities::{self, check_no_new_privs, set_no_new_privs};
 use crate::kernel::credentials::transition_to_unprivileged;
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -48,13 +51,16 @@ fn apply_rlimit_value(
             name, soft, hard, err
         )))
     } else {
-        log::warn!(
-            "Failed to apply {}={} (hard={}) in permissive mode: {}",
-            name,
-            soft,
-            hard,
-            err
-        );
+        let mut sbuf = [0u8; 20];
+        let mut hbuf = [0u8; 20];
+        let mut ebuf = [0u8; 20];
+        let soft_s = itoa_buf(soft, &mut sbuf);
+        let hard_s = itoa_buf(hard, &mut hbuf);
+        let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
+        fs_warn_parts(&[
+            "Failed to apply ", name, "=", soft_s, " (hard=", hard_s,
+            ") in permissive mode: errno=", eno,
+        ]);
         Ok(())
     }
 }
@@ -70,7 +76,9 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
                 err
             )));
         }
-        log::warn!("clearenv failed in permissive mode: {}", err);
+        let mut ebuf = [0u8; 20];
+        let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
+        fs_warn_parts(&["clearenv failed in permissive mode: errno=", eno]);
     }
 
     for (key, value) in env_map {
@@ -83,10 +91,9 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
                 )));
             }
             Err(_) => {
-                log::warn!(
-                    "Skipping environment key with NUL byte in permissive mode: {}",
-                    key
-                );
+                fs_warn_parts(&[
+                    "Skipping environment key with NUL byte in permissive mode: ", key,
+                ]);
                 continue;
             }
         };
@@ -100,10 +107,9 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
                 )));
             }
             Err(_) => {
-                log::warn!(
-                    "Skipping environment value with NUL byte in permissive mode: {}",
-                    key
-                );
+                fs_warn_parts(&[
+                    "Skipping environment value with NUL byte in permissive mode: ", key,
+                ]);
                 continue;
             }
         };
@@ -117,7 +123,9 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
                     key, err
                 )));
             }
-            log::warn!("setenv failed for {} in permissive mode: {}", key, err);
+            let mut ebuf = [0u8; 20];
+            let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
+            fs_warn_parts(&["setenv failed for ", key, " in permissive mode: errno=", eno]);
         }
     }
 
@@ -143,13 +151,13 @@ pub fn setup_parent_death_signal() -> Result<()> {
             IsolateError::Process(format!("Failed to set parent death signal: {}", e))
         })?;
 
-        log::debug!("Parent death signal (SIGKILL) configured");
+        fs_debug("Parent death signal (SIGKILL) configured");
         Ok(())
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        log::warn!("Parent death signal not supported on this platform");
+        fs_warn("Parent death signal not supported on this platform");
         Ok(())
     }
 }
@@ -236,7 +244,9 @@ impl Sandbox<FreshChild> {
                 if self.strict_mode {
                     return Err(IsolateError::Process(format!("setsid failed: {}", err)));
                 }
-                log::warn!("setsid failed in permissive mode: {}", err);
+                let mut ebuf = [0u8; 20];
+                let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
+                fs_warn_parts(&["setsid failed in permissive mode: errno=", eno]);
             }
         }
 
@@ -257,12 +267,27 @@ impl Sandbox<FreshChild> {
                 if self.strict_mode {
                     return Err(e);
                 }
-                log::warn!("Namespace isolation failed in permissive mode: {}", e);
+                // e is IsolateError — log a static diagnostic; the error detail
+                // was already constructed by apply_isolation and can't be
+                // formatted without allocation post-fork.
+                fs_warn_parts(&["Namespace isolation failed in permissive mode"]);
             } else {
-                log::info!(
-                    "Applied namespace isolation: {:?}",
-                    ns_isolation.get_enabled_namespaces()
-                );
+                // Log each enabled namespace as a separate segment.
+                let ns_list = ns_isolation.get_enabled_namespaces();
+                let mut parts: [&str; 14] = [""; 14]; // max 6 namespaces * 2 + header + trailer
+                parts[0] = "Applied namespace isolation: [";
+                let mut idx = 1;
+                for (i, ns) in ns_list.iter().enumerate() {
+                    if i > 0 {
+                        parts[idx] = ", ";
+                        idx += 1;
+                    }
+                    parts[idx] = ns;
+                    idx += 1;
+                }
+                parts[idx] = "]";
+                idx += 1;
+                fs_info_parts(&parts[..idx]);
             }
         }
 
@@ -289,14 +314,11 @@ impl Sandbox<NamespacesReady> {
                 if self.strict_mode {
                     return Err(e);
                 } else {
-                    log::warn!(
-                        "Mount propagation hardening failed (permissive mode): {}",
-                        e
-                    );
+                    fs_warn_parts(&["Mount propagation hardening failed (permissive mode)"]);
                 }
             }
         } else {
-            log::debug!("Mount namespace disabled; skipping propagation hardening step");
+            fs_debug("Mount namespace disabled; skipping propagation hardening step");
         }
 
         Ok(Sandbox {
@@ -345,18 +367,20 @@ impl Sandbox<MountsPrivate> {
                         e
                     )));
                 }
-                log::warn!(
-                    "Failed to attach PID {} to cgroup {} (permissive mode): {}",
-                    current_pid,
-                    cgroup_dir.display(),
-                    e
-                );
+                let mut pbuf = [0u8; 20];
+                let pid_s = itoa_buf(current_pid as u64, &mut pbuf);
+                let mut ebuf = [0u8; 20];
+                let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
+                let path_s = path; // already &str from cgroup_path
+                fs_warn_parts(&[
+                    "Failed to attach PID ", pid_s, " to cgroup ", path_s,
+                    " (permissive mode): errno=", eno,
+                ]);
             } else {
-                log::info!(
-                    "Attached PID {} to cgroup {} before exec",
-                    current_pid,
-                    cgroup_dir.display()
-                );
+                let mut pbuf = [0u8; 20];
+                let pid_s = itoa_buf(current_pid as u64, &mut pbuf);
+                let path_s = path; // already &str from cgroup_path
+                fs_info_parts(&["Attached PID ", pid_s, " to cgroup ", path_s, " before exec"]);
             }
         }
 
@@ -377,7 +401,7 @@ impl Sandbox<CgroupAttached> {
         self,
         profile: &ExecutionProfile,
     ) -> Result<Sandbox<CgroupAttached>> {
-        let mut fs_security = crate::kernel::mount::filesystem::FilesystemSecurity::new(
+        let mut fs_security = crate::kernel::mount::FilesystemSecurity::new(
             profile.chroot_dir.clone(),
             profile.workdir.clone(),
             self.strict_mode,
@@ -389,21 +413,21 @@ impl Sandbox<CgroupAttached> {
             if self.strict_mode {
                 return Err(e);
             }
-            log::warn!("Filesystem isolation setup failed (permissive mode): {}", e);
+            fs_warn_parts(&["Filesystem isolation setup failed (permissive mode)"]);
         }
 
         if let Err(e) = fs_security.setup_directory_bindings(&profile.directory_bindings) {
             if self.strict_mode {
                 return Err(e);
             }
-            log::warn!("Directory binding setup failed (permissive mode): {}", e);
+            fs_warn_parts(&["Directory binding setup failed (permissive mode)"]);
         }
 
         if let Err(e) = fs_security.apply_chroot() {
             if self.strict_mode {
                 return Err(e);
             }
-            log::warn!("Root transition failed (permissive mode): {}", e);
+            fs_warn_parts(&["Root transition failed (permissive mode)"]);
         }
 
         Ok(self)
@@ -417,12 +441,16 @@ impl Sandbox<CgroupAttached> {
     ) -> Result<Sandbox<CgroupAttached>> {
         #[cfg(unix)]
         {
-            if let Some(memory_limit) = profile.memory_limit {
+            // RLIMIT_AS (virtual address space) — per-language defense against
+            // mmap(MAP_NORESERVE) VMA exhaustion.  Physical memory is still
+            // enforced via cgroup memory.limit_in_bytes.  Java 17+ gets a
+            // higher limit (4 GB) to accommodate compressed class pointers.
+            if let Some(virtual_mem_limit) = profile.virtual_memory_limit {
                 apply_rlimit_value(
                     "RLIMIT_AS",
                     libc::RLIMIT_AS,
-                    memory_limit,
-                    memory_limit,
+                    virtual_mem_limit,
+                    virtual_mem_limit,
                     self.strict_mode,
                 )?;
             }
@@ -519,6 +547,41 @@ impl Sandbox<CgroupAttached> {
             for (key, value) in &profile.environment {
                 env_map.insert(key.clone(), value.clone());
             }
+
+            // VULN-002 / VULN-014 FIX: Re-sanitize after merging profile.environment.
+            // Profile environment variables from config.json are inserted after the
+            // initial sanitize_environment() call, which means dangerous variables
+            // like LD_PRELOAD can be re-injected via config. Remove all known
+            // dangerous loader and interpreter control variables unconditionally.
+            const DANGEROUS_ENV_BLOCKLIST: &[&str] = &[
+                // LD_* loader hijack variables (VULN-002)
+                "LD_PRELOAD",
+                "LD_LIBRARY_PATH",
+                "LD_AUDIT",
+                "LD_DEBUG",
+                "LD_PROFILE",
+                "LD_BIND_NOW",
+                "LD_BIND_NOT",
+                "LD_DYNAMIC_WEAK",
+                "LD_USE_LOAD_BIAS",
+                // Process-control / interpreter injection variables (VULN-014)
+                "BASH_ENV",
+                "ENV",
+                "CDPATH",
+                "PYTHONSTARTUP",
+                "PERL5OPT",
+                "RUBYOPT",
+                "NODE_OPTIONS",
+            ];
+            for key in DANGEROUS_ENV_BLOCKLIST {
+                if env_map.remove(*key).is_some() {
+                    fs_warn_parts(&[
+                        "Removed dangerous environment variable after profile merge: ",
+                        key,
+                    ]);
+                }
+            }
+
             apply_exec_environment(&env_map, self.strict_mode)?;
 
             // Run payload from configured workspace for deterministic relative-path behavior.
@@ -530,12 +593,18 @@ impl Sandbox<CgroupAttached> {
                         e
                     )));
                 }
-                log::warn!(
-                    "Failed to chdir to workdir {} (permissive mode): {}",
-                    profile.workdir.display(),
-                    e
-                );
+                let mut ebuf = [0u8; 20];
+                let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
+                let wdir = profile.workdir.to_str().unwrap_or("<?>");
+                fs_warn_parts(&[
+                    "Failed to chdir to workdir ", wdir, " (permissive mode): errno=", eno,
+                ]);
             }
+
+            // Step 8 (partial): drop bounding and ambient capability sets while still
+            // effective root. PR_CAPBSET_DROP requires CAP_SETPCAP in the effective set,
+            // which is cleared by setresuid (step 9). Must happen here, not in lock_privileges.
+            capabilities::drop_bounding_and_ambient()?;
         }
 
         Ok(Sandbox {
@@ -559,18 +628,31 @@ impl Sandbox<CgroupAttached> {
         // Per plan.md Section 6: setresgid THEN setresuid
         // Order is critical: groups must be set before dropping to unprivileged user
 
-        if let (Some(uid_val), Some(gid_val)) = (uid, gid) {
-            log::info!("Transitioning to UID={}, GID={}", uid_val, gid_val);
-
-            // Use credentials module for complete transition
-            // This handles: setgroups([]), setresgid, setresuid, verification
-            transition_to_unprivileged(uid_val, gid_val, self.strict_mode)?;
-
-            // Log current IDs for debugging
-            let current_ids = capabilities::get_current_ids();
-            log::info!("After transition: {}", current_ids);
-        } else {
-            log::warn!("UID/GID not specified, skipping credential drop");
+        match (uid, gid) {
+            (Some(uid_val), Some(gid_val)) => {
+                // Use credentials module for complete transition
+                // This handles: setgroups([]), setresgid, setresuid, verification
+                // VULN-001 FIX: credential drop is part of the minimum security floor
+                // and is fatal in ALL modes, not just strict.
+                transition_to_unprivileged(uid_val, gid_val, self.strict_mode)?;
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                // VULN-001 FIX: Partial credential specification is always an error.
+                // If only one of uid/gid is set, the transition is incomplete and
+                // the process would run with mixed privilege levels.
+                return Err(IsolateError::Privilege(
+                    "Incomplete credential specification: both uid and gid must be set, \
+                     or both must be None. Partial credentials would leave mixed privilege levels."
+                        .to_string(),
+                ));
+            }
+            (None, None) => {
+                // VULN-001 FIX: No credentials specified — intentional for permissive/dev mode.
+                // Log a warning so this is visible in audit trails.
+                fs_warn_parts(&[
+                    "No uid/gid specified for credential drop; process retains current credentials",
+                ]);
+            }
         }
 
         Ok(Sandbox {
@@ -587,37 +669,26 @@ impl Sandbox<CredsDropped> {
     /// Transition to PrivsLocked state
     /// This locks down privileges (capabilities + no_new_privs)
     pub fn lock_privileges(self) -> Result<Sandbox<PrivsLocked>> {
-        log::info!("Locking privileges (capabilities + no_new_privs)");
+        // Re-set PR_SET_PDEATHSIG after credential drop.
+        // The kernel clears pdeath_signal whenever EUID/EGID changes (setresuid/setresgid),
+        // so the value set in setup_namespaces is gone by this point.
+        setup_parent_death_signal()?;
 
-        // P15-PRIV-002: Drop all capabilities
-        // Per plan.md Section 6: Drop bounding/ambient/effective/permitted/inheritable caps
-        if self.strict_mode {
-            drop_all_capabilities().map_err(|e| {
-                log::error!("Failed to drop capabilities: {:?}", e);
-                e
-            })?;
-            log::info!("Dropped all capabilities");
-        } else {
-            // Permissive mode: attempt but don't fail
-            if let Err(e) = drop_all_capabilities() {
-                log::warn!("Failed to drop capabilities (permissive mode): {:?}", e);
-            }
-        }
+        capabilities::drop_process_caps_and_verify(self.strict_mode)?;
 
-        // P15-PRIV-001: Set PR_SET_NO_NEW_PRIVS
-        // Per plan.md Section 6: prctl(PR_SET_NO_NEW_PRIVS, 1) is mandatory in strict mode
-        // This prevents privilege escalation after exec
+        // VULN-013 FIX: PR_SET_NO_NEW_PRIVS is part of the minimum security floor.
+        // It prevents privilege escalation via setuid/setgid binaries and must succeed
+        // in ALL modes, not just strict. Without this, an attacker could exec a
+        // setuid binary to regain root even after credential drop.
         set_no_new_privs()?;
-
-        // Verify no_new_privs is set
         let is_set = check_no_new_privs()?;
-        if !is_set && self.strict_mode {
+        if !is_set {
             return Err(IsolateError::Privilege(
-                "PR_SET_NO_NEW_PRIVS verification failed".to_string(),
+                "PR_SET_NO_NEW_PRIVS verification failed — this is fatal in all modes \
+                 as it is the minimum security floor"
+                    .to_string(),
             ));
         }
-
-        log::info!("Privileges locked: no_new_privs={}", is_set);
 
         Ok(Sandbox {
             pid: self.pid,
@@ -659,7 +730,6 @@ impl Sandbox<ExecReady> {
         }
         let cargv_ref: Vec<&std::ffi::CStr> = cargv.iter().map(|c| c.as_c_str()).collect();
 
-        log::info!("Executing payload via execvp: {:?}", command);
         nix::unistd::execvp(cargv[0].as_c_str(), &cargv_ref)
             .map_err(|e| IsolateError::Process(format!("execvp failed: {e}")))?;
         Ok(())
@@ -708,20 +778,30 @@ mod typestate_tests {
     }
 
     #[test]
-    fn test_typestate_prevents_early_exec() {
-        // This test demonstrates that you CANNOT exec from wrong state
-        // The following would not compile:
+    fn test_exec_payload_rejects_empty_command() {
+        // Reach ExecReady with no namespace/privilege ops (all disabled, permissive).
+        let sandbox = Sandbox::<FreshChild>::new("test-003".to_string(), false);
+        let ns = match sandbox.setup_namespaces(false, false, false, false) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let mounts = match ns.harden_mount_propagation() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let cgroup = mounts.attach_to_cgroup(None).expect("cgroup attach");
+        let creds = cgroup.drop_credentials(None, None).expect("drop_credentials");
+        let privs = match creds.lock_privileges() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let ready = privs.ready_for_exec();
 
-        // let sandbox = Sandbox::<FreshChild>::new("test-003".to_string(), false);
-        // sandbox.exec_payload(&["echo".to_string()]); // COMPILE ERROR!
-
-        // let sandbox = sandbox.setup_namespaces(true, true, false, false).unwrap();
-        // sandbox.exec_payload(&["echo".to_string()]); // COMPILE ERROR!
-
-        // Only ExecReady can exec - this is enforced at compile time
-
-        // This test passes by not compiling the above code
-        assert!(true);
+        // exec_payload must reject an empty command before issuing execvp.
+        let result = ready.exec_payload(&[]);
+        assert!(result.is_err(), "exec_payload must reject empty command");
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(msg.contains("Empty"), "expected 'Empty' in error, got: {}", msg);
     }
 
     #[test]

@@ -53,6 +53,9 @@ pub fn validate_config(config: &IsolateConfig) -> Result<ValidationResult> {
     // Validate UID/GID
     validate_credentials(config, &mut result);
 
+    // Validate mode compatibility
+    validate_mode_compatibility(config, &mut result);
+
     // In strict mode, errors are fatal
     if config.strict_mode && !result.is_valid() {
         let error_msg = format!(
@@ -78,12 +81,24 @@ fn validate_limits(config: &IsolateConfig, result: &mut ValidationResult) {
                 memory_limit
             ));
         }
+        if memory_limit > 8 * 1024 * 1024 * 1024 {
+            result.add_warning(format!(
+                "memory_limit {} bytes exceeds recommended maximum of 8GB",
+                memory_limit
+            ));
+        }
     }
 
     // CPU time limit validation
     if let Some(cpu_time) = config.cpu_time_limit {
         if cpu_time.as_secs() == 0 && cpu_time.subsec_millis() == 0 {
             result.add_error("cpu_time_limit cannot be zero".to_string());
+        }
+        if cpu_time.as_secs() > 600 {
+            result.add_warning(format!(
+                "cpu_time_limit {} seconds exceeds recommended maximum of 600 seconds",
+                cpu_time.as_secs()
+            ));
         }
     }
 
@@ -92,12 +107,24 @@ fn validate_limits(config: &IsolateConfig, result: &mut ValidationResult) {
         if wall_time.as_secs() == 0 && wall_time.subsec_millis() == 0 {
             result.add_error("wall_time_limit cannot be zero".to_string());
         }
+        if wall_time.as_secs() > 600 {
+            result.add_warning(format!(
+                "wall_time_limit {} seconds exceeds recommended maximum of 600 seconds",
+                wall_time.as_secs()
+            ));
+        }
     }
 
     // Process limit validation
     if let Some(process_limit) = config.process_limit {
         if process_limit == 0 {
             result.add_error("process_limit cannot be zero".to_string());
+        }
+        if process_limit > 4096 {
+            result.add_warning(format!(
+                "process_limit {} exceeds recommended maximum of 4096",
+                process_limit
+            ));
         }
     }
 
@@ -221,6 +248,15 @@ fn validate_credentials(config: &IsolateConfig, result: &mut ValidationResult) {
                 );
             }
         }
+    }
+}
+
+/// Validate mode compatibility flags
+fn validate_mode_compatibility(config: &IsolateConfig, result: &mut ValidationResult) {
+    if config.strict_mode && config.allow_degraded {
+        result.add_error(
+            "allow_degraded is incompatible with strict mode".to_string(),
+        );
     }
 }
 
@@ -367,11 +403,78 @@ mod tests {
     }
 
     #[test]
+    fn test_allow_degraded_incompatible_with_strict() {
+        let mut config = IsolateConfig::default();
+        config.strict_mode = true;
+        config.allow_degraded = true;
+
+        let result = validate_config(&config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_allow_degraded_ok_in_permissive() {
+        let mut config = IsolateConfig::default();
+        config.strict_mode = false;
+        config.allow_degraded = true;
+
+        let result = validate_config(&config).unwrap();
+        assert!(
+            !result.errors.iter().any(|e| e.contains("allow_degraded")),
+            "allow_degraded should be accepted in permissive mode"
+        );
+    }
+
+    #[test]
+    fn test_upper_bound_memory_warning() {
+        let mut config = IsolateConfig::default();
+        config.memory_limit = Some(16 * 1024 * 1024 * 1024); // 16GB
+        config.strict_mode = false;
+
+        let result = validate_config(&config).unwrap();
+        assert!(result.warnings.iter().any(|w| w.contains("8GB")));
+    }
+
+    #[test]
+    fn test_upper_bound_process_warning() {
+        let mut config = IsolateConfig::default();
+        config.process_limit = Some(10000);
+        config.strict_mode = false;
+
+        let result = validate_config(&config).unwrap();
+        assert!(result.warnings.iter().any(|w| w.contains("4096")));
+    }
+
+    #[test]
+    fn test_upper_bound_time_warning() {
+        let mut config = IsolateConfig::default();
+        config.cpu_time_limit = Some(Duration::from_secs(1000));
+        config.strict_mode = false;
+
+        let result = validate_config(&config).unwrap();
+        assert!(result.warnings.iter().any(|w| w.contains("600 seconds")));
+    }
+
+    #[test]
     fn test_check_system_capabilities() {
         let missing = check_system_capabilities().unwrap();
-        println!("Missing capabilities: {:?}", missing);
 
-        // Should return a list (may be empty on Linux with cgroups)
-        assert!(missing.is_empty() || !missing.is_empty());
+        // If the path exists on this machine it must NOT be reported missing.
+        if Path::new("/sys/fs/cgroup").exists() {
+            assert!(
+                !missing.iter().any(|m| m.contains("cgroups")),
+                "cgroups reported missing but /sys/fs/cgroup exists: {:?}",
+                missing
+            );
+        }
+
+        #[cfg(target_os = "linux")]
+        if Path::new("/proc/self/ns").exists() {
+            assert!(
+                !missing.iter().any(|m| m.contains("namespaces")),
+                "namespaces reported missing but /proc/self/ns exists: {:?}",
+                missing
+            );
+        }
     }
 }

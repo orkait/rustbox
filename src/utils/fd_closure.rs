@@ -6,6 +6,7 @@
 /// - Fallback to iterating /proc/self/fd
 /// - No inherited unexpected FDs in strict mode
 use crate::config::types::{IsolateError, Result};
+use crate::utils::fork_safe_log::{fs_info, fs_info_parts, fs_warn_parts, itoa_buf, itoa_i32};
 use std::fs;
 
 #[cfg(unix)]
@@ -18,7 +19,7 @@ pub fn close_inherited_fds(strict_mode: bool) -> Result<()> {
     {
         // Try close_range first (Linux 5.9+)
         if try_close_range() {
-            log::info!("Closed inherited FDs using close_range");
+            fs_info("Closed inherited FDs using close_range");
             return Ok(());
         }
     }
@@ -32,8 +33,12 @@ pub fn close_inherited_fds(strict_mode: bool) -> Result<()> {
 fn try_close_range() -> bool {
     use std::os::raw::c_int;
 
-    // close_range syscall number on x86_64
+    #[cfg(target_arch = "x86_64")]
     const SYS_CLOSE_RANGE: i64 = 436;
+    #[cfg(target_arch = "aarch64")]
+    const SYS_CLOSE_RANGE: i64 = 436;
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    compile_error!("SYS_CLOSE_RANGE not defined for this architecture");
     const CLOSE_RANGE_UNSHARE: c_int = 1 << 1;
 
     // Close all FDs from 3 onwards (keep 0, 1, 2)
@@ -57,7 +62,9 @@ fn close_fds_via_proc(strict_mode: bool) -> Result<()> {
         if strict_mode {
             return IsolateError::Filesystem(format!("Failed to read {}: {}", fd_dir, e));
         } else {
-            log::warn!("Failed to read {} (permissive mode): {}", fd_dir, e);
+            let mut ebuf = [0u8; 20];
+            let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
+            fs_warn_parts(&["Failed to read ", fd_dir, " (permissive mode): errno ", eno]);
             return IsolateError::Filesystem(format!("Failed to read {}: {}", fd_dir, e));
         }
     })?;
@@ -101,7 +108,9 @@ fn close_fds_via_proc(strict_mode: bool) -> Result<()> {
         )));
     }
 
-    log::info!("Closed {} inherited FDs via /proc/self/fd", closed_count);
+    let mut cbuf = [0u8; 20];
+    let count_str = itoa_buf(closed_count as u64, &mut cbuf);
+    fs_info_parts(&["Closed ", count_str, " inherited FDs via /proc/self/fd"]);
     Ok(())
 }
 

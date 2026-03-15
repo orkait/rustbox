@@ -428,6 +428,8 @@ impl Isolate {
         code: &str,
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
+        // Ensure workdir is initialized before computing source_file path.
+        self.ensure_instance_workdir()?;
         let source_file = self.instance.config.workdir.join("solution.cpp");
         let compile_command = vec![
             "/usr/bin/g++".to_string(),
@@ -450,6 +452,14 @@ impl Isolate {
             true,
             true,
             |config, original_config, runtime_overrides| {
+                // Compilation uses a trusted compiler on untrusted source.
+                // Run in permissive mode so the compiler can access host toolchains.
+                // The compiled binary is executed under the original (strict) config.
+                config.strict_mode = false;
+                // Only allow degraded fallback when non-root (already unprivileged).
+                // When root, the namespace path MUST succeed to ensure UID drop.
+                config.allow_degraded = unsafe { libc::geteuid() } != 0;
+
                 // C++ toolchain can fan out many helper processes/threads (cc1plus/as/ld).
                 // Keep compile phase process headroom well above runtime defaults.
                 config.process_limit = Some(120);
@@ -491,6 +501,8 @@ impl Isolate {
         code: &str,
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
+        // Ensure workdir is initialized before computing source_file path.
+        self.ensure_instance_workdir()?;
         // Extract class name from code (simple heuristic)
         let class_name = self
             .extract_java_class_name(code)
@@ -502,6 +514,7 @@ impl Isolate {
             .join(format!("{}.java", class_name));
         let compile_command = vec![
             "javac".to_string(),
+            "-proc:none".to_string(), // disable annotation processing
             "-cp".to_string(),
             ".".to_string(),
             format!("{}.java", class_name),
@@ -521,9 +534,17 @@ impl Isolate {
             overrides,
             "Java Compilation Error",
             "Java compilation failed",
-            false,
-            false,
+            true,
+            true,
             |config, original_config, runtime_overrides| {
+                // Compilation uses a trusted compiler on untrusted source.
+                // Run in permissive mode so javac can access host JVM paths.
+                // The compiled class is executed under the original (strict) config.
+                config.strict_mode = false;
+                // Only allow degraded fallback when non-root (already unprivileged).
+                // When root, the namespace path MUST succeed to ensure UID drop.
+                config.allow_degraded = unsafe { libc::geteuid() } != 0;
+
                 // Increase resource limits for JVM
                 if let Some(memory) = runtime_overrides.max_memory {
                     config.memory_limit = Some(memory * 1024 * 1024);
@@ -537,7 +558,29 @@ impl Isolate {
                     .process_limit
                     .or(original_config.process_limit)
                     .unwrap_or(16);
-                config.process_limit = Some(requested_process_limit.max(256));
+                config.process_limit = Some(requested_process_limit.max(1024));
+
+                // JVM startup is slow; give compilation generous time limits.
+                let original_cpu_secs = original_config
+                    .cpu_time_limit
+                    .map(|d| d.as_secs())
+                    .unwrap_or(8);
+                let original_wall_secs = original_config
+                    .wall_time_limit
+                    .map(|d| d.as_secs())
+                    .unwrap_or(10);
+                let compile_cpu_secs = runtime_overrides
+                    .max_cpu
+                    .or(runtime_overrides.max_time)
+                    .unwrap_or(original_cpu_secs)
+                    .max(15);
+                let compile_wall_secs = runtime_overrides
+                    .max_wall_time
+                    .unwrap_or(original_wall_secs)
+                    .max(30);
+                config.cpu_time_limit = Some(Duration::from_secs(compile_cpu_secs));
+                config.time_limit = Some(Duration::from_secs(compile_cpu_secs));
+                config.wall_time_limit = Some(Duration::from_secs(compile_wall_secs));
             },
         )
     }
@@ -551,7 +594,12 @@ impl Isolate {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 3 {
                     let class_name = parts[2].trim_end_matches('{').trim();
-                    return Some(class_name.to_string());
+                    // Sanitize: only allow Java identifier characters (alphanumeric + underscore)
+                    // to prevent path traversal via crafted class names like "../../../tmp/evil"
+                    if class_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        return Some(class_name.to_string());
+                    }
+                    return None; // reject names with path separators, dots, etc.
                 }
             }
         }

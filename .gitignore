@@ -110,6 +110,7 @@ forge.yaml
 .tmp/*
 .quirks/*
 .github/*
+.agents/*
 
 
 CLAUDE.md

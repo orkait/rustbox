@@ -2,11 +2,29 @@
 /// Implements P1-HYGIENE-001: Environment and Permission Hygiene
 /// Per plan.md Section 12: Output, FD, and Environment Hygiene
 use crate::config::types::{IsolateError, Result};
+use crate::utils::fork_safe_log::{fs_info_parts, fs_warn_parts, itoa_i32};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+
+/// Format a `u32` as octal into a stack-allocated buffer without heap allocation.
+#[inline]
+fn octal_buf(value: u32, buf: &mut [u8; 12]) -> &str {
+    if value == 0 {
+        buf[11] = b'0';
+        return unsafe { core::str::from_utf8_unchecked(&buf[11..]) };
+    }
+    let mut i = 12;
+    let mut v = value;
+    while v > 0 {
+        i -= 1;
+        buf[i] = b'0' + (v % 8) as u8;
+        v /= 8;
+    }
+    unsafe { core::str::from_utf8_unchecked(&buf[i..]) }
+}
 
 /// Environment sanitization policy
 #[derive(Debug, Clone)]
@@ -102,7 +120,7 @@ impl EnvHygiene {
 
             for var in ld_vars {
                 if env_map.remove(var).is_some() {
-                    log::info!("Removed dangerous environment variable: {}", var);
+                    fs_info_parts(&["Removed dangerous environment variable: ", var]);
                 }
             }
         }
@@ -147,7 +165,9 @@ impl EnvHygiene {
             })?;
 
             umask(mode);
-            log::info!("Applied umask: {:o}", self.perm_policy.umask);
+            let mut obuf = [0u8; 12];
+            let ostr = octal_buf(self.perm_policy.umask, &mut obuf);
+            fs_info_parts(&["Applied umask: ", ostr]);
         }
 
         Ok(())
@@ -162,10 +182,10 @@ impl EnvHygiene {
                     path.display()
                 )));
             } else {
-                log::warn!(
-                    "Directory does not exist (permissive mode): {}",
-                    path.display()
-                );
+                fs_warn_parts(&[
+                    "Directory does not exist (permissive mode): ",
+                    path.to_str().unwrap_or("<?>"),
+                ]);
                 return Ok(());
             }
         }
@@ -186,7 +206,9 @@ impl EnvHygiene {
                     e
                 ))
             } else {
-                log::warn!("Failed to set permissions (permissive mode): {}", e);
+                let mut ebuf = [0u8; 20];
+                let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
+                fs_warn_parts(&["Failed to set permissions (permissive mode): errno ", eno]);
                 IsolateError::Filesystem(format!(
                     "Failed to set permissions on {}: {}",
                     path.display(),
@@ -195,7 +217,10 @@ impl EnvHygiene {
             }
         })?;
 
-        log::info!("Set permissions {:o} on {}", perms, path.display());
+        let mut obuf = [0u8; 12];
+        let ostr = octal_buf(perms, &mut obuf);
+        fs_info_parts(&["Set permissions ", ostr, " on ", path.to_str().unwrap_or("<?>")]);
+
         Ok(())
     }
 

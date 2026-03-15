@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "judge-service"]
+resolver = "2"
+
 [package]
 name = "rustbox"
 version = "0.1.0"

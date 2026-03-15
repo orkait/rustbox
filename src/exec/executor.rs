@@ -2,7 +2,7 @@ use crate::config::types::{ExecutionResult, IsolateConfig, IsolateError, Result}
 use crate::config::validator::validate_config;
 use crate::core::types::{LaunchEvidence, SandboxLaunchRequest};
 /// Process execution and monitoring with reliable resource limits
-use crate::kernel::cgroup::backend::{self, CgroupBackend};
+use crate::kernel::cgroup::{self, CgroupBackend};
 use crate::observability::audit::events;
 use crate::runtime::security::command_validation;
 use crate::safety::cleanup::BaselineChecker;
@@ -34,13 +34,7 @@ impl ProcessExecutor {
             log::warn!("Configuration warning: {}", warning);
         }
 
-        // Capture host-clean baseline before creating execution-time resources.
-        let (baseline_checker, baseline_capture_error) = match BaselineChecker::capture_baseline() {
-            Ok(checker) => (Some(checker), None),
-            Err(err) => (None, Some(err.to_string())),
-        };
-
-        let cgroup = match backend::create_cgroup_backend(
+        let cgroup = match cgroup::create_cgroup_backend(
             config.force_cgroup_v1,
             config.strict_mode,
             &config.instance_id,
@@ -71,6 +65,14 @@ impl ProcessExecutor {
             }
         };
 
+        // Capture baseline AFTER cgroup setup so the parent cgroup directories
+        // created by this executor are included in the baseline and won't appear
+        // as violations in verify_baseline() after cleanup.
+        let (baseline_checker, baseline_capture_error) = match BaselineChecker::capture_baseline() {
+            Ok(checker) => (Some(checker), None),
+            Err(err) => (None, Some(err.to_string())),
+        };
+
         Ok(Self {
             config,
             cgroup,
@@ -93,8 +95,10 @@ impl ProcessExecutor {
                 cgroup.set_process_limit(&self.config.instance_id, process_limit)?;
             }
 
-            // Set CPU shares
-            cgroup.set_cpu_limit(&self.config.instance_id, 1024)?;
+            // Note: CPU time enforcement uses RLIMIT_CPU (set in preexec)
+            // and cgroup CPU-usage watchdog (supervisor polling).
+            // Do NOT set CFS quota here — set_cpu_limit(1024) would throttle
+            // the process to ~1% CPU, starving JVM startup.
 
             // Validate that resource monitoring is working
             self.validate_resource_monitoring()?;

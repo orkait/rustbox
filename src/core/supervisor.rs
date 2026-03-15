@@ -6,7 +6,7 @@ use crate::core::proxy::{read_proxy_status_from_fd, run_proxy_main_from_fds, wri
 use crate::core::types::{
     KillReport, LaunchEvidence, ProxyStatus, SandboxLaunchOutcome, SandboxLaunchRequest,
 };
-use crate::kernel::cgroup::backend::CgroupBackend;
+use crate::kernel::cgroup::CgroupBackend;
 use nix::sched::{clone, CloneFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, pipe, Pid};
@@ -346,11 +346,32 @@ pub fn launch_with_supervisor(
         ));
     }
 
+    // Check for signals before sending launch request.
+    if !crate::kernel::signal::should_continue() {
+        let _ = terminate_proxy_group(proxy_pid);
+        let _ = waitpid(proxy_pid, None);
+        let _ = close(launch_write);
+        let _ = close(status_read);
+        return Err(IsolateError::Process(
+            "interrupted by signal before launch".to_string(),
+        ));
+    }
+
     if let Err(err) = write_request_to_fd(launch_write, &req) {
         let _ = terminate_proxy_group(proxy_pid);
         let _ = waitpid(proxy_pid, None);
         let _ = close(status_read);
         return Err(err);
+    }
+
+    // Check for signals before entering wait loop.
+    if !crate::kernel::signal::should_continue() {
+        let _ = terminate_proxy_group(proxy_pid);
+        let _ = waitpid(proxy_pid, None);
+        let _ = close(status_read);
+        return Err(IsolateError::Process(
+            "interrupted by signal before wait loop".to_string(),
+        ));
     }
 
     let wall_limit = req
@@ -560,10 +581,44 @@ fn launch_degraded(
             Stdio::piped()
         } else {
             Stdio::null()
-        });
+        })
+        .current_dir(&req.profile.workdir);
 
+    cmd.env_clear();
     for (key, value) in &req.profile.environment {
         cmd.env(key, value);
+    }
+
+    // Drop privileges in degraded mode before exec (only when running as root).
+    // Non-root callers are already unprivileged and cannot setresuid.
+    if unsafe { libc::geteuid() } == 0 {
+        if let (Some(uid), Some(gid)) = (req.profile.uid, req.profile.gid) {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.pre_exec(move || {
+                    // Clear supplementary groups before dropping to target uid/gid.
+                    if libc::setgroups(0, std::ptr::null()) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::setresgid(gid, gid, gid) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::setresuid(uid, uid, uid) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // Prevent privilege escalation via setuid binaries.
+                    if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // Drop all capability bounding set bits.
+                    for cap in 0..=40 {
+                        // Ignore errors: some capability numbers may not exist on this kernel.
+                        let _ = libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0);
+                    }
+                    Ok(())
+                });
+            }
+        }
     }
 
     let mut child = cmd
@@ -581,6 +636,7 @@ fn launch_degraded(
     let mut timed_out = false;
     let mut interrupted_by_signal = false;
     let mut interrupt_signal = None;
+    let mut early_exit = false;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -588,13 +644,11 @@ fn launch_degraded(
                 if !crate::kernel::signal::should_continue() {
                     interrupted_by_signal = true;
                     interrupt_signal = Some(crate::kernel::signal::received_signal());
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    early_exit = true;
                     break;
                 } else if started.elapsed() > wall_limit {
                     timed_out = true;
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    early_exit = true;
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(10));
@@ -603,17 +657,35 @@ fn launch_degraded(
         }
     }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|e| IsolateError::Process(format!("output(degraded): {}", e)));
-
-    let (exit_code, stdout, stderr) = match output {
-        Ok(out) => (
-            out.status.code(),
-            String::from_utf8_lossy(&out.stdout).to_string(),
-            String::from_utf8_lossy(&out.stderr).to_string(),
-        ),
-        Err(_) => (None, String::new(), String::new()),
+    let (exit_code, stdout, stderr) = if early_exit {
+        // Kill first so the child closes its pipe ends, then read output.
+        let _ = child.kill();
+        use std::io::Read;
+        let stdout_data = child.stdout.take().map(|mut o| {
+            let mut s = String::new();
+            let _ = o.read_to_string(&mut s);
+            s
+        }).unwrap_or_default();
+        let stderr_data = child.stderr.take().map(|mut o| {
+            let mut s = String::new();
+            let _ = o.read_to_string(&mut s);
+            s
+        }).unwrap_or_default();
+        let exit_status = child.wait().ok().and_then(|s| s.code());
+        (exit_status, stdout_data, stderr_data)
+    } else {
+        // Normal exit: wait_with_output() is safe since we haven't called wait() yet.
+        let output = child
+            .wait_with_output()
+            .map_err(|e| IsolateError::Process(format!("output(degraded): {}", e)));
+        match output {
+            Ok(out) => (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stdout).to_string(),
+                String::from_utf8_lossy(&out.stderr).to_string(),
+            ),
+            Err(_) => (None, String::new(), String::new()),
+        }
     };
 
     let status = ProxyStatus {

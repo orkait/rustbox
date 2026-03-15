@@ -1,7 +1,7 @@
 use crate::config::types::{IsolateError, OutputIntegrity, Result};
 use crate::core::types::{ProxyStatus, SandboxLaunchRequest};
-use crate::exec::preexec::{FreshChild, Sandbox};
 use nix::errno::Errno;
+use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execvp, fork, setpgid, ForkResult, Pid};
 use serde::de::DeserializeOwned;
@@ -84,22 +84,7 @@ fn read_fd_async(fd: RawFd, limit: usize) -> thread::JoinHandle<(Vec<u8>, Output
 }
 
 fn exec_payload_with_typestate(req: &SandboxLaunchRequest) -> Result<()> {
-    let sandbox = Sandbox::<FreshChild>::new(req.instance_id.clone(), req.profile.strict_mode);
-    let sandbox = sandbox.setup_namespaces(
-        false, // proxy is already PID 1 in sandbox pid namespace
-        req.profile.enable_mount_namespace,
-        req.profile.enable_network_namespace,
-        req.profile.enable_user_namespace,
-    )?;
-    let sandbox = sandbox.harden_mount_propagation()?;
-    let cgroup_attach = req.cgroup_attach_path.as_ref().and_then(|p| p.to_str());
-    let sandbox = sandbox.attach_to_cgroup(cgroup_attach)?;
-    let sandbox = sandbox.setup_mounts_and_root(&req.profile)?;
-    let sandbox = sandbox.apply_runtime_hygiene(&req.profile)?;
-    let sandbox = sandbox.drop_credentials(req.profile.uid, req.profile.gid)?;
-    let sandbox = sandbox.lock_privileges()?;
-    let sandbox = sandbox.ready_for_exec();
-    sandbox.exec_payload(&req.profile.command)
+    crate::kernel::exec_payload(req)
 }
 
 fn wait_for_payload_and_reap(payload_pid: Pid) -> Result<(Option<i32>, Option<i32>, u32)> {
@@ -243,6 +228,9 @@ fn run_proxy(req: SandboxLaunchRequest) -> Result<ProxyStatus> {
 
 /// Child entrypoint executed by clone()-created proxy process.
 pub fn run_proxy_main_from_fds(launch_fd: RawFd, status_fd: RawFd) -> ! {
+    // Set CLOEXEC on status_write to prevent leak into payload child
+    let _ = fcntl(status_fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC));
+
     let outcome = match read_json_from_fd::<SandboxLaunchRequest>(launch_fd).and_then(run_proxy) {
         Ok(status) => status,
         Err(err) => ProxyStatus {

@@ -88,7 +88,7 @@ enum Commands {
         /// Maximum number of processes
         #[arg(long)]
         processes: Option<u32>,
-        /// Force cgroup v1 backend (overrides default v2-preferred selection)
+        /// Force cgroup v1 backend when required by host cgroup layout
         #[arg(long = "cgroup-v1")]
         cgroup_v1: bool,
         /// Directory bindings (format: source=target:options)
@@ -126,7 +126,7 @@ enum Commands {
         /// Maximum number of processes
         #[arg(long)]
         processes: Option<u32>,
-        /// Force cgroup v1 backend (overrides default v2-preferred selection)
+        /// Force cgroup v1 backend when required by host cgroup layout
         #[arg(long = "cgroup-v1")]
         cgroup_v1: bool,
         /// Strict mode: require root privileges and fail if security features unavailable
@@ -426,14 +426,13 @@ pub fn run(mode: CliMode) -> Result<()> {
             if let Some(processes) = processes {
                 eprintln!("Process limit: {}", processes);
             }
-            if cgroup_v1 {
-                eprintln!("Cgroup backend override: forcing cgroup v1");
-            }
-
             let instance_id = format!("rustbox/{}", box_id);
             let mut isolate = crate::runtime::isolate::Isolate::load(&instance_id)?
                 .ok_or_else(|| anyhow::anyhow!("Sandbox {} not found. Run init first.", box_id))?;
             isolate.config_mut().force_cgroup_v1 = cgroup_v1;
+            if cgroup_v1 {
+                eprintln!("⚙️  Forcing cgroup v1 backend (--cgroup-v1)");
+            }
 
             // Acquire lock for exclusive execution to prevent concurrent access
             if let Err(e) = isolate.acquire_execution_lock() {
@@ -630,6 +629,9 @@ pub fn run(mode: CliMode) -> Result<()> {
             )?;
             config.strict_mode = strict; // Use user-specified strict mode
             config.force_cgroup_v1 = cgroup_v1;
+            if cgroup_v1 {
+                eprintln!("⚙️  Forcing cgroup v1 backend (--cgroup-v1)");
+            }
 
             // Apply CLI overrides if specified (these override config.json values)
             if let Some(mem) = mem {
@@ -648,10 +650,6 @@ pub fn run(mode: CliMode) -> Result<()> {
                 config.allow_degraded = true;
                 eprintln!("⚠️  CLI Override - Allow degraded fallback: ENABLED (unsafe for untrusted code)");
             }
-            if cgroup_v1 {
-                eprintln!("🔧 CLI Override - Cgroup backend: forced v1");
-            }
-
             let mut isolate = crate::runtime::isolate::Isolate::new(config)?;
 
             // Keep execution+reporting result separate so isolate cleanup always runs,
@@ -809,11 +807,11 @@ fn emit_judge_json(
 /// and properly configured on the host system.
 fn perform_security_checks() {
     // Check cgroups availability for resource control
-    match crate::kernel::cgroup::backend::detect_cgroup_backend() {
+    match crate::kernel::cgroup::detect_cgroup_backend() {
         Some(backend) => {
             eprintln!(
                 "✅ {} available - resource limits enabled",
-                crate::kernel::cgroup::backend::backend_type_name(backend)
+                crate::kernel::cgroup::backend_type_name(backend)
             );
         }
         None => {

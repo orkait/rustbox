@@ -1,9 +1,9 @@
 {
 	"isolate": {
-		"box_dir": "/isolate/box",
-		"run_dir": "/isolate/run",
-		"user": "rustbox",
-		"group": "rustbox",
+		"box_dir": "/tmp/rustbox",
+		"run_dir": "/var/run/rustbox",
+		"user": "sandbox",
+		"group": "sandbox",
 		"preserve_env": ["PATH", "HOME", "USER"]
 	},
 	"security": {
@@ -42,8 +42,8 @@
 				"enabled": false,
 				"compiler": "",
 				"compiler_args": [],
-				"max_compilation_time": -1,
-				"max_compilation_memory_mb": -1
+				"max_compilation_time": null,
+				"max_compilation_memory_mb": null
 			}
 		},
 		"java": {
@@ -56,7 +56,7 @@
 				"wall_time_seconds": 10
 			},
 			"processes": {
-				"max_processes": 256,
+				"max_processes": 1024,
 				"max_threads": 32,
 				"max_forks": 0
 			},
@@ -102,13 +102,13 @@
 			},
 				"environment": {
 					"PATH": "/usr/bin:/bin",
-					"CFLAGS": "-O2 -static -std=c++17",
-				"CXXFLAGS": "-O2 -static -std=c++17"
+					"CFLAGS": "-O2 -std=c++17",
+				"CXXFLAGS": "-O2 -std=c++17"
 			},
 			"compilation": {
 				"enabled": true,
 				"compiler": "g++",
-				"compiler_args": ["-O2", "-static", "-std=c++17", "-o", "{output}", "{source}"],
+				"compiler_args": ["-O2", "-std=c++17", "-o", "{output}", "{source}"],
 				"max_compilation_time": 4,
 				"max_compilation_memory_mb": 256
 			}

@@ -1,7 +1,7 @@
 //! Process isolation via Linux namespaces.
 
 use crate::config::types::{IsolateError, Result};
-use nix::sched::{unshare, CloneFlags};
+use nix::sched::{CloneFlags, unshare};
 use nix::unistd::sethostname;
 
 #[derive(Debug, Clone)]
@@ -37,7 +37,6 @@ impl NamespaceIsolation {
         }
     }
 
-    /// All namespaces enabled except user.
     pub fn new_default() -> Self {
         Self::new(true, true, true, false, true, true)
     }
@@ -46,10 +45,8 @@ impl NamespaceIsolation {
         std::fs::read_dir("/proc/self/ns").is_ok()
     }
 
-    /// Apply namespace isolation via unshare(2). Must be called before fork.
     pub fn apply_isolation(&self) -> Result<()> {
         let mut flags = CloneFlags::empty();
-
         if self.enable_pid_namespace {
             flags |= CloneFlags::CLONE_NEWPID;
         }
@@ -75,19 +72,11 @@ impl NamespaceIsolation {
             })?;
 
             if self.enable_uts_namespace {
-                if let Err(e) = sethostname("rustbox-sandbox") {
-                    log::warn!("Failed to set hostname in UTS namespace: {}", e);
-                }
+                let _ = sethostname("rustbox-sandbox");
             }
-
             if self.enable_network_namespace {
                 self.bring_up_loopback()?;
             }
-
-            log::info!(
-                "Namespace isolation applied: {:?}",
-                self.get_enabled_namespaces()
-            );
         }
 
         Ok(())
@@ -102,32 +91,31 @@ impl NamespaceIsolation {
             || self.enable_uts_namespace
     }
 
-    pub fn get_enabled_namespaces(&self) -> Vec<String> {
+    pub fn get_enabled_namespaces(&self) -> Vec<&'static str> {
         let mut namespaces = Vec::new();
         if self.enable_pid_namespace {
-            namespaces.push("PID".to_string());
+            namespaces.push("PID");
         }
         if self.enable_mount_namespace {
-            namespaces.push("Mount".to_string());
+            namespaces.push("Mount");
         }
         if self.enable_network_namespace {
-            namespaces.push("Network".to_string());
+            namespaces.push("Network");
         }
         if self.enable_user_namespace {
-            namespaces.push("User".to_string());
+            namespaces.push("User");
         }
         if self.enable_ipc_namespace {
-            namespaces.push("IPC".to_string());
+            namespaces.push("IPC");
         }
         if self.enable_uts_namespace {
-            namespaces.push("UTS".to_string());
+            namespaces.push("UTS");
         }
         namespaces
     }
 
     fn bring_up_loopback(&self) -> Result<()> {
-        // SAFETY: socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC, 0) creates a UDP socket
-        // for ioctl use. Valid parameters, no pointer dereference.
+        // SAFETY: socket arguments are constants with no aliasing or borrowed memory.
         let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
         if sock < 0 {
             return Err(IsolateError::Namespace(format!(
@@ -136,17 +124,18 @@ impl NamespaceIsolation {
             )));
         }
 
-        // SAFETY: zeroed ifreq is a valid initial state for the struct.
+        // SAFETY: zeroed ifreq is a valid initial state.
         let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
-        let lo_name = b"lo\0";
-        for (idx, b) in lo_name.iter().enumerate() {
+        let lo = b"lo\0";
+        for (idx, b) in lo.iter().enumerate() {
             ifr.ifr_name[idx] = *b as libc::c_char;
         }
 
-        // SAFETY: ioctl(SIOCGIFFLAGS) reads interface flags into initialized ifreq.
-        let get_flags_rc = unsafe { libc::ioctl(sock, libc::SIOCGIFFLAGS as _, &mut ifr) };
-        if get_flags_rc != 0 {
+        // SAFETY: ioctl writes interface flags into valid ifreq pointer.
+        let get_flags = unsafe { libc::ioctl(sock, libc::SIOCGIFFLAGS as _, &mut ifr) };
+        if get_flags != 0 {
             let err = std::io::Error::last_os_error();
+            // SAFETY: closing valid descriptor.
             unsafe { libc::close(sock) };
             return Err(IsolateError::Namespace(format!(
                 "Failed to query loopback flags: {}",
@@ -154,38 +143,30 @@ impl NamespaceIsolation {
             )));
         }
 
-        // SAFETY: ifr_ifru union was populated by SIOCGIFFLAGS.
+        // SAFETY: union was populated by SIOCGIFFLAGS.
         let current_flags = unsafe { ifr.ifr_ifru.ifru_flags } as libc::c_int;
         ifr.ifr_ifru.ifru_flags = (current_flags | libc::IFF_UP) as libc::c_short;
 
-        // SAFETY: ioctl(SIOCSIFFLAGS) sets the IFF_UP flag on the loopback interface.
-        let set_flags_rc = unsafe { libc::ioctl(sock, libc::SIOCSIFFLAGS as _, &ifr) };
+        // SAFETY: ioctl reads from initialized ifreq.
+        let set_flags = unsafe { libc::ioctl(sock, libc::SIOCSIFFLAGS as _, &ifr) };
+        let ioctl_err = std::io::Error::last_os_error(); // capture before close clobbers errno
+        // SAFETY: close valid descriptor.
+        let _ = unsafe { libc::close(sock) };
 
-        // SAFETY: close(2) on a valid fd.
-        let close_rc = unsafe { libc::close(sock) };
-        if close_rc != 0 {
-            log::warn!(
-                "Failed to close loopback setup socket: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-
-        if set_flags_rc != 0 {
+        if set_flags != 0 {
             return Err(IsolateError::Namespace(format!(
                 "Failed to bring up loopback interface: {}",
-                std::io::Error::last_os_error()
+                ioctl_err
             )));
         }
 
-        log::info!("Enabled loopback interface inside network namespace");
         Ok(())
     }
 }
 
-/// CRITICAL: Sets mount propagation to MS_PRIVATE|MS_REC on /.
-/// Without this, sandbox mounts propagate to host. Must succeed or abort.
+/// Harden mount propagation so sandbox mounts never leak back to host.
 pub fn harden_mount_propagation() -> Result<()> {
-    use nix::mount::{mount, MsFlags};
+    use nix::mount::{MsFlags, mount};
 
     mount(
         None::<&str>,
@@ -201,7 +182,6 @@ pub fn harden_mount_propagation() -> Result<()> {
         ))
     })?;
 
-    log::info!("Mount propagation hardened: / set to MS_PRIVATE|MS_REC");
     Ok(())
 }
 

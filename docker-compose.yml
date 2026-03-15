@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rustbox}
+      POSTGRES_USER: ${POSTGRES_USER:-rustbox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rustbox"]
+      interval: 2s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 5
+
+  judge-service:
+    build:
+      context: .
+      dockerfile: docker/service/Dockerfile
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - SYS_PTRACE
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      RUSTBOX_WORKERS: 2
+      RUSTBOX_DATABASE_URL: postgres://${POSTGRES_USER:-rustbox}:${POSTGRES_PASSWORD:?}@postgres/${POSTGRES_DB:-rustbox}
+      RUSTBOX_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379
+      RUSTBOX_PORT: 8080
+      RUST_LOG: info
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2.0'
+    volumes:
+      - ./config.json:/etc/rustbox/config.json:ro
+
+  web:
+    build:
+      context: ./web
+    ports:
+      - "3000:3000"
+    depends_on:
+      - judge-service
+    environment:
+      VITE_API_URL: http://localhost:8080
+
+volumes:
+  pgdata:

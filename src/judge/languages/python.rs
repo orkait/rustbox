@@ -29,6 +29,7 @@ fn base_profile() -> ExecutionProfile {
         cpu_time_limit_ms: Some(10_000),
         wall_time_limit_ms: Some(15_000),
         fd_limit: Some(64),
+        virtual_memory_limit: Some(1024 * 1024 * 1024), // 1 GB
         directory_bindings: Vec::new(),
     }
 }
@@ -62,5 +63,47 @@ impl JudgeAdapter for PythonAdapter {
                 .to_string_lossy()
                 .to_string(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn workspace() -> RunWorkspace {
+        RunWorkspace {
+            root: PathBuf::from("/tmp/rustbox/box-1"),
+            workdir: PathBuf::from("/tmp/rustbox/box-1"),
+            temp_dir: PathBuf::from("/tmp/rustbox/box-1"),
+        }
+    }
+
+    #[test]
+    fn compile_command_is_empty() {
+        let adapter = PythonAdapter;
+        assert!(adapter.compile_command(&workspace()).is_empty());
+    }
+
+    #[test]
+    fn run_command_invokes_python3_with_no_bytecode_and_no_site() {
+        let adapter = PythonAdapter;
+        let cmd = adapter.run_command(&workspace());
+        assert_eq!(cmd[0], "/usr/bin/python3");
+        assert!(cmd.contains(&"-B".to_string()), "missing -B (no bytecode)");
+        assert!(cmd.contains(&"-S".to_string()), "missing -S (no site)");
+        assert!(cmd.last().unwrap().ends_with("solution.py"));
+    }
+
+    #[test]
+    fn run_profile_uid_gid_are_nobody() {
+        let profile = PythonAdapter.run_profile();
+        assert_eq!(profile.uid, Some(65534));
+        assert_eq!(profile.gid, Some(65534));
+    }
+
+    #[test]
+    fn language_tag_is_python() {
+        assert_eq!(PythonAdapter.language(), "python");
     }
 }

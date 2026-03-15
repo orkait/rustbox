@@ -2,7 +2,7 @@
 //!
 //! These tests verify cross-module interactions and ordering requirements.
 
-use rustbox::kernel::capabilities::{drop_all_capabilities, set_no_new_privs, check_no_new_privs};
+use rustbox::kernel::capabilities::{check_no_new_privs, drop_all_capabilities, set_no_new_privs};
 use rustbox::kernel::credentials::transition_to_unprivileged;
 
 #[test]

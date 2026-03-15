@@ -29,6 +29,7 @@ fn profile(memory_mb: u64, process_limit: u32, cpu_ms: u64, wall_ms: u64) -> Exe
         cpu_time_limit_ms: Some(cpu_ms),
         wall_time_limit_ms: Some(wall_ms),
         fd_limit: Some(128),
+        virtual_memory_limit: Some(1024 * 1024 * 1024), // 1 GB
         directory_bindings: Vec::new(),
     }
 }
@@ -73,5 +74,60 @@ impl JudgeAdapter for CppAdapter {
             .join("solution")
             .to_string_lossy()
             .to_string()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn workspace() -> RunWorkspace {
+        RunWorkspace {
+            root: PathBuf::from("/tmp/rustbox/box-1"),
+            workdir: PathBuf::from("/tmp/rustbox/box-1"),
+            temp_dir: PathBuf::from("/tmp/rustbox/box-1"),
+        }
+    }
+
+    #[test]
+    fn compile_command_uses_gpp_with_cpp17() {
+        let cmd = CppAdapter.compile_command(&workspace());
+        assert_eq!(cmd[0], "/usr/bin/g++");
+        assert!(cmd.contains(&"-std=c++17".to_string()), "missing -std=c++17");
+        assert!(cmd.contains(&"-O2".to_string()), "missing -O2");
+        assert!(!cmd.contains(&"-static".to_string()), "-static must not be present (no static libc in image)");
+    }
+
+    #[test]
+    fn compile_command_output_is_solution_binary() {
+        let cmd = CppAdapter.compile_command(&workspace());
+        let o_pos = cmd.iter().position(|s| s == "-o").expect("missing -o flag");
+        assert!(cmd[o_pos + 1].ends_with("solution"), "output binary must be named 'solution'");
+    }
+
+    #[test]
+    fn compile_command_source_is_solution_cpp() {
+        let cmd = CppAdapter.compile_command(&workspace());
+        assert!(cmd.last().unwrap().ends_with("solution.cpp"));
+    }
+
+    #[test]
+    fn run_command_executes_compiled_binary() {
+        let cmd = CppAdapter.run_command(&workspace());
+        assert_eq!(cmd.len(), 1);
+        assert!(cmd[0].ends_with("solution"));
+    }
+
+    #[test]
+    fn run_profile_uid_gid_are_nobody() {
+        let profile = CppAdapter.run_profile();
+        assert_eq!(profile.uid, Some(65534));
+        assert_eq!(profile.gid, Some(65534));
+    }
+
+    #[test]
+    fn language_tag_is_cpp() {
+        assert_eq!(CppAdapter.language(), "cpp");
     }
 }

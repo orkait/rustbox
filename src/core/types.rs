@@ -31,6 +31,7 @@ pub struct ExecutionProfile {
     pub cpu_time_limit_ms: Option<u64>,
     pub wall_time_limit_ms: Option<u64>,
     pub fd_limit: Option<u64>,
+    pub virtual_memory_limit: Option<u64>,
     pub directory_bindings: Vec<DirectoryBinding>,
 }
 
@@ -63,6 +64,7 @@ impl ExecutionProfile {
             cpu_time_limit_ms: config.cpu_time_limit.map(|d| d.as_millis() as u64),
             wall_time_limit_ms: config.wall_time_limit.map(|d| d.as_millis() as u64),
             fd_limit: config.fd_limit,
+            virtual_memory_limit: config.virtual_memory_limit,
             directory_bindings: config.directory_bindings.clone(),
         }
     }
@@ -180,7 +182,11 @@ impl ProxyStatus {
         });
         let resolved_signal = self.term_signal.or(interrupted_signal);
 
-        let status = if self.timed_out {
+        // SIGXCPU = kernel enforced RLIMIT_CPU. That IS a time limit,
+        // not a random signal — classify as TLE.
+        let is_rlimit_cpu = matches!(resolved_signal, Some(libc::SIGXCPU));
+
+        let status = if self.timed_out || is_rlimit_cpu {
             ExecutionStatus::TimeLimit
         } else if resolved_signal.is_some() {
             ExecutionStatus::Signaled

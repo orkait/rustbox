@@ -1,274 +1,204 @@
-# rustbox
+# Rustbox
 
-A secure process isolation and resource control system inspired by IOI Isolate, designed for judge-grade execution of untrusted code in competitive programming environments.
+Secure process isolation for competitive programming judges. Inspired by [IOI Isolate](https://github.com/ioi/isolate).
 
-**Current Status**: Judge-V1 Development (v0.1.0)  
-**Scope**: Deliberately narrow focus on deterministic, kernel-enforced isolation for programming contest judging systems.
+**Status**: Judge-V1 (v0.1.0) | **Languages**: Python, C++, Java | **Platform**: Linux (cgroups v1/v2)
 
-## Judge-V1 Scope
+## What it does
 
-Rustbox v1 is **not** a general-purpose sandbox or an isolate drop-in replacement. It is purpose-built for judge-grade execution with:
+Rustbox executes untrusted code submissions inside kernel-enforced sandboxes with deterministic resource limits and evidence-backed verdicts.
 
-- Hard process/filesystem isolation for submission runs
-- Deterministic resource enforcement and status reporting
-- Deterministic lifecycle cleanup with no leftovers
-- Stable semantics across cgroup v1/v2 environments
-- Evidence-backed verdict provenance for appeals
-- Minimal CLI surface and operator-friendly defaults
-
-### Explicitly Deferred Until Post-V1
-- WASM execution backend
-- eBPF observability features beyond basic metrics
-- CRIU/snapshot workflows
-- Remote attestation
-- Pluggable policy engines
-- Multi-tenant scheduling/orchestration layers
-
-See `plan.md` Section 1.1 for complete scope definition.
-
-## 🔒 Security Features
-
-- **Namespace Isolation**: PID, mount, network, and user namespace separation
-- **Resource Limits**: Memory, CPU, file size, and execution time enforcement  
-- **Filesystem Isolation**: Chroot-based filesystem containment
-- **Cgroups Support**: Resource enforcement using cgroups v1 for maximum compatibility
-- **Path Validation**: Directory traversal attack prevention
-- **Memory Safety**: Rust implementation eliminates entire classes of security vulnerabilities
-
-## 🚀 Quick Start
-
-```bash
-# Core sandbox lifecycle (isolate binary)
-isolate init --box-id 0
-
-# Run command with resource limits
-isolate run --box-id 0 --mem 128 --time 10 /usr/bin/python3 solution.py
-
-# Cleanup sandbox
-isolate cleanup --box-id 0
-
-# Language adapter entrypoint (judge binary)
-judge execute-code --strict --box-id 10 --language python --code 'print(1)'
+```
+                    +-----------+
+  source code ----->|  rustbox  |-----> verdict (OK / TLE / MLE / RE / Signaled)
+  + language        |  (judge)  |-----> stdout, stderr
+  + limits          +-----------+-----> evidence bundle (controls applied, memory peak, cpu time)
+                     namespaces
+                     cgroups
+                     capabilities
+                     rlimits
 ```
 
-## 📋 Requirements
-
-- **Operating System**: Linux with cgroups v1 support (primary), Unix-like systems (limited functionality)
-- **Privileges**: Root access required for namespace and resource management
-- **Dependencies**: 
-  - Rust 1.70+ (for building)
-  - systemd (for service management)
-  - Python 3 (for test programs)
-
-## 🛠️ Installation
-
-### From Source
+## Quick start
 
 ```bash
-git clone <repository-url>
-cd rustbox
+# Build
 cargo build --release
-sudo cp target/release/rustbox /usr/bin/
-sudo cp target/release/isolate /usr/bin/
-sudo cp target/release/judge /usr/bin/
+
+# Permissive mode (no root, development only)
+target/release/judge execute-code --permissive --box-id 1 --language python --code 'print("hello")'
+
+# Strict mode (root required, production)
+sudo target/release/judge execute-code --strict --box-id 1 --language python --code 'print("hello")'
+
+# C++ submission
+sudo target/release/judge execute-code --strict --box-id 2 --language cpp --code '
+#include <iostream>
+int main() { std::cout << 42 << std::endl; }
+'
+
+# Java submission
+sudo target/release/judge execute-code --strict --box-id 3 --language java --code '
+public class Main {
+    public static void main(String[] args) {
+        System.out.println("hello world");
+    }
+}
+'
 ```
 
-### Using Debian Package
+Output is `JudgeResultV1` JSON on stdout. Diagnostics go to stderr.
+
+## Security model
+
+| Layer | Mechanism | What it enforces |
+|-------|-----------|-----------------|
+| Process isolation | `CLONE_NEWPID`, `CLONE_NEWIPC` | Sandbox can't see/signal host processes |
+| Filesystem | tmpfs chroot + bind mounts | Read-only root, writable workdir only |
+| Network | `CLONE_NEWNET` (strict) | No network access |
+| Memory | cgroup `memory.max` / `memory.limit_in_bytes` | Physical memory cap |
+| CPU time | `RLIMIT_CPU` + cgroup watchdog | Hard CPU time limit |
+| Virtual memory | `RLIMIT_AS` (per-language) | Prevents VMA exhaustion (4GB Java, 1GB others) |
+| Processes | cgroup `pids.max` + `RLIMIT_NPROC` | Fork bomb prevention |
+| Credentials | `setresuid`/`setresgid` to per-box UID (60000+box_id) | No root, per-box isolation |
+| Capabilities | All 5 sets zeroed (bounding, ambient, effective, permitted, inheritable) | No privilege escalation |
+| Privileges | `PR_SET_NO_NEW_PRIVS` | No suid/sgid exec |
+
+Compilation runs in permissive mode (compiler is trusted). Only the compiled binary executes under strict isolation.
+
+## Architecture
+
+### Three binaries, one CLI
+
+All binaries call `rustbox::cli::run()` with a different mode:
+
+- **`isolate`** — sandbox lifecycle: `init`, `run`, `status`, `cleanup`
+- **`judge`** — language adapter: `execute-code`, `check-deps`
+- **`rustbox`** — all commands
+
+### Type-state pre-exec chain
+
+The core safety mechanism. Compile-time enforcement that sandbox setup happens in a fixed order:
+
+```
+FreshChild → NamespacesConfigured → MountsHardened → CgroupAttached
+    → CredentialsDropped → PrivilegesLocked → ExecReady
+```
+
+Only `Sandbox<ExecReady>` can call `exec_payload()`. Skipping or reordering steps is a **compile error** (verified by trybuild tests in `tests/typestate_compile_fail/`).
+
+### Module layout
+
+```
+src/
+  config/       Config loading, validation, per-language defaults, policy
+  exec/         Pre-exec type-state chain, process executor
+  core/         Supervisor (clone/fork/waitpid), proxy, types
+  kernel/       Thin unsafe wrappers: namespaces, cgroups, capabilities,
+                mounts, credentials, signals
+  runtime/      Isolate lifecycle, security validation
+  verdict/      Evidence-backed verdict classification
+  safety/       Cleanup, lock manager, workspace
+  observability/ Audit logging, metrics
+  utils/        FD closure, env hygiene, fork-safe logging, output collection
+```
+
+### Execution flow
+
+```
+CLI args → IsolateConfig::with_language_defaults(language, box_id)
+  → Isolate::new(config)
+  → execute_code_string(language, code)
+    → [compile step: permissive mode, drops UID]
+    → [execute step: strict mode, full isolation]
+      → ProcessExecutor::new() → cgroup create + resource limits
+      → launch_with_supervisor() → clone(NEWPID|NEWIPC)
+        → proxy: read request, fork payload
+          → payload: type-state preexec chain → execvp(command)
+        → proxy: collect stdout/stderr, wait, report
+      → supervisor: wall-time/cpu watchdog, collect evidence
+    → ExecutionResult + LaunchEvidence
+  → JudgeResultV1 JSON to stdout
+```
+
+## Configuration
+
+`config.json` at project root defines per-language defaults:
+
+```json
+{
+  "languages": {
+    "python": {
+      "memory": { "limit_mb": 128 },
+      "time": { "cpu_time_seconds": 4, "wall_time_seconds": 7 },
+      "processes": { "max_processes": 10 },
+      "environment": { "PYTHONDONTWRITEBYTECODE": "1" }
+    },
+    "java": {
+      "memory": { "limit_mb": 512 },
+      "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
+      "processes": { "max_processes": 256 },
+      "environment": { "JAVA_TOOL_OPTIONS": "-Xmx256m -Xms64m -XX:+UseSerialGC" }
+    },
+    "cpp": {
+      "memory": { "limit_mb": 256 },
+      "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
+      "processes": { "max_processes": 8 }
+    }
+  }
+}
+```
+
+Searched at `./config.json` (dev) then `/etc/rustbox/config.json` (production/Docker).
+
+## Build and test
 
 ```bash
-cargo install cargo-deb
-cargo deb
-sudo dpkg -i target/debian/rustbox_*.deb
-```
+# Build
+cargo build                    # debug
+cargo build --release          # release
 
-### MCP Bootstrap (WSL)
+# Test
+cargo test --all               # all unit + integration (non-root)
+sudo cargo test --test integration_execution -- --include-ignored  # strict mode tests
 
-For teammates using Kiro/Codex MCP integration with this repo:
-
-```bash
-./scripts/bootstrap-mcp.sh
-```
-
-This command initializes `tools/codegraphcontext` submodule, installs the pinned CGC runtime, builds `tools/rustbox-mcp`, and runs smoke checks.
-
-After bootstrap, you can run explicit health checks:
-
-```bash
-./scripts/mcp/healthcheck-rustbox-mcp.sh
-./scripts/mcp/healthcheck-cgc-mcp.sh
-```
-
-If you update `mcp.json` command/args, restart your Codex/Kiro session so the MCP bridge reloads the new process definition.
-
-## 📖 Usage
-
-### Basic Commands
-
-```bash
-# Initialize sandbox environment
-isolate init --box-id <ID>
-
-# Execute program with limits
-isolate run --box-id <ID> [OPTIONS] <COMMAND> [ARGS...]
-
-# Clean up sandbox
-isolate cleanup --box-id <ID>
-
-# Get system status
-isolate status
-```
-
-### Resource Limit Options
-
-```bash
-isolate run --box-id 0 \
-  --mem 256          # Memory limit in MB
-  --time 30          # CPU time limit in seconds  
-  --wall-time 60     # Wall clock time limit in seconds
-  --processes 10     # Process count limit
-  -- /usr/bin/python3 script.py
-```
-
-### Execute-Code Mode
-
-```bash
-# Strict mode (root required)
-judge execute-code --strict --box-id 10 --language python --code 'print(1)'
-
-# Permissive mode (unsafe for untrusted code; development only)
-judge execute-code --permissive --box-id 11 --language python --code 'print(1)'
-
-# Compatibility alias
-rustbox execute-code --strict --box-id 12 --language python --code 'print(1)'
-```
-
-WSL note: C++ compile phase currently runs outside namespaces for toolchain stability; compiled payload execution still runs with isolate defaults.
-WSL note: Java currently downgrades to permissive mode and disables PID namespace because the current single-fork PID namespace path blocks JVM thread startup. Capability report reflects this downgrade.
-
-## 🏗️ Project Structure
-
-```
-rustbox/
-├── src/
-│   ├── main.rs            # rustbox CLI entry wrapper
-│   ├── cli.rs             # shared CLI implementation and mode gating
-│   ├── bin/
-│   │   ├── isolate.rs     # isolate binary (language-agnostic core surface)
-│   │   └── judge.rs       # judge binary (language adapter surface)
-│   ├── config/            # Config loading, validation, policy
-│   ├── exec/              # Executor, pre-exec chain, supervision
-│   ├── kernel/            # Namespaces, cgroups, capabilities
-│   ├── runtime/           # Runtime orchestration and sandbox execution
-│   ├── observability/     # Audit logs, health, metrics, ops checks
-│   ├── safety/            # Cleanup, locks, workspace management
-│   ├── testing/           # Reusable proof helpers
-│   ├── utils/             # JSON schema, env/fd/output utilities
-│   └── verdict/           # Envelope, timeout/divergence, abuse classification
-├── tests/                 # Integration, adversarial, parity, trybuild
-├── docs/                  # ADRs, runbooks, QA/release gates
-└── tools/                 # MCP servers and codegraph tooling
-```
-
-## 🧪 Testing
-
-### Run Test Suites
-
-```bash
-# Full suite
-cargo test --all -- --nocapture
-
-# Trybuild typestate compile-fail tests
-cargo test --test trybuild
-
-# Targeted runtime checks in WSL
+# Smoke test
 target/debug/judge execute-code --permissive --box-id 1 --language python --code 'print(1)'
-wsl -u root -e bash -lc "cd /mnt/c/codingFiles/orkait/rustbox && target/debug/judge execute-code --strict --box-id 2 --language python --code 'print(1)'"
+sudo target/debug/judge execute-code --strict --box-id 2 --language python --code 'print(1)'
+
+# Check language toolchains
+target/debug/judge check-deps --verbose
 ```
 
-### Test Categories
+### Test structure
 
-- **Adversarial Security**: breakout, path traversal, containment
-- **Failure Matrix**: cleanup/idempotency and baseline equivalence
-- **Cgroup Parity**: v1/v2 behavior matrix
-- **Schema and Provenance**: audit + JSON stability checks
-- **Trybuild**: compile-time typestate invariants
+| Suite | What | Count |
+|-------|------|-------|
+| Unit tests | All modules | 179 |
+| Integration (Tier 1) | Permissive mode, all 3 languages, verdict types | 19 |
+| Integration (Tier 2) | Strict mode with root, full isolation chain | 7 |
+| Compile-fail (trybuild) | Type-state invariants | 7 |
+| Other integration | Kernel, mount, namespace | 31 |
 
-## ⚙️ Configuration
+## Requirements
 
-### System Service
+- Linux with cgroups (v1 or v2)
+- Root for strict mode (namespaces, cgroups, credential drop)
+- Rust 1.70+
+- Language toolchains: `python3`, `g++`, `javac`/`java` (OpenJDK 17+)
 
-Enable as systemd service:
+## Docker
 
 ```bash
-sudo systemctl enable rustbox
-sudo systemctl start rustbox
+docker build -f docker/base/Dockerfile -t rustbox-base .
+docker build -f docker/isolate/Dockerfile -t rustbox .
+docker run --privileged rustbox judge execute-code --strict --box-id 1 --language python --code 'print(1)'
 ```
 
-### Language Support
+## License
 
-Setup common programming language environments:
+See LICENSE file.
 
-```bash
-sudo ./setup_languages.sh
-```
+## Acknowledgments
 
-## 🔧 Development
-
-### Building
-
-```bash
-cargo build --release
-```
-
-### Running Tests
-
-```bash
-# Unit tests
-cargo test
-
-# Full verification
-cargo test --all -- --nocapture
-
-# Debug logging
-RUST_LOG=debug ./target/release/rustbox run --box-id 0 /bin/echo "Hello"
-```
-
-### Contributing
-
-1. Follow Rust coding standards
-2. Add comprehensive tests for new features
-3. Update documentation
-4. Ensure all security tests pass
-5. Run full test suite before submitting
-
-## 📊 Performance
-
-Typical performance characteristics:
-
-- **Startup Time**: <0.5 seconds
-- **Execution Overhead**: <0.2 seconds  
-- **Memory Usage**: <10MB base overhead
-- **Throughput**: >2 operations/second
-
-## 🔐 Security Considerations
-
-This tool is designed for **defensive security purposes only**:
-
-- Safe execution of untrusted code submissions
-- Programming contest environments
-- Code analysis and testing
-- Educational sandboxing
-
-**Important**: Ensure proper system hardening and monitoring when deploying in production environments.
-
-## 📄 License
-
-This project is licensed under the terms specified in the LICENSE file.
-
-## 🤝 Support
-
-For issues, feature requests, or contributions, please refer to the project's issue tracking system.
-
-## 🙏 Acknowledgments
-
-Inspired by [IOI Isolate](https://github.com/ioi/isolate), the industry-standard sandbox for programming contests and secure code execution.
+Inspired by [IOI Isolate](https://github.com/ioi/isolate) by Martin Mares and Bernard Blackham.

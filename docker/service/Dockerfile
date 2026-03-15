@@ -1,0 +1,30 @@
+FROM rust:1.83-bookworm AS builder
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+COPY judge-service/ judge-service/
+
+RUN cargo build --release -p judge-service
+
+# Runtime
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    g++ \
+    openjdk-17-jdk-headless \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create sandbox state directories
+RUN mkdir -p /var/run/rustbox /tmp/rustbox /etc/rustbox
+
+COPY --from=builder /build/target/release/judge-service /usr/local/bin/judge-service
+
+EXPOSE 8080
+
+RUN groupadd -r rustbox && useradd -r -g rustbox -s /bin/false rustbox
+USER rustbox
+
+ENTRYPOINT ["judge-service"]

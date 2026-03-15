@@ -66,11 +66,11 @@ impl ProcSysPolicy {
     /// Validate policy in strict mode
     pub fn validate(&self) -> Result<()> {
         if self.strict_mode {
-            // In strict mode, /sys should be disabled by default
+            // In strict mode, /sys must be disabled — exposing host kernel interfaces is a security violation
             if self.sys_policy == SysPolicy::Enabled {
-                log::warn!(
-                    "⚠️  /sys is enabled in strict mode. This exposes host kernel interfaces."
-                );
+                return Err(IsolateError::Config(
+                    "/sys is enabled in strict mode — this exposes host kernel interfaces and is not permitted".to_string(),
+                ));
             }
         }
         Ok(())
@@ -215,8 +215,8 @@ mod tests {
             sys_policy: SysPolicy::Enabled,
             strict_mode: true,
         };
-        // Should succeed but log warning
-        assert!(policy_with_sys.validate().is_ok());
+        // Must fail: /sys enabled in strict mode is a security violation
+        assert!(policy_with_sys.validate().is_err());
     }
 
     #[test]

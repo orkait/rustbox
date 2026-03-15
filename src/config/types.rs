@@ -33,6 +33,7 @@ pub enum DirectoryPermissions {
 
 impl DirectoryBinding {
     /// Parse directory binding from string format like "source=target:options"
+    #[deprecated(note = "Use parse_secure() instead — this method has no path validation")]
     pub fn parse(binding_str: &str) -> std::result::Result<Self, String> {
         let parts: Vec<&str> = binding_str.split(':').collect();
         let path_part = parts[0];
@@ -177,6 +178,10 @@ pub struct IsolateConfig {
     pub core_limit: Option<u64>,
     /// File descriptor limit (max open files)
     pub fd_limit: Option<u64>,
+    /// Virtual address space limit in bytes (RLIMIT_AS).
+    /// Per-language: Java needs >=4GB for compressed class pointers;
+    /// Python/C++ use 1GB to prevent mmap(MAP_NORESERVE) VMA exhaustion.
+    pub virtual_memory_limit: Option<u64>,
     /// Custom environment variables
     pub environment: Vec<(String, String)>,
     /// Strict mode: fail hard if cgroups unavailable or permission denied
@@ -223,6 +228,17 @@ impl IsolateConfig {
         let euid = unsafe { libc::geteuid() };
         std::env::temp_dir().join(format!("rustbox-uid-{}", euid))
     }
+
+    /// Derive per-box UID/GID from box_id (IOI Isolate convention).
+    /// UIDs 60000-60999, one per box.
+    pub fn uid_for_box(box_id: u32) -> u32 {
+        const BASE_UID: u32 = 60000;
+        const MAX_BOX_ID: u32 = 999;
+        if box_id > MAX_BOX_ID {
+            return 65534; // fallback to nobody for out-of-range
+        }
+        BASE_UID + box_id
+    }
 }
 
 impl Default for IsolateConfig {
@@ -249,6 +265,7 @@ impl Default for IsolateConfig {
             stack_limit: Some(8 * 1024 * 1024), // 8MB default stack
             core_limit: Some(0),     // Disable core dumps by default
             fd_limit: Some(64),      // Default file descriptor limit
+            virtual_memory_limit: None, // Set per-language in with_language_defaults()
             environment: Vec::new(),
             strict_mode: true, // Strict mode by default (judge-v1)
             force_cgroup_v1: false,

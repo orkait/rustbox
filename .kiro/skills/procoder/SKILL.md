@@ -1,6 +1,5 @@
-```md
 ---
-name: procoder-rust
+name: procoder
 description: "senior rust engineering best practices"
 argument-hint: "<rust_question>"
 ---
@@ -340,4 +339,4 @@ After producing a candidate output, run this routine and include the log.
 
 9. **Hard Stop**
    - If any correctness or safety issue remains, refuse to finalize
-```
+

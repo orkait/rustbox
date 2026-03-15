@@ -174,10 +174,10 @@
 									}
 								},
 								"max_compilation_time": {
-									"type": "integer"
+									"type": ["integer", "null"]
 								},
 								"max_compilation_memory_mb": {
-									"type": "integer"
+									"type": ["integer", "null"]
 								}
 							},
 							"required": [
@@ -310,10 +310,10 @@
 									}
 								},
 								"max_compilation_time": {
-									"type": "integer"
+									"type": ["integer", "null"]
 								},
 								"max_compilation_memory_mb": {
-									"type": "integer"
+									"type": ["integer", "null"]
 								}
 							},
 							"required": [
@@ -454,10 +454,10 @@
 									}
 								},
 								"max_compilation_time": {
-									"type": "integer"
+									"type": ["integer", "null"]
 								},
 								"max_compilation_memory_mb": {
-									"type": "integer"
+									"type": ["integer", "null"]
 								}
 							},
 							"required": [

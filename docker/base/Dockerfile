@@ -1,78 +1,72 @@
-# Base image with C++, Python, Java, and Rust
-FROM ubuntu:22.04
+# ============================================================================
+# Stage 1: builder — compiles rustbox/isolate/judge binaries
+# ============================================================================
+# TODO: Pin to SHA256 digest for production builds
+FROM ubuntu:22.04 AS builder
 
-# Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
-ENV RUSTUP_HOME=/usr/local/rustup
-ENV CARGO_HOME=/usr/local/cargo
-ENV PATH=/usr/local/cargo/bin:$PATH
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install system dependencies and languages
 RUN apt-get update && apt-get install -y \
-    # Basic system tools
     curl \
-    wget \
-    git \
     build-essential \
     pkg-config \
     libssl-dev \
     ca-certificates \
-    gnupg \
-    lsb-release \
-    software-properties-common \
-    # C/C++ compiler and tools
-    gcc \
-    g++ \
-    make \
-    cmake \
-    # Python 3.11
-    python3.11 \
-    python3.11-dev \
-    python3.11-venv \
-    python3-pip \
-    # Java 17
-    openjdk-17-jdk \
-    openjdk-17-jre \
-    # Additional tools
-    jq \
-    vim \
-    nano \
-    htop \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     --default-toolchain stable \
-    --profile default \
-    && rustup component add rustfmt clippy
+    --profile minimal
 
-# Create symbolic links for Python
+ENV PATH=/root/.cargo/bin:$PATH
+
+WORKDIR /build
+COPY . .
+RUN cargo build --release
+
+# ============================================================================
+# Stage 2: runtime — Ubuntu 22.04 + C++ / Python 3.11 / Java 21
+# NOTE: runs as root — required for strict mode (namespaces + cgroup attach)
+# ============================================================================
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV JAVA_HOME=/usr/lib/jvm/default-java
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update && apt-get install -y \
+    g++ \
+    python3.11 \
+    openjdk-21-jdk \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# python3 → python3.11
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python
 
-# Set up working directory
-WORKDIR /workspace
+# UID/GID 65534 (nobody) — rustbox drops payload to this user inside the sandbox
+RUN groupadd -r -g 65534 sandbox 2>/dev/null || true \
+    && useradd -r -u 65534 -g 65534 -s /sbin/nologin sandbox 2>/dev/null || true
 
-# Create user for security (non-root)
-RUN groupadd -r rustbox && useradd -r -g rustbox rustbox \
-    && mkdir -p /home/rustbox \
-    && chown -R rustbox:rustbox /home/rustbox \
-    && chown -R rustbox:rustbox /workspace
+# Copy binaries from builder
+COPY --from=builder /build/target/release/judge   /usr/local/bin/judge
+COPY --from=builder /build/target/release/isolate /usr/local/bin/isolate
+COPY --from=builder /build/target/release/rustbox /usr/local/bin/rustbox
 
-# Switch to non-root user
-USER rustbox
+# Config
+RUN mkdir -p /etc/rustbox
+COPY config.json /etc/rustbox/config.json
 
-# Verify installations
+# Runtime state dirs
+RUN mkdir -p /var/run/rustbox /tmp/rustbox
+
+# Verify
 RUN python3 --version \
-    && gcc --version \
     && g++ --version \
     && java -version \
-    && javac -version \
-    && rustc --version \
-    && cargo --version
+    && javac -version
 
-# Default command
+WORKDIR /workspace
 CMD ["/bin/bash"]

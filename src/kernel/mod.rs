@@ -1,11 +1,20 @@
-//! Thin wrappers around Linux kernel primitives.
-//!
-//! All `unsafe` code is concentrated here with explicit SAFETY comments.
-//! Dependency direction: signal -> namespace -> capabilities -> credentials -> mount -> cgroup
+//! Kernel v2 contract-first kernel implementation.
 
 pub mod capabilities;
-pub mod credentials;
 pub mod cgroup;
+pub mod cgroup_v1;
+pub mod cgroup_v2;
+pub mod contract;
+pub mod credentials;
 pub mod mount;
 pub mod namespace;
+pub mod pipeline;
+mod runtime_exec;
 pub mod signal;
+
+pub use contract::{
+    EnforcementMode, KernelDomain, KernelRequirement, RequirementLevel, KERNEL_REQUIREMENTS,
+    REQUIRED_STAGE_ORDER,
+};
+pub use runtime_exec::exec_payload;
+pub use pipeline::{KernelPipeline, KernelRunReport, KernelStage};

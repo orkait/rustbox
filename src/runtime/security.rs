@@ -54,8 +54,10 @@ pub mod command_validation {
         "/usr/bin/clang++",
         "/usr/bin/java",
         "/usr/lib/jvm/java-17-openjdk-amd64/bin/java",
+        "/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
         "/usr/bin/javac",
         "/usr/lib/jvm/java-17-openjdk-amd64/bin/javac",
+        "/usr/lib/jvm/java-21-openjdk-amd64/bin/javac",
         "/usr/bin/node",
         "/usr/bin/go",
         "/usr/lib/go-1.22/bin/go",
@@ -105,14 +107,10 @@ pub mod command_validation {
             resolve_command_in_path(command)?
         };
 
-        // 3. Canonicalize path to prevent traversal (skip for ./solution as it may not exist yet)
-        let canonical = if command == "./solution" {
-            resolved_path
-        } else {
-            resolved_path.canonicalize().map_err(|_| {
-                SecurityError::InvalidCommand(format!("Cannot canonicalize: {}", command))
-            })?
-        };
+        // 3. Canonicalize path to prevent traversal
+        let canonical = resolved_path.canonicalize().map_err(|_| {
+            SecurityError::InvalidCommand(format!("Cannot canonicalize: {}", command))
+        })?;
 
         // 4. Check against allowlist (accept canonical aliases such as /bin -> /usr/bin)
         if !is_allowed_path(&canonical) {
@@ -167,7 +165,7 @@ pub mod command_validation {
         let path_str = path.to_string_lossy();
 
         // Prevent path traversal patterns
-        if path_str.contains("..") || path_str.contains("~") {
+        if path_str.contains("..") {
             return Err(SecurityError::PathTraversal.into());
         }
 
@@ -178,7 +176,8 @@ pub mod command_validation {
             "/bin/",
             "/usr/lib/go-1.22/bin/",
             "/usr/lib/jvm/",
-            "/tmp/rustbox/", // Allow execution of compiled binaries in sandbox directories
+            "/tmp/rustbox/",     // Legacy sandbox directories
+            "/tmp/rustbox-uid-", // UID-scoped runtime root (IsolateConfig::runtime_root_dir)
         ];
 
         let mut under_secure_prefix = false;
@@ -201,6 +200,78 @@ pub mod command_validation {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::command_validation::validate_and_resolve_command;
+
+    #[test]
+    fn solution_binary_is_accepted_without_canonicalization() {
+        let result = validate_and_resolve_command("./solution");
+        assert!(result.is_ok(), "compiled solution must be allowed");
+        assert_eq!(result.unwrap().to_str().unwrap(), "./solution");
+    }
+
+    #[test]
+    fn nonexistent_absolute_path_is_rejected() {
+        let result = validate_and_resolve_command("/nonexistent/malicious");
+        assert!(result.is_err(), "nonexistent path must be rejected");
+    }
+
+    #[test]
+    fn path_not_in_allowlist_is_rejected() {
+        #[cfg(target_os = "linux")]
+        if std::path::Path::new("/usr/bin/id").exists() {
+            let result = validate_and_resolve_command("/usr/bin/id");
+            assert!(result.is_err(), "/usr/bin/id must not be in the allowlist");
+        }
+    }
+
+    #[test]
+    fn python3_is_in_allowlist() {
+        #[cfg(target_os = "linux")]
+        if std::path::Path::new("/usr/bin/python3").exists() {
+            let result = validate_and_resolve_command("/usr/bin/python3");
+            assert!(result.is_ok(), "/usr/bin/python3 must be allowed");
+        }
+    }
+
+    #[test]
+    fn gpp_is_in_allowlist() {
+        #[cfg(target_os = "linux")]
+        if std::path::Path::new("/usr/bin/g++").exists() {
+            let result = validate_and_resolve_command("/usr/bin/g++");
+            assert!(result.is_ok(), "/usr/bin/g++ must be allowed");
+        }
+    }
+
+    #[test]
+    fn java_symlink_resolves_to_allowed_path() {
+        // On Ubuntu with openjdk-21, /usr/bin/java canonicalizes to
+        // /usr/lib/jvm/java-21-openjdk-amd64/bin/java — must be in allowlist.
+        #[cfg(target_os = "linux")]
+        if std::path::Path::new("/usr/bin/java").exists() {
+            let result = validate_and_resolve_command("/usr/bin/java");
+            assert!(
+                result.is_ok(),
+                "/usr/bin/java must be allowed (canonical: {:?})",
+                std::path::Path::new("/usr/bin/java").canonicalize()
+            );
+        }
+    }
+
+    #[test]
+    fn javac_symlink_resolves_to_allowed_path() {
+        #[cfg(target_os = "linux")]
+        if std::path::Path::new("/usr/bin/javac").exists() {
+            let result = validate_and_resolve_command("/usr/bin/javac");
+            assert!(
+                result.is_ok(),
+                "/usr/bin/javac must be allowed (canonical: {:?})",
+                std::path::Path::new("/usr/bin/javac").canonicalize()
+            );
+        }
+    }
+}
 /// Path validation module for directory bindings and filesystem access
 pub mod path_validation {
     use super::*;

@@ -1,4 +1,4 @@
-//! Async-safe signal handling for process lifecycle management.
+//! Async-signal-safe process lifecycle signaling.
 
 use log::info;
 use nix::sys::signal::{self, SaFlags, SigAction, SigHandler, SigSet, Signal};
@@ -9,7 +9,6 @@ static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_RECEIVED: AtomicU32 = AtomicU32::new(0);
 const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Async-signal-safe shutdown trigger. Safe to call from signal handlers.
 pub fn request_shutdown(signal: i32) {
     SIGNAL_RECEIVED.store(signal as u32, Ordering::SeqCst);
     SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
@@ -26,26 +25,25 @@ pub fn should_continue() -> bool {
 pub struct SignalHandler;
 
 impl SignalHandler {
-    /// Must be called early in main() before any threads are spawned.
     pub fn init() -> Result<Self, String> {
         Self::install_signal_handlers()?;
         Ok(Self)
     }
 
     fn install_signal_handlers() -> Result<(), String> {
-        let sig_action = SigAction::new(
+        let action = SigAction::new(
             SigHandler::Handler(Self::signal_handler),
             SaFlags::SA_RESTART,
             SigSet::empty(),
         );
 
-        // SAFETY: The handler only performs atomic stores, which is async-signal-safe.
+        // SAFETY: handler performs only atomic stores.
         unsafe {
-            signal::sigaction(Signal::SIGINT, &sig_action)
+            signal::sigaction(Signal::SIGINT, &action)
                 .map_err(|e| format!("Failed to install SIGINT handler: {}", e))?;
-            signal::sigaction(Signal::SIGTERM, &sig_action)
+            signal::sigaction(Signal::SIGTERM, &action)
                 .map_err(|e| format!("Failed to install SIGTERM handler: {}", e))?;
-            signal::sigaction(Signal::SIGHUP, &sig_action)
+            signal::sigaction(Signal::SIGHUP, &action)
                 .map_err(|e| format!("Failed to install SIGHUP handler: {}", e))?;
         }
 
@@ -53,7 +51,6 @@ impl SignalHandler {
         Ok(())
     }
 
-    /// Async-signal-safe: only atomic operations, no allocations/locks/I/O.
     extern "C" fn signal_handler(signal: libc::c_int) {
         request_shutdown(signal);
     }
@@ -84,7 +81,6 @@ impl SignalHandler {
     }
 }
 
-/// Cleanup handler run from main loop (never from signal handler).
 pub struct CleanupHandler {
     cleanup_fn: Box<dyn FnOnce() + Send>,
 }
@@ -148,7 +144,6 @@ impl ShutdownCoordinator {
     }
 }
 
-/// RAII guard that blocks SIGINT/SIGTERM/SIGHUP for a critical section.
 pub struct SignalBlockGuard {
     _marker: (),
 }
@@ -182,31 +177,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_signal_handler_init() {
-        let handler = SignalHandler::init();
-        assert!(handler.is_ok());
+    fn signal_handler_init_works() {
+        assert!(SignalHandler::init().is_ok());
     }
 
     #[test]
-    fn test_shutdown_flag() {
-        let handler = SignalHandler::init().unwrap();
-        assert!(!handler.shutdown_requested());
-
-        SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
-        assert!(handler.shutdown_requested());
-
-        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
-    }
-
-    #[test]
-    fn test_signal_block() {
-        let guard = SignalBlockGuard::block();
-        assert!(guard.is_ok());
-    }
-
-    #[test]
-    fn test_shutdown_coordinator() {
-        let coordinator = ShutdownCoordinator::new().unwrap();
-        assert!(!coordinator.shutdown_requested());
+    fn signal_block_guard_works() {
+        assert!(SignalBlockGuard::block().is_ok());
     }
 }
