@@ -17,6 +17,11 @@ export interface ResultResponse {
   exit_code: number | null;
   time_ms: number | null;
   memory_kb: number | null;
+  cpu_time_ms: number | null;
+  wall_time_ms: number | null;
+  signal: number | null;
+  error_message: string | null;
+  language: string;
   created_at: string;
   completed_at: string | null;
 }

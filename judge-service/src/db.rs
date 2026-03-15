@@ -19,6 +19,10 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
             exit_code     INTEGER,
             time_ms       DOUBLE PRECISION,
             memory_kb     BIGINT,
+            cpu_time_ms   DOUBLE PRECISION,
+            wall_time_ms  DOUBLE PRECISION,
+            signal        INTEGER,
+            error_message TEXT,
             created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             completed_at  TIMESTAMPTZ
         )
@@ -76,6 +80,10 @@ pub async fn update_result(
     exit_code: Option<i32>,
     time_ms: f64,
     memory_kb: i64,
+    cpu_time_ms: f64,
+    wall_time_ms: f64,
+    signal: Option<i32>,
+    error_message: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
@@ -87,6 +95,10 @@ pub async fn update_result(
             exit_code = $5,
             time_ms = $6,
             memory_kb = $7,
+            cpu_time_ms = $8,
+            wall_time_ms = $9,
+            signal = $10,
+            error_message = $11,
             completed_at = NOW()
         WHERE id = $1
         "#,
@@ -98,6 +110,10 @@ pub async fn update_result(
     .bind(exit_code)
     .bind(time_ms)
     .bind(memory_kb)
+    .bind(cpu_time_ms)
+    .bind(wall_time_ms)
+    .bind(signal)
+    .bind(error_message)
     .execute(pool)
     .await?;
     Ok(())

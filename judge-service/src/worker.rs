@@ -4,6 +4,19 @@ use uuid::Uuid;
 
 use crate::{db, queue};
 
+/// Structured output from a single rustbox execution.
+struct ExecutionOutput {
+    verdict: String,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    cpu_time_ms: f64,
+    wall_time_ms: f64,
+    memory_kb: i64,
+    signal: Option<i32>,
+    error_message: Option<String>,
+}
+
 /// Spawn N worker tasks that dequeue jobs from Redis and execute via rustbox.
 pub fn spawn_workers(
     count: usize,
@@ -78,15 +91,26 @@ async fn process_job(worker_id: usize, pool: &PgPool, job_id: Uuid) {
         .await;
 
     match result {
-        Ok(Ok((verdict, stdout, stderr, exit_code, time_ms, memory_kb))) => {
+        Ok(Ok(out)) => {
             if let Err(e) = db::update_result(
-                pool, job_id, &verdict, &stdout, &stderr, exit_code, time_ms, memory_kb,
+                pool,
+                job_id,
+                &out.verdict,
+                &out.stdout,
+                &out.stderr,
+                out.exit_code,
+                out.wall_time_ms,
+                out.memory_kb,
+                out.cpu_time_ms,
+                out.wall_time_ms,
+                out.signal,
+                out.error_message.as_deref(),
             )
             .await
             {
                 error!(worker_id, %job_id, error = %e, "failed to update result");
             } else {
-                info!(worker_id, %job_id, verdict, "submission completed");
+                info!(worker_id, %job_id, verdict = out.verdict, "submission completed");
             }
         }
         Ok(Err(e)) => {
@@ -100,13 +124,13 @@ async fn process_job(worker_id: usize, pool: &PgPool, job_id: Uuid) {
     }
 }
 
-/// Run a submission through rustbox. Returns (verdict, stdout, stderr, exit_code, time_ms, memory_kb).
+/// Run a submission through rustbox and return structured execution output.
 fn execute_submission(
     language: &str,
     code: &str,
     stdin: &str,
     box_id: u32,
-) -> Result<(String, String, String, Option<i32>, f64, i64), String> {
+) -> Result<ExecutionOutput, String> {
     use rustbox::config::types::IsolateConfig;
     use rustbox::runtime::isolate::{ExecutionOverrides, Isolate};
 
@@ -143,18 +167,22 @@ fn execute_submission(
         _ => "RE",
     }
     .to_string();
-    let time_ms = result.wall_time * 1000.0;
+    let cpu_time_ms = result.cpu_time * 1000.0;
+    let wall_time_ms = result.wall_time * 1000.0;
     let memory_kb = (result.memory_peak / 1024) as i64;
 
     // Extract result data before cleanup consumes the isolate
-    let output = (
+    let output = ExecutionOutput {
         verdict,
-        result.stdout,
-        result.stderr,
-        result.exit_code,
-        time_ms,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exit_code: result.exit_code,
+        cpu_time_ms,
+        wall_time_ms,
         memory_kb,
-    );
+        signal: result.signal,
+        error_message: result.error_message.clone(),
+    };
 
     // Explicit cleanup to avoid cgroup/dir accumulation
     let _ = isolate.cleanup();
