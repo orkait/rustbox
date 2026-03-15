@@ -109,7 +109,7 @@ forge.yaml
 
 .tmp/*
 .quirks/*
-.github/*
+# .github/* is tracked — do not ignore
 .agents/*
 skills/
 skills-lock.json
