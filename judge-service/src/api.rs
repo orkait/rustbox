@@ -74,20 +74,8 @@ async fn submit(
             .into_response();
     }
 
-    // Push to Redis queue
-    let mut con = match state.redis.get_multiplexed_async_connection().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to connect to redis");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!(ErrorResponse {
-                    error: "queue error".to_string(),
-                })),
-            )
-                .into_response();
-        }
-    };
+    // Push to Redis queue (MultiplexedConnection is cheaply cloneable)
+    let mut con = state.redis.clone();
 
     // Enforce queue size limit to prevent unbounded accumulation
     let queue_depth = crate::queue::queue_depth(&mut con).await.unwrap_or(0);
@@ -165,10 +153,8 @@ async fn languages() -> Json<Vec<&'static str>> {
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    let queue_depth = match state.redis.get_multiplexed_async_connection().await {
-        Ok(mut con) => crate::queue::queue_depth(&mut con).await.unwrap_or(0),
-        Err(_) => 0,
-    };
+    let mut con = state.redis.clone();
+    let queue_depth = crate::queue::queue_depth(&mut con).await.unwrap_or(0);
 
     Json(HealthResponse {
         status: "ok".to_string(),

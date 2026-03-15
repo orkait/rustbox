@@ -14,7 +14,7 @@ use tracing::info;
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
-    pub redis: redis::Client,
+    pub redis: redis::aio::MultiplexedConnection,
     pub worker_count: usize,
     pub max_queue_size: usize,
     pub api_key: Option<String>,
@@ -48,15 +48,14 @@ async fn main() {
     let redis_client =
         redis::Client::open(cfg.redis_url.as_str()).expect("failed to create redis client");
 
-    // Verify Redis connection
-    let _con = redis_client
+    let redis_con = redis_client
         .get_multiplexed_async_connection()
         .await
         .expect("failed to connect to redis");
     info!("redis ready");
 
     // Spawn worker pool
-    let _workers = worker::spawn_workers(cfg.workers, pool.clone(), redis_client.clone());
+    let _workers = worker::spawn_workers(cfg.workers, pool.clone(), redis_client);
     info!(count = cfg.workers, "worker pool started");
 
     // Build HTTP server
@@ -67,7 +66,7 @@ async fn main() {
 
     let state = AppState {
         db: pool,
-        redis: redis_client,
+        redis: redis_con,
         worker_count: cfg.workers,
         max_queue_size: cfg.queue_size,
         api_key,
