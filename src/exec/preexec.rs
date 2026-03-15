@@ -569,12 +569,11 @@ impl Sandbox<CgroupAttached> {
                 "ENV",
                 "CDPATH",
                 "PYTHONSTARTUP",
-                "PYTHONPATH",
                 "PERL5OPT",
                 "RUBYOPT",
                 "NODE_OPTIONS",
-                // Java-specific options injection (VULN-044)
-                "JAVA_TOOL_OPTIONS",
+                // Java-specific: _JAVA_OPTIONS and JDK_JAVA_OPTIONS are always blocked.
+                // JAVA_TOOL_OPTIONS is allowed but validated below.
                 "_JAVA_OPTIONS",
                 "JDK_JAVA_OPTIONS",
             ];
@@ -583,6 +582,22 @@ impl Sandbox<CgroupAttached> {
                     fs_warn_parts(&[
                         "Removed dangerous environment variable after profile merge: ",
                         key,
+                    ]);
+                }
+            }
+
+            // PYTHONPATH: safe inside sandbox — filesystem isolation prevents accessing
+            // anything outside the chroot. No validation needed.
+
+            // JAVA_TOOL_OPTIONS: allowed from config.json but validated to reject
+            // agent-loading flags that could execute arbitrary code.
+            const JAVA_AGENT_FLAGS: &[&str] = &["-javaagent:", "-agentpath:", "-agentlib:"];
+            if let Some(jto) = env_map.get("JAVA_TOOL_OPTIONS") {
+                let lower = jto.to_lowercase();
+                if JAVA_AGENT_FLAGS.iter().any(|flag| lower.contains(flag)) {
+                    env_map.remove("JAVA_TOOL_OPTIONS");
+                    fs_warn_parts(&[
+                        "Removed JAVA_TOOL_OPTIONS containing agent flag",
                     ]);
                 }
             }

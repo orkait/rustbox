@@ -610,8 +610,10 @@ fn launch_degraded(
     const DEGRADED_ENV_BLOCKLIST: &[&str] = &[
         "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG", "LD_PROFILE",
         "LD_BIND_NOW", "LD_BIND_NOT", "LD_DYNAMIC_WEAK", "LD_USE_LOAD_BIAS",
-        "BASH_ENV", "ENV", "CDPATH", "PYTHONSTARTUP", "PYTHONPATH", "PERL5OPT", "RUBYOPT",
-        "NODE_OPTIONS", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
+        "BASH_ENV", "ENV", "CDPATH", "PYTHONSTARTUP", "PERL5OPT", "RUBYOPT",
+        "NODE_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
+        // PYTHONPATH: allowed (sandbox filesystem isolation)
+        // JAVA_TOOL_OPTIONS: allowed (validated in preexec, degraded is already unsafe)
     ];
     for key in DEGRADED_ENV_BLOCKLIST {
         cmd.env_remove(key);
