@@ -55,8 +55,9 @@ async fn main() {
     info!("redis ready");
 
     // Spawn worker pool
-    let _workers = worker::spawn_workers(cfg.workers, pool.clone(), redis_client);
-    info!(count = cfg.workers, "worker pool started");
+    let store_meta = cfg.store_meta;
+    let _workers = worker::spawn_workers(cfg.workers, pool.clone(), redis_client, store_meta);
+    info!(count = cfg.workers, store_meta, "worker pool started");
 
     // Build HTTP server
     let api_key = std::env::var("RUSTBOX_API_KEY").ok().filter(|k| !k.is_empty());

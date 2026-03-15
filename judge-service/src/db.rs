@@ -23,6 +23,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
             wall_time_ms  DOUBLE PRECISION,
             signal        INTEGER,
             error_message TEXT,
+            meta          TEXT,
             created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             completed_at  TIMESTAMPTZ
         )
@@ -84,6 +85,7 @@ pub async fn update_result(
     wall_time_ms: f64,
     signal: Option<i32>,
     error_message: Option<&str>,
+    meta: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
@@ -99,6 +101,7 @@ pub async fn update_result(
             wall_time_ms = $9,
             signal = $10,
             error_message = $11,
+            meta = $12,
             completed_at = NOW()
         WHERE id = $1
         "#,
@@ -114,6 +117,7 @@ pub async fn update_result(
     .bind(wall_time_ms)
     .bind(signal)
     .bind(error_message)
+    .bind(meta)
     .execute(pool)
     .await?;
     Ok(())

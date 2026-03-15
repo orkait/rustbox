@@ -71,6 +71,7 @@ def backend_env():
         "RUSTBOX_WORKERS": env.get("RUSTBOX_WORKERS", "2"),
         "RUST_LOG": env.get("RUST_LOG", "info"),
         "RUSTBOX_API_KEY": env.get("RUSTBOX_API_KEY", ""),
+        "RUSTBOX_STORE_META": env.get("RUSTBOX_STORE_META", "true"),
     }
 
 def run(cmd, cwd=None, check=True, capture=False, env=None):

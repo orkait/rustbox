@@ -6,6 +6,9 @@ pub struct ServiceConfig {
     pub queue_size: usize,
     pub database_url: String,
     pub redis_url: String,
+    /// Store full execution metadata (JudgeResultV1 JSON, compressed) in DB.
+    /// Opt-in via RUSTBOX_STORE_META=true.
+    pub store_meta: bool,
 }
 
 impl ServiceConfig {
@@ -18,6 +21,7 @@ impl ServiceConfig {
                 .expect("RUSTBOX_DATABASE_URL must be set"),
             redis_url: std::env::var("RUSTBOX_REDIS_URL")
                 .expect("RUSTBOX_REDIS_URL must be set"),
+            store_meta: env_or("RUSTBOX_STORE_META", false),
         }
     }
 }

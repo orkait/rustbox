@@ -15,6 +15,9 @@ struct ExecutionOutput {
     memory_kb: i64,
     signal: Option<i32>,
     error_message: Option<String>,
+    /// Compressed base64 of full execution metadata (JudgeResultV1-like JSON).
+    /// Only populated when store_meta=true.
+    meta: Option<String>,
 }
 
 /// Spawn N worker tasks that dequeue jobs from Redis and execute via rustbox.
@@ -22,19 +25,20 @@ pub fn spawn_workers(
     count: usize,
     pool: PgPool,
     redis_client: redis::Client,
+    store_meta: bool,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     (0..count)
         .map(|worker_id| {
             let pool = pool.clone();
             let client = redis_client.clone();
             tokio::spawn(async move {
-                worker_loop(worker_id, pool, client).await;
+                worker_loop(worker_id, pool, client, store_meta).await;
             })
         })
         .collect()
 }
 
-async fn worker_loop(worker_id: usize, pool: PgPool, redis_client: redis::Client) {
+async fn worker_loop(worker_id: usize, pool: PgPool, redis_client: redis::Client, store_meta: bool) {
     info!(worker_id, "worker started");
 
     let mut con = match redis_client.get_multiplexed_async_connection().await {
@@ -58,11 +62,11 @@ async fn worker_loop(worker_id: usize, pool: PgPool, redis_client: redis::Client
         };
 
         info!(worker_id, %job_id, "processing submission");
-        process_job(worker_id, &pool, job_id).await;
+        process_job(worker_id, &pool, job_id, store_meta).await;
     }
 }
 
-async fn process_job(worker_id: usize, pool: &PgPool, job_id: Uuid) {
+async fn process_job(worker_id: usize, pool: &PgPool, job_id: Uuid, store_meta: bool) {
     // Fetch submission from Postgres
     let submission = match db::get_submission(pool, job_id).await {
         Ok(Some(s)) => s,
@@ -87,7 +91,7 @@ async fn process_job(worker_id: usize, pool: &PgPool, job_id: Uuid) {
     let stdin = submission.stdin.clone();
     let box_id = worker_id as u32;
 
-    let result = tokio::task::spawn_blocking(move || execute_submission(&language, &code, &stdin, box_id))
+    let result = tokio::task::spawn_blocking(move || execute_submission(&language, &code, &stdin, box_id, store_meta))
         .await;
 
     match result {
@@ -105,6 +109,7 @@ async fn process_job(worker_id: usize, pool: &PgPool, job_id: Uuid) {
                 out.wall_time_ms,
                 out.signal,
                 out.error_message.as_deref(),
+                out.meta.as_deref(),
             )
             .await
             {
@@ -130,6 +135,7 @@ fn execute_submission(
     code: &str,
     stdin: &str,
     box_id: u32,
+    store_meta: bool,
 ) -> Result<ExecutionOutput, String> {
     use rustbox::config::types::IsolateConfig;
     use rustbox::runtime::isolate::{ExecutionOverrides, Isolate};
@@ -171,7 +177,26 @@ fn execute_submission(
     let wall_time_ms = result.wall_time * 1000.0;
     let memory_kb = (result.memory_peak / 1024) as i64;
 
-    // Extract result data before cleanup consumes the isolate
+    // Build compressed meta from the full ExecutionResult if requested
+    let meta = if store_meta {
+        let meta_json = serde_json::json!({
+            "exit_code": result.exit_code,
+            "status": result.status,
+            "output_integrity": result.output_integrity,
+            "cpu_time": result.cpu_time,
+            "wall_time": result.wall_time,
+            "memory_peak_bytes": result.memory_peak,
+            "signal": result.signal,
+            "success": result.success,
+            "error_message": result.error_message,
+            "language": language,
+            "box_id": box_id,
+        });
+        Some(crate::types::compress_meta(&meta_json.to_string()))
+    } else {
+        None
+    };
+
     let output = ExecutionOutput {
         verdict,
         stdout: result.stdout,
@@ -181,7 +206,8 @@ fn execute_submission(
         wall_time_ms,
         memory_kb,
         signal: result.signal,
-        error_message: result.error_message.clone(),
+        error_message: result.error_message,
+        meta,
     };
 
     // Explicit cleanup to avoid cgroup/dir accumulation
