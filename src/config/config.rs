@@ -110,12 +110,17 @@ impl RustBoxConfig {
                             use std::os::unix::fs::MetadataExt;
                             if let Ok(meta) = std::fs::metadata(&candidate) {
                                 // In strict/root context, reject world-writable config
-                                if unsafe { libc::geteuid() } == 0 && (meta.mode() & 0o002) != 0 {
+                                // Skip check on WSL mounts (/mnt/) where everything is 0777
+                                let is_wsl_mount = candidate.to_string_lossy().starts_with("/mnt/");
+                                if unsafe { libc::geteuid() } == 0
+                                    && (meta.mode() & 0o002) != 0
+                                    && !is_wsl_mount
+                                {
                                     log::warn!(
                                         "Skipping world-writable config file: {}",
                                         candidate.display()
                                     );
-                                    continue; // skip this candidate, try next parent
+                                    continue;
                                 }
                             }
                         }

@@ -341,22 +341,23 @@ impl CgroupBackend for CgroupV1 {
             return Ok(());
         };
 
+        // cgroup v1 enforces: memsw.limit >= memory.limit
+        // On a fresh cgroup (defaults are huge), we must set memory first, then memsw.
+        // On a reused cgroup with a low memsw, we must set memsw first, then memory.
+        // Strategy: try memory-first; if memsw then fails, retry memsw-first.
+        let mem_file = memory_path.join("memory.limit_in_bytes");
         let memsw = memory_path.join("memory.memsw.limit_in_bytes");
-        if memsw.exists() {
-            Self::write_value(
-                &memsw,
-                &limit_bytes,
-                self.strict_mode,
-                "memory.memsw.limit_in_bytes",
-            )?;
-        }
+        let has_memsw = memsw.exists();
 
-        Self::write_value(
-            &memory_path.join("memory.limit_in_bytes"),
-            &limit_bytes,
-            self.strict_mode,
-            "memory.limit_in_bytes",
-        )?;
+        Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
+
+        if has_memsw {
+            if Self::write_value(&memsw, &limit_bytes, self.strict_mode, "memory.memsw.limit_in_bytes").is_err() {
+                // Retry: set memsw first (raise ceiling), then memory
+                let _ = Self::write_value(&memsw, &limit_bytes, false, "memory.memsw.limit_in_bytes");
+                Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
+            }
+        }
 
         let swappiness = memory_path.join("memory.swappiness");
         if swappiness.exists() {
