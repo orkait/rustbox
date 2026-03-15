@@ -13,13 +13,19 @@ pub struct ValidationResult {
     pub warnings: Vec<String>,
 }
 
-impl ValidationResult {
-    pub fn new() -> Self {
+impl Default for ValidationResult {
+    fn default() -> Self {
         Self {
             valid: true,
             errors: Vec::new(),
             warnings: Vec::new(),
         }
+    }
+}
+
+impl ValidationResult {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn add_error(&mut self, error: String) {
@@ -163,8 +169,22 @@ fn validate_paths(config: &IsolateConfig, result: &mut ValidationResult) {
         }
     }
 
+    // Validate stdin_file if set
+    if let Some(ref stdin_file) = config.stdin_file {
+        if stdin_file.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            result.add_error(format!(
+                "stdin_file contains path traversal: {:?}", stdin_file
+            ));
+        }
+    }
+
     // Validate stdout_file if set
     if let Some(ref stdout_file) = config.stdout_file {
+        if stdout_file.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            result.add_error(format!(
+                "stdout_file contains path traversal: {:?}", stdout_file
+            ));
+        }
         if let Some(parent) = stdout_file.parent() {
             if !parent.exists() {
                 result.add_error(format!(
@@ -177,6 +197,11 @@ fn validate_paths(config: &IsolateConfig, result: &mut ValidationResult) {
 
     // Validate stderr_file if set
     if let Some(ref stderr_file) = config.stderr_file {
+        if stderr_file.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            result.add_error(format!(
+                "stderr_file contains path traversal: {:?}", stderr_file
+            ));
+        }
         if let Some(parent) = stderr_file.parent() {
             if !parent.exists() {
                 result.add_error(format!(
@@ -203,6 +228,12 @@ fn validate_namespaces(config: &IsolateConfig, result: &mut ValidationResult) {
             result.add_error(
                 "enable_mount_namespace must be true in strict mode (judge-v1 requirement)"
                     .to_string(),
+            );
+        }
+
+        if !config.enable_network_namespace {
+            result.add_error(
+                "enable_network_namespace must be true in strict mode".to_string(),
             );
         }
     }
@@ -301,9 +332,11 @@ mod tests {
 
     #[test]
     fn test_zero_memory_limit() {
-        let mut config = IsolateConfig::default();
-        config.memory_limit = Some(0);
-        config.strict_mode = false; // Permissive to get ValidationResult
+        let config = IsolateConfig {
+            memory_limit: Some(0),
+            strict_mode: false, // Permissive to get ValidationResult
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config).unwrap();
         assert!(!result.is_valid());
@@ -315,9 +348,11 @@ mod tests {
 
     #[test]
     fn test_zero_cpu_time_limit() {
-        let mut config = IsolateConfig::default();
-        config.cpu_time_limit = Some(Duration::from_secs(0));
-        config.strict_mode = false;
+        let config = IsolateConfig {
+            cpu_time_limit: Some(Duration::from_secs(0)),
+            strict_mode: false,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config).unwrap();
         assert!(!result.is_valid());
@@ -329,10 +364,12 @@ mod tests {
 
     #[test]
     fn test_wall_time_less_than_cpu_time() {
-        let mut config = IsolateConfig::default();
-        config.cpu_time_limit = Some(Duration::from_secs(10));
-        config.wall_time_limit = Some(Duration::from_secs(5));
-        config.strict_mode = false;
+        let config = IsolateConfig {
+            cpu_time_limit: Some(Duration::from_secs(10)),
+            wall_time_limit: Some(Duration::from_secs(5)),
+            strict_mode: false,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config).unwrap();
         assert!(!result.is_valid());
@@ -344,9 +381,10 @@ mod tests {
 
     #[test]
     fn test_root_uid_rejected_in_strict_mode() {
-        let mut config = IsolateConfig::default();
-        config.uid = Some(0);
-        config.strict_mode = true;
+        let config = IsolateConfig {
+            uid: Some(0),
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -354,9 +392,10 @@ mod tests {
 
     #[test]
     fn test_root_gid_rejected_in_strict_mode() {
-        let mut config = IsolateConfig::default();
-        config.gid = Some(0);
-        config.strict_mode = true;
+        let config = IsolateConfig {
+            gid: Some(0),
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -364,9 +403,10 @@ mod tests {
 
     #[test]
     fn test_missing_uid_rejected_in_strict_mode() {
-        let mut config = IsolateConfig::default();
-        config.uid = None;
-        config.strict_mode = true;
+        let config = IsolateConfig {
+            uid: None,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -374,9 +414,10 @@ mod tests {
 
     #[test]
     fn test_missing_gid_rejected_in_strict_mode() {
-        let mut config = IsolateConfig::default();
-        config.gid = None;
-        config.strict_mode = true;
+        let config = IsolateConfig {
+            gid: None,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -384,9 +425,10 @@ mod tests {
 
     #[test]
     fn test_missing_pid_namespace_in_strict_mode() {
-        let mut config = IsolateConfig::default();
-        config.enable_pid_namespace = false;
-        config.strict_mode = true;
+        let config = IsolateConfig {
+            enable_pid_namespace: false,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -394,9 +436,10 @@ mod tests {
 
     #[test]
     fn test_missing_mount_namespace_in_strict_mode() {
-        let mut config = IsolateConfig::default();
-        config.enable_mount_namespace = false;
-        config.strict_mode = true;
+        let config = IsolateConfig {
+            enable_mount_namespace: false,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -404,9 +447,11 @@ mod tests {
 
     #[test]
     fn test_allow_degraded_incompatible_with_strict() {
-        let mut config = IsolateConfig::default();
-        config.strict_mode = true;
-        config.allow_degraded = true;
+        let config = IsolateConfig {
+            strict_mode: true,
+            allow_degraded: true,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -414,9 +459,11 @@ mod tests {
 
     #[test]
     fn test_allow_degraded_ok_in_permissive() {
-        let mut config = IsolateConfig::default();
-        config.strict_mode = false;
-        config.allow_degraded = true;
+        let config = IsolateConfig {
+            strict_mode: false,
+            allow_degraded: true,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config).unwrap();
         assert!(
@@ -427,9 +474,11 @@ mod tests {
 
     #[test]
     fn test_upper_bound_memory_warning() {
-        let mut config = IsolateConfig::default();
-        config.memory_limit = Some(16 * 1024 * 1024 * 1024); // 16GB
-        config.strict_mode = false;
+        let config = IsolateConfig {
+            memory_limit: Some(16 * 1024 * 1024 * 1024), // 16GB
+            strict_mode: false,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config).unwrap();
         assert!(result.warnings.iter().any(|w| w.contains("8GB")));
@@ -437,9 +486,11 @@ mod tests {
 
     #[test]
     fn test_upper_bound_process_warning() {
-        let mut config = IsolateConfig::default();
-        config.process_limit = Some(10000);
-        config.strict_mode = false;
+        let config = IsolateConfig {
+            process_limit: Some(10000),
+            strict_mode: false,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config).unwrap();
         assert!(result.warnings.iter().any(|w| w.contains("4096")));
@@ -447,9 +498,11 @@ mod tests {
 
     #[test]
     fn test_upper_bound_time_warning() {
-        let mut config = IsolateConfig::default();
-        config.cpu_time_limit = Some(Duration::from_secs(1000));
-        config.strict_mode = false;
+        let config = IsolateConfig {
+            cpu_time_limit: Some(Duration::from_secs(1000)),
+            strict_mode: false,
+            ..IsolateConfig::default()
+        };
 
         let result = validate_config(&config).unwrap();
         assert!(result.warnings.iter().any(|w| w.contains("600 seconds")));

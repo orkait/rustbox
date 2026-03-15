@@ -1,5 +1,5 @@
 use crate::config::types::{IsolateError, Result};
-use crate::utils::fork_safe_log::{fs_debug_parts, fs_warn_parts, itoa_i32, raw_write};
+use crate::utils::fork_safe_log::{fs_debug_parts, itoa_i32, raw_write};
 use std::fs;
 
 const PR_CAPBSET_READ: libc::c_int = 23;
@@ -35,8 +35,8 @@ impl CapabilityNumber {
 /// Drop capabilities from bounding, ambient, and process sets.
 pub fn drop_all_capabilities() -> Result<()> {
     drop_bounding_capabilities()?;
-    drop_ambient_capabilities();
-    drop_process_capabilities();
+    drop_ambient_capabilities()?;
+    drop_process_capabilities()?;
     Ok(())
 }
 
@@ -45,14 +45,14 @@ pub fn drop_all_capabilities() -> Result<()> {
 /// PR_CAPBSET_DROP requires CAP_SETPCAP in the effective set.
 pub fn drop_bounding_and_ambient() -> Result<()> {
     drop_bounding_capabilities()?;
-    drop_ambient_capabilities();
+    drop_ambient_capabilities()?;
     Ok(())
 }
 
 /// Strict-aware capability drop for the lock_privileges step.
 /// Bounding/ambient are already cleared; only zero the process sets and verify.
 pub fn drop_process_caps_and_verify(strict_mode: bool) -> Result<()> {
-    drop_process_capabilities();
+    drop_process_capabilities()?;
     verify_capabilities_zeroed(strict_mode)
 }
 
@@ -88,21 +88,30 @@ fn drop_bounding_capabilities() -> Result<()> {
     Ok(())
 }
 
-fn drop_ambient_capabilities() {
+fn drop_ambient_capabilities() -> Result<()> {
     // SAFETY: prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL) clears ambient set.
     let rc = unsafe { libc::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        let mut ebuf = [0u8; 20];
-        let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-        fs_debug_parts(&[
-            "ambient capability clearing failed (possibly unsupported kernel): errno=",
-            eno,
-        ]);
+        // EINVAL means ambient capabilities are not supported by this kernel — not a failure.
+        if err.raw_os_error() == Some(libc::EINVAL) {
+            let mut ebuf = [0u8; 20];
+            let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
+            fs_debug_parts(&[
+                "ambient capability clearing not supported (EINVAL): errno=",
+                eno,
+            ]);
+            return Ok(());
+        }
+        return Err(IsolateError::Privilege(format!(
+            "failed to clear ambient capabilities: {}",
+            err
+        )));
     }
+    Ok(())
 }
 
-fn drop_process_capabilities() {
+fn drop_process_capabilities() -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         #[repr(C)]
@@ -153,15 +162,18 @@ fn drop_process_capabilities() {
 
         if rc != 0 {
             let err = std::io::Error::last_os_error();
-            let mut ebuf = [0u8; 20];
-            let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
             if err.raw_os_error() == Some(libc::EPERM) {
+                let mut ebuf = [0u8; 20];
+                let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
                 fs_debug_parts(&["capset returned EPERM after privilege drop: errno=", eno]);
-            } else {
-                fs_warn_parts(&["capset failed while dropping capabilities: errno=", eno]);
+                return Ok(());
             }
+            return Err(IsolateError::Privilege(format!(
+                "capset failed: {}", err
+            )));
         }
     }
+    Ok(())
 }
 
 fn verify_capabilities_zeroed(strict_mode: bool) -> Result<()> {
@@ -186,22 +198,22 @@ fn verify_capabilities_zeroed(strict_mode: bool) -> Result<()> {
         return Ok(());
     }
 
-    if strict_mode {
-        let message = format!(
-            "capability sets not fully zero after drop: {}",
-            non_zero.join(", ")
-        );
+    let message = format!(
+        "capability sets not fully zero after drop: {}",
+        non_zero.join(", ")
+    );
+
+    // When running as root (euid 0), capability verification is fatal in ALL modes.
+    // Retained capabilities allow privilege escalation regardless of mode.
+    // When running as non-root, capset EPERM is expected (CAP_SETPCAP required),
+    // so we only enforce in strict mode where root is a prerequisite.
+    let is_root = unsafe { libc::geteuid() } == 0;
+    if strict_mode || is_root {
         Err(IsolateError::Privilege(message))
     } else {
-        // Fork-safe: no format!(), no heap allocation for the log line.
-        raw_write(b"[WARN] capability sets not fully zero after drop: ");
-        for (i, entry) in non_zero.iter().enumerate() {
-            if i > 0 {
-                raw_write(b", ");
-            }
-            raw_write(entry.as_bytes());
-        }
-        raw_write(b" (permissive mode)\n");
+        raw_write(b"[WARN] ");
+        raw_write(message.as_bytes());
+        raw_write(b" (permissive non-root mode)\n");
         Ok(())
     }
 }

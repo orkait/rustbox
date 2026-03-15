@@ -177,13 +177,13 @@ pub struct SecurityEvent {
 
 impl SecurityEvent {
     /// Create a new security event with default severity
-    pub fn new(event_type: SecurityEventType, details: String) -> Self {
+    pub fn new(event_type: SecurityEventType, details: &str) -> Self {
         let severity = event_type.default_severity();
         Self {
             event_type,
             severity,
             timestamp: SystemTime::now(),
-            details,
+            details: details.to_owned(),
             correlation: None,
             capability_report: None,
             verdict_provenance: None,
@@ -202,13 +202,13 @@ impl SecurityEvent {
         self
     }
 
-    pub fn with_command(mut self, command: String) -> Self {
-        self.command = Some(command);
+    pub fn with_command(mut self, command: &str) -> Self {
+        self.command = Some(command.to_owned());
         self
     }
 
-    pub fn with_file_path(mut self, file_path: String) -> Self {
-        self.file_path = Some(file_path);
+    pub fn with_file_path(mut self, file_path: &str) -> Self {
+        self.file_path = Some(file_path.to_owned());
         self
     }
 
@@ -236,8 +236,8 @@ impl SecurityEvent {
     }
 
     /// P2-AUDIT-001: Add execution envelope ID
-    pub fn with_envelope_id(mut self, envelope_id: String) -> Self {
-        self.envelope_id = Some(envelope_id);
+    pub fn with_envelope_id(mut self, envelope_id: &str) -> Self {
+        self.envelope_id = Some(envelope_id.to_owned());
         self
     }
 }
@@ -306,13 +306,13 @@ impl SecurityLogger {
         // Add capability report if present (P2-AUDIT-001)
         if let Some(capability_report) = &event.capability_report {
             log_entry["capability_report"] =
-                serde_json::to_value(capability_report).unwrap_or_else(|_| serde_json::json!(null));
+                serde_json::to_value(capability_report).unwrap_or(serde_json::json!(null));
         }
 
         // Add verdict provenance if present (P2-AUDIT-001)
         if let Some(verdict_provenance) = &event.verdict_provenance {
             log_entry["verdict_provenance"] = serde_json::to_value(verdict_provenance)
-                .unwrap_or_else(|_| serde_json::json!(null));
+                .unwrap_or(serde_json::json!(null));
         }
 
         // Add envelope ID if present (P2-AUDIT-001)
@@ -341,29 +341,29 @@ impl SecurityLogger {
         match event.severity {
             SecuritySeverity::Critical => {
                 error!(
-                    "SECURITY CRITICAL: {} - {}",
-                    format!("{:?}", event.event_type),
+                    "SECURITY CRITICAL: {:?} - {}",
+                    event.event_type,
                     event.details
                 );
             }
             SecuritySeverity::High => {
                 error!(
-                    "SECURITY HIGH: {} - {}",
-                    format!("{:?}", event.event_type),
+                    "SECURITY HIGH: {:?} - {}",
+                    event.event_type,
                     event.details
                 );
             }
             SecuritySeverity::Medium => {
                 warn!(
-                    "SECURITY MEDIUM: {} - {}",
-                    format!("{:?}", event.event_type),
+                    "SECURITY MEDIUM: {:?} - {}",
+                    event.event_type,
                     event.details
                 );
             }
             SecuritySeverity::Low => {
                 info!(
-                    "SECURITY LOW: {} - {}",
-                    format!("{:?}", event.event_type),
+                    "SECURITY LOW: {:?} - {}",
+                    event.event_type,
                     event.details
                 );
             }
@@ -478,10 +478,10 @@ pub mod events {
     use super::*;
 
     /// Log a command injection attempt
-    pub fn command_injection_attempt(command: String, box_id: Option<u32>) {
+    pub fn command_injection_attempt(command: &str, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::CommandInjectionAttempt,
-            format!("Blocked potentially malicious command: {}", command),
+            &format!("Blocked potentially malicious command: {}", command),
         )
         .with_command(command);
 
@@ -495,10 +495,10 @@ pub mod events {
     }
 
     /// Log a path traversal attempt
-    pub fn path_traversal_attempt(path: String, box_id: Option<u32>) {
+    pub fn path_traversal_attempt(path: &str, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::PathTraversalAttempt,
-            format!("Blocked path traversal attempt: {}", path),
+            &format!("Blocked path traversal attempt: {}", path),
         )
         .with_file_path(path);
 
@@ -512,10 +512,10 @@ pub mod events {
     }
 
     /// Log a resource limit violation
-    pub fn resource_limit_exceeded(resource: String, limit: String, box_id: Option<u32>) {
+    pub fn resource_limit_exceeded(resource: &str, limit: &str, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::ResourceLimitExceeded,
-            format!("Resource limit exceeded: {} > {}", resource, limit),
+            &format!("Resource limit exceeded: {} > {}", resource, limit),
         );
 
         let event = if let Some(id) = box_id {
@@ -528,10 +528,10 @@ pub mod events {
     }
 
     /// Log unauthorized file access attempt
-    pub fn unauthorized_file_access(file_path: String, box_id: Option<u32>) {
+    pub fn unauthorized_file_access(file_path: &str, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::UnauthorizedFileAccess,
-            format!("Blocked unauthorized file access: {}", file_path),
+            &format!("Blocked unauthorized file access: {}", file_path),
         )
         .with_file_path(file_path);
 
@@ -545,10 +545,10 @@ pub mod events {
     }
 
     /// Log suspicious command execution
-    pub fn suspicious_command(command: String, reason: String, box_id: Option<u32>) {
+    pub fn suspicious_command(command: &str, reason: &str, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::SuspiciousCommand,
-            format!("Suspicious command detected ({}): {}", reason, command),
+            &format!("Suspicious command detected ({}): {}", reason, command),
         )
         .with_command(command);
 
@@ -565,12 +565,12 @@ pub mod events {
 /// Log execution start event
 pub fn execution_start(
     correlation: CorrelationIds,
-    envelope_id: String,
+    envelope_id: &str,
     capability_report: CapabilityReport,
 ) {
     let event = SecurityEvent::new(
         SecurityEventType::ExecutionStart,
-        format!("Execution started: run_id={}", correlation.run_id),
+        &format!("Execution started: run_id={}", correlation.run_id),
     )
     .with_correlation(correlation)
     .with_envelope_id(envelope_id)
@@ -583,7 +583,7 @@ pub fn execution_start(
 pub fn execution_end(correlation: CorrelationIds, verdict_provenance: VerdictProvenance) {
     let event = SecurityEvent::new(
         SecurityEventType::ExecutionEnd,
-        format!(
+        &format!(
             "Execution ended: run_id={}, status={:?}, actor={:?}",
             correlation.run_id, verdict_provenance.verdict_actor, verdict_provenance.verdict_cause
         ),
@@ -598,11 +598,11 @@ pub fn execution_end(correlation: CorrelationIds, verdict_provenance: VerdictPro
 pub fn capability_decision(
     correlation: CorrelationIds,
     capability_report: CapabilityReport,
-    decision: String,
+    decision: &str,
 ) {
     let event = SecurityEvent::new(
         SecurityEventType::CapabilityDecision,
-        format!("Capability decision: {}", decision),
+        &format!("Capability decision: {}", decision),
     )
     .with_correlation(correlation)
     .with_capability_report(capability_report);
@@ -611,10 +611,10 @@ pub fn capability_decision(
 }
 
 /// Log control degraded event
-pub fn control_degraded(correlation: CorrelationIds, control_name: String, reason: String) {
+pub fn control_degraded(correlation: CorrelationIds, control_name: &str, reason: &str) {
     let event = SecurityEvent::new(
         SecurityEventType::ControlDegraded,
-        format!("Control degraded: {} - {}", control_name, reason),
+        &format!("Control degraded: {} - {}", control_name, reason),
     )
     .with_correlation(correlation);
 
@@ -627,7 +627,7 @@ pub fn control_degraded(correlation: CorrelationIds, control_name: String, reaso
 pub fn memory_limit_violation(correlation: CorrelationIds, used: u64, limit: u64) {
     let event = SecurityEvent::new(
         SecurityEventType::MemoryLimitViolation,
-        format!(
+        &format!(
             "Memory limit violated: used={} bytes, limit={} bytes",
             used, limit
         ),
@@ -641,7 +641,7 @@ pub fn memory_limit_violation(correlation: CorrelationIds, used: u64, limit: u64
 pub fn cpu_limit_violation(correlation: CorrelationIds, used_ms: u64, limit_ms: u64) {
     let event = SecurityEvent::new(
         SecurityEventType::CpuLimitViolation,
-        format!(
+        &format!(
             "CPU limit violated: used={} ms, limit={} ms",
             used_ms, limit_ms
         ),
@@ -655,7 +655,7 @@ pub fn cpu_limit_violation(correlation: CorrelationIds, used_ms: u64, limit_ms: 
 pub fn wall_time_limit_violation(correlation: CorrelationIds, used_ms: u64, limit_ms: u64) {
     let event = SecurityEvent::new(
         SecurityEventType::WallTimeLimitViolation,
-        format!(
+        &format!(
             "Wall time limit violated: used={} ms, limit={} ms",
             used_ms, limit_ms
         ),
@@ -669,7 +669,7 @@ pub fn wall_time_limit_violation(correlation: CorrelationIds, used_ms: u64, limi
 pub fn process_limit_violation(correlation: CorrelationIds, count: u32, limit: u32) {
     let event = SecurityEvent::new(
         SecurityEventType::ProcessLimitViolation,
-        format!("Process limit violated: count={}, limit={}", count, limit),
+        &format!("Process limit violated: count={}, limit={}", count, limit),
     )
     .with_correlation(correlation);
 
@@ -680,7 +680,7 @@ pub fn process_limit_violation(correlation: CorrelationIds, count: u32, limit: u
 pub fn output_limit_violation(correlation: CorrelationIds, size: u64, limit: u64) {
     let event = SecurityEvent::new(
         SecurityEventType::OutputLimitViolation,
-        format!(
+        &format!(
             "Output limit violated: size={} bytes, limit={} bytes",
             size, limit
         ),
@@ -695,13 +695,13 @@ pub fn output_limit_violation(correlation: CorrelationIds, size: u64, limit: u64
 /// Log signal escalation event
 pub fn signal_escalation(
     correlation: CorrelationIds,
-    from_signal: String,
-    to_signal: String,
-    reason: String,
+    from_signal: &str,
+    to_signal: &str,
+    reason: &str,
 ) {
     let event = SecurityEvent::new(
         SecurityEventType::SignalEscalation,
-        format!(
+        &format!(
             "Signal escalation: {} -> {} (reason: {})",
             from_signal, to_signal, reason
         ),
@@ -712,10 +712,10 @@ pub fn signal_escalation(
 }
 
 /// Log graceful kill event
-pub fn graceful_kill(correlation: CorrelationIds, signal: String) {
+pub fn graceful_kill(correlation: CorrelationIds, signal: &str) {
     let event = SecurityEvent::new(
         SecurityEventType::GracefulKill,
-        format!("Graceful kill initiated: signal={}", signal),
+        &format!("Graceful kill initiated: signal={}", signal),
     )
     .with_correlation(correlation);
 
@@ -723,10 +723,10 @@ pub fn graceful_kill(correlation: CorrelationIds, signal: String) {
 }
 
 /// Log forced kill event
-pub fn forced_kill(correlation: CorrelationIds, reason: String) {
+pub fn forced_kill(correlation: CorrelationIds, reason: &str) {
     let event = SecurityEvent::new(
         SecurityEventType::ForcedKill,
-        format!("Forced kill: {}", reason),
+        &format!("Forced kill: {}", reason),
     )
     .with_correlation(correlation);
 
@@ -739,7 +739,7 @@ pub fn forced_kill(correlation: CorrelationIds, reason: String) {
 pub fn cleanup_start(correlation: CorrelationIds) {
     let event = SecurityEvent::new(
         SecurityEventType::CleanupStart,
-        format!("Cleanup started: run_id={}", correlation.run_id),
+        &format!("Cleanup started: run_id={}", correlation.run_id),
     )
     .with_correlation(correlation);
 
@@ -747,10 +747,10 @@ pub fn cleanup_start(correlation: CorrelationIds) {
 }
 
 /// Log cleanup success event
-pub fn cleanup_success(correlation: CorrelationIds, details: String) {
+pub fn cleanup_success(correlation: CorrelationIds, details: &str) {
     let event = SecurityEvent::new(
         SecurityEventType::CleanupSuccess,
-        format!("Cleanup succeeded: {}", details),
+        &format!("Cleanup succeeded: {}", details),
     )
     .with_correlation(correlation);
 
@@ -758,10 +758,10 @@ pub fn cleanup_success(correlation: CorrelationIds, details: String) {
 }
 
 /// Log cleanup failure event
-pub fn cleanup_failure(correlation: CorrelationIds, error: String) {
+pub fn cleanup_failure(correlation: CorrelationIds, error: &str) {
     let event = SecurityEvent::new(
         SecurityEventType::CleanupFailure,
-        format!("Cleanup failed: {}", error),
+        &format!("Cleanup failed: {}", error),
     )
     .with_correlation(correlation);
 
@@ -769,10 +769,10 @@ pub fn cleanup_failure(correlation: CorrelationIds, error: String) {
 }
 
 /// Log cleanup partial event
-pub fn cleanup_partial(correlation: CorrelationIds, completed: Vec<String>, failed: Vec<String>) {
+pub fn cleanup_partial(correlation: CorrelationIds, completed: &[String], failed: &[String]) {
     let event = SecurityEvent::new(
         SecurityEventType::CleanupPartial,
-        format!(
+        &format!(
             "Cleanup partially succeeded: completed={:?}, failed={:?}",
             completed, failed
         ),
@@ -811,11 +811,9 @@ mod tests {
     #[test]
     fn test_security_event_with_correlation() {
         let correlation = CorrelationIds::new(42);
-        let event = SecurityEvent::new(
-            SecurityEventType::ExecutionStart,
-            "Test execution start".to_string(),
-        )
-        .with_correlation(correlation.clone());
+        let event =
+            SecurityEvent::new(SecurityEventType::ExecutionStart, "Test execution start")
+                .with_correlation(correlation.clone());
 
         assert!(event.correlation.is_some());
         let event_correlation = event.correlation.unwrap();
@@ -824,11 +822,9 @@ mod tests {
 
     #[test]
     fn test_security_event_with_envelope_id() {
-        let event = SecurityEvent::new(
-            SecurityEventType::ExecutionStart,
-            "Test execution start".to_string(),
-        )
-        .with_envelope_id("test-envelope-id".to_string());
+        let event =
+            SecurityEvent::new(SecurityEventType::ExecutionStart, "Test execution start")
+                .with_envelope_id("test-envelope-id");
 
         assert_eq!(event.envelope_id, Some("test-envelope-id".to_string()));
     }
@@ -864,11 +860,9 @@ mod tests {
     #[test]
     fn test_security_event_serialization() {
         let correlation = CorrelationIds::new(42);
-        let event = SecurityEvent::new(
-            SecurityEventType::ExecutionStart,
-            "Test execution start".to_string(),
-        )
-        .with_correlation(correlation);
+        let event =
+            SecurityEvent::new(SecurityEventType::ExecutionStart, "Test execution start")
+                .with_correlation(correlation);
 
         let json = serde_json::to_string(&event);
         assert!(json.is_ok());

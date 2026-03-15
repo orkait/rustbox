@@ -180,15 +180,7 @@ pub mod command_validation {
             "/tmp/rustbox-uid-", // UID-scoped runtime root (IsolateConfig::runtime_root_dir)
         ];
 
-        let mut under_secure_prefix = false;
-        for prefix in &secure_prefixes {
-            if path_str.starts_with(prefix) {
-                under_secure_prefix = true;
-                break;
-            }
-        }
-
-        if !under_secure_prefix {
+        if !secure_prefixes.iter().any(|prefix| path_str.starts_with(prefix)) {
             return Err(SecurityError::CommandNotAllowed(format!(
                 "Path not under secure prefix: {}",
                 path_str

@@ -128,7 +128,7 @@ fn wait_for_payload_and_reap(payload_pid: Pid) -> Result<(Option<i32>, Option<i3
     Ok((payload_exit, payload_signal, reaped_descendants))
 }
 
-fn run_proxy(req: SandboxLaunchRequest) -> Result<ProxyStatus> {
+fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
     let start = Instant::now();
 
     let _ = setpgid(Pid::from_raw(0), Pid::from_raw(0));
@@ -157,7 +157,7 @@ fn run_proxy(req: SandboxLaunchRequest) -> Result<ProxyStatus> {
             let _ = close(stdout_write);
             let _ = close(stderr_write);
 
-            if let Err(err) = exec_payload_with_typestate(&req) {
+            if let Err(err) = exec_payload_with_typestate(req) {
                 let _ = writeln!(std::io::stderr(), "proxy payload setup failed: {err}");
                 std::process::exit(127);
             }
@@ -231,7 +231,7 @@ pub fn run_proxy_main_from_fds(launch_fd: RawFd, status_fd: RawFd) -> ! {
     // Set CLOEXEC on status_write to prevent leak into payload child
     let _ = fcntl(status_fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC));
 
-    let outcome = match read_json_from_fd::<SandboxLaunchRequest>(launch_fd).and_then(run_proxy) {
+    let outcome = match read_json_from_fd::<SandboxLaunchRequest>(launch_fd).and_then(|req| run_proxy(&req)) {
         Ok(status) => status,
         Err(err) => ProxyStatus {
             internal_error: Some(err.to_string()),

@@ -318,12 +318,16 @@ impl FilesystemSecurity {
 
         for entry in fs::read_dir(source)? {
             let entry = entry?;
+            let file_type = entry.file_type()?;
             let source_path = entry.path();
             let target_path = target.join(entry.file_name());
 
-            if source_path.is_dir() {
+            if file_type.is_symlink() {
+                continue; // Skip symlinks for security
+            }
+            if file_type.is_dir() {
                 Self::copy_directory_contents(&source_path, &target_path)?;
-            } else if source_path.is_file() {
+            } else if file_type.is_file() {
                 if let Some(parent) = target_path.parent() {
                     fs::create_dir_all(parent)?;
                 }
@@ -605,32 +609,56 @@ impl FilesystemSecurity {
 
     #[cfg(unix)]
     fn apply_mount_security_flags(&self, chroot_path: &Path) -> Result<()> {
-        let mount_flags = libc::MS_NOEXEC | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_BIND;
-
         let path_cstr = std::ffi::CString::new(chroot_path.to_string_lossy().as_bytes())
             .map_err(|e| IsolateError::Config(format!("Invalid chroot path: {}", e)))?;
 
-        // SAFETY: mount(2) bind mount with security flags on chroot root.
+        // Step 1: Bind mount the chroot root onto itself.
+        // SAFETY: mount(2) bind mount on chroot root.
         let result = unsafe {
             libc::mount(
                 path_cstr.as_ptr(),
                 path_cstr.as_ptr(),
                 std::ptr::null(),
-                mount_flags,
+                libc::MS_BIND,
                 std::ptr::null(),
             )
         };
 
-        if result != 0 && self.strict_mode {
+        if result != 0 {
             let err = std::io::Error::last_os_error();
-            return Err(IsolateError::Config(format!(
-                "Failed to apply mount security flags: {}",
-                err
-            )));
+            if self.strict_mode {
+                return Err(IsolateError::Config(format!(
+                    "Failed to bind mount chroot root: {}", err
+                )));
+            }
+            log::warn!("Bind mount of chroot root failed in permissive mode - sandbox may lack mount-level protections");
+            return Ok(());
         }
 
-        if result != 0 && !self.strict_mode {
-            log::warn!("Mount security flags (nosuid/nodev/noexec) failed in permissive mode - sandbox may lack mount-level protections");
+        // Step 2: Remount with security flags. The kernel ignores MS_NOEXEC/MS_NOSUID/MS_NODEV
+        // on a bind mount unless MS_REMOUNT is also specified. This two-step pattern is required.
+        let security_flags =
+            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_NOEXEC | libc::MS_NOSUID | libc::MS_NODEV;
+
+        // SAFETY: mount(2) remount with security flags.
+        let result = unsafe {
+            libc::mount(
+                std::ptr::null(),
+                path_cstr.as_ptr(),
+                std::ptr::null(),
+                security_flags,
+                std::ptr::null(),
+            )
+        };
+
+        if result != 0 {
+            let err = std::io::Error::last_os_error();
+            if self.strict_mode {
+                return Err(IsolateError::Config(format!(
+                    "Failed to apply mount security flags: {}", err
+                )));
+            }
+            log::warn!("Mount security flags (nosuid/nodev/noexec) remount failed in permissive mode");
         }
 
         Ok(())
@@ -1069,7 +1097,7 @@ mod tests {
 
         let workdir = PathBuf::from(format!("/{}", unique));
         let fs_sec =
-            FilesystemSecurity::new(Some(chroot.clone()), workdir.clone(), false, None, None);
+            FilesystemSecurity::new(Some(chroot.clone()), workdir, false, None, None);
         fs_sec
             .setup_workdir()
             .expect("workdir setup inside chroot should succeed");

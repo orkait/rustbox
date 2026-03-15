@@ -272,6 +272,11 @@ fn source_language_for_path(path: &std::path::Path) -> Option<&'static str> {
 }
 
 fn resolve_single_command_path(command_arg: &str) -> Option<std::path::PathBuf> {
+    // Reject path traversal
+    if command_arg.contains("..") {
+        return None;
+    }
+
     let current_dir = std::env::current_dir().ok()?;
     let candidate = current_dir.join(command_arg);
     if candidate.exists() {
@@ -389,10 +394,12 @@ pub fn run(mode: CliMode) -> Result<()> {
             CURRENT_BOX_ID.store(box_id, Ordering::Relaxed);
             eprintln!("Initializing sandbox with box-id: {}", box_id);
 
-            let mut config = crate::config::types::IsolateConfig::default();
-            config.instance_id = format!("rustbox/{}", box_id);
-            // The workdir is created under the UID-scoped runtime root by default.
-            config.strict_mode = true;
+            let config = crate::config::types::IsolateConfig {
+                instance_id: format!("rustbox/{}", box_id),
+                // The workdir is created under the UID-scoped runtime root by default.
+                strict_mode: true,
+                ..crate::config::types::IsolateConfig::default()
+            };
 
             let _isolate = crate::runtime::isolate::Isolate::new(config)?;
             eprintln!("Sandbox initialized successfully");
@@ -564,7 +571,7 @@ pub fn run(mode: CliMode) -> Result<()> {
                 eprintln!("Error: --strict and --permissive are mutually exclusive");
                 std::process::exit(1);
             }
-            let strict = if permissive { false } else { true };
+            let strict = !permissive;
 
             // Security check for strict mode
             let is_root = unsafe { libc::getuid() } == 0;

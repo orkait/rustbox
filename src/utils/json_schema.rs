@@ -69,6 +69,7 @@ pub struct JudgeResultV1 {
 
 impl JudgeResultV1 {
     /// Create new judge result
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         status: ExecutionStatus,
         exit_code: Option<i32>,
@@ -194,7 +195,7 @@ impl JudgeResultV1 {
                 0.0
             },
             divergence_class: Some(
-                crate::verdict::verdict::VerdictClassifier::classify_divergence(
+                crate::verdict::classifier::VerdictClassifier::classify_divergence(
                     cpu_time_ms,
                     wall_elapsed_ms,
                 ),
@@ -226,7 +227,7 @@ impl JudgeResultV1 {
         };
 
         let (status, provenance) =
-            crate::verdict::verdict::VerdictClassifier::classify(&evidence_bundle, &limit_snapshot);
+            crate::verdict::classifier::VerdictClassifier::classify(&evidence_bundle, &limit_snapshot);
         let verdict_provenance = if status == ExecutionStatus::Ok {
             None
         } else {

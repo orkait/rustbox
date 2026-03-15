@@ -16,7 +16,7 @@ pub(crate) fn sanitize_instance_id(instance_id: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
         .collect();
     let trimmed = sanitized.trim_matches('_').to_string();
-    if trimmed.is_empty() {
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." || trimmed.contains("..") {
         "default".to_string()
     } else {
         trimmed
@@ -179,5 +179,21 @@ mod tests {
             BackendSelector::AutoPreferV2
         );
         assert_eq!(BackendSelector::from_force_v1(true), BackendSelector::ForceV1);
+    }
+
+    #[test]
+    fn sanitize_instance_id_blocks_path_traversal() {
+        assert_eq!(sanitize_instance_id(".."), "default");
+        assert_eq!(sanitize_instance_id("../../../etc/passwd"), "default");
+        assert_eq!(sanitize_instance_id("foo..bar"), "default");
+        assert_eq!(sanitize_instance_id("a/.."), "default");
+        assert_eq!(sanitize_instance_id("."), "default");
+    }
+
+    #[test]
+    fn sanitize_instance_id_allows_valid_ids() {
+        assert_eq!(sanitize_instance_id("box-42"), "box-42");
+        assert_eq!(sanitize_instance_id("rustbox_1"), "rustbox_1");
+        assert_eq!(sanitize_instance_id("test.instance"), "test.instance");
     }
 }

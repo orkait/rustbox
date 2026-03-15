@@ -76,22 +76,14 @@ impl OutputCollector {
         let combined_limit = self.limits.combined_limit;
 
         // Spawn stdout collector thread
-        let stdout_handle = if let Some(stdout) = stdout {
-            Some(thread::spawn(move || {
-                collect_stream(stdout, stdout_limit, stdout_tx)
-            }))
-        } else {
-            None
-        };
+        let stdout_handle = stdout.map(|stdout| {
+            thread::spawn(move || collect_stream(stdout, stdout_limit, stdout_tx))
+        });
 
         // Spawn stderr collector thread
-        let stderr_handle = if let Some(stderr) = stderr {
-            Some(thread::spawn(move || {
-                collect_stream(stderr, stderr_limit, stderr_tx)
-            }))
-        } else {
-            None
-        };
+        let stderr_handle = stderr.map(|stderr| {
+            thread::spawn(move || collect_stream(stderr, stderr_limit, stderr_tx))
+        });
 
         // Collect with timeout
         let timeout = Duration::from_millis(self.limits.collection_timeout_ms);

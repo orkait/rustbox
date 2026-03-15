@@ -107,7 +107,7 @@ impl EnvHygiene {
 
         // Sanitize LD_* variables (dangerous for loader abuse)
         if self.env_policy.sanitize_ld_vars {
-            let ld_vars = vec![
+            let ld_vars: &[&str] = &[
                 "LD_PRELOAD",
                 "LD_LIBRARY_PATH",
                 "LD_AUDIT",
@@ -118,7 +118,7 @@ impl EnvHygiene {
                 "LD_DYNAMIC_WEAK",
             ];
 
-            for var in ld_vars {
+            for &var in ld_vars {
                 if env_map.remove(var).is_some() {
                     fs_info_parts(&["Removed dangerous environment variable: ", var]);
                 }
@@ -243,9 +243,9 @@ pub fn validate_environment_safety(env_map: &HashMap<String, String>) -> Vec<Str
     let mut warnings = Vec::new();
 
     // Check for dangerous LD_* variables
-    let dangerous_ld_vars = vec!["LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"];
+    let dangerous_ld_vars: &[&str] = &["LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"];
 
-    for var in dangerous_ld_vars {
+    for &var in dangerous_ld_vars {
         if env_map.contains_key(var) {
             warnings.push(format!("Dangerous environment variable present: {}", var));
         }

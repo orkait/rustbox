@@ -191,6 +191,12 @@ impl Isolate {
 
     /// Create a new isolate instance
     pub fn new(config: IsolateConfig) -> Result<Self> {
+        if config.instance_id.contains("..") || config.instance_id.starts_with('/') {
+            return Err(IsolateError::Config(format!(
+                "instance_id contains unsafe path components: {}", config.instance_id
+            )));
+        }
+
         let mut base_path = Self::select_state_root()?;
         base_path.push(&config.instance_id);
 
@@ -350,32 +356,44 @@ impl Isolate {
             }
             _ => crate::config::types::ExecutionStatus::RuntimeError,
         };
-        let detail = if !compile_result.stderr.trim().is_empty() {
-            compile_result.stderr.clone()
-        } else if !compile_result.stdout.trim().is_empty() {
-            compile_result.stdout.clone()
+
+        // Destructure to avoid redundant clones on owned fields
+        let ExecutionResult {
+            exit_code,
+            stderr,
+            stdout,
+            error_message: compile_error,
+            output_integrity,
+            wall_time,
+            cpu_time,
+            memory_peak,
+            ..
+        } = compile_result;
+
+        let detail = if !stderr.trim().is_empty() {
+            stderr
+        } else if !stdout.trim().is_empty() {
+            stdout
         } else {
-            compile_result
-                .error_message
-                .clone()
-                .unwrap_or_else(|| "no compiler stderr".to_string())
+            compile_error.unwrap_or_else(|| "no compiler stderr".to_string())
         };
 
         ExecutionResult {
             status,
-            exit_code: compile_result.exit_code,
-            stdout: "".to_string(),
+            exit_code,
+            stdout: String::new(),
             stderr: format!("{}:\n{}", stderr_prefix, detail),
-            output_integrity: compile_result.output_integrity,
-            wall_time: compile_result.wall_time,
-            cpu_time: compile_result.cpu_time,
-            memory_peak: compile_result.memory_peak,
+            output_integrity,
+            wall_time,
+            cpu_time,
+            memory_peak,
             success: false,
             signal: None,
             error_message: Some(error_message.to_string()),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compile_and_execute_with_spec<F>(
         &mut self,
         code: &str,
@@ -398,7 +416,13 @@ impl Isolate {
         let original_config = self.instance.config.clone();
         configure_compile(&mut self.instance.config, &original_config, overrides);
 
-        let compile_result = self.execute(&compile_command, None)?;
+        let compile_result = match self.execute(&compile_command, None) {
+            Ok(r) => r,
+            Err(e) => {
+                self.instance.config = original_config;
+                return Err(e);
+            }
+        };
         if !compile_result.success {
             if restore_on_return {
                 self.instance.config = original_config;
@@ -506,7 +530,7 @@ impl Isolate {
         // Extract class name from code (simple heuristic)
         let class_name = self
             .extract_java_class_name(code)
-            .unwrap_or("Main".to_string());
+            .unwrap_or_else(|| "Main".to_string());
         let source_file = self
             .instance
             .config
@@ -672,9 +696,7 @@ impl Isolate {
             }
 
             // Validate target path format
-            if binding.target.is_absolute() && binding.target.starts_with("/") {
-                // This is good - absolute path in sandbox
-            } else {
+            if !binding.target.is_absolute() {
                 return Err(IsolateError::Config(format!(
                     "Target path must be absolute (start with /): {}",
                     binding.target.display()

@@ -273,11 +273,8 @@ mod tests {
 
     #[test]
     fn test_mount_invariance_failure_injection() {
-        let result = test_mount_invariance_with_failure();
-        assert!(result.is_ok());
-
-        if let Ok(invariant) = result {
-            assert!(invariant, "Mount invariance test should pass");
-        }
+        let invariant = test_mount_invariance_with_failure()
+            .expect("mount invariance test should succeed");
+        assert!(invariant, "Mount invariance test should pass");
     }
 }

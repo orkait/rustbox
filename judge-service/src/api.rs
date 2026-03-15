@@ -37,6 +37,16 @@ async fn submit(
         }
     }
 
+    // Validate code size
+    const MAX_CODE_SIZE: usize = 64 * 1024; // 64KB
+    if req.code.len() > MAX_CODE_SIZE {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "code exceeds maximum size of 64KB"})),
+        )
+            .into_response();
+    }
+
     // Validate language
     let lang = req.language.to_lowercase();
     if !matches!(lang.as_str(), "python" | "py" | "cpp" | "c++" | "cxx" | "java") {
@@ -108,8 +118,23 @@ async fn submit(
 
 async fn result(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
+    // Check API key if configured
+    if let Some(ref key) = state.api_key {
+        let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok());
+        if provided != Some(key.as_str()) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!(ErrorResponse {
+                    error: "invalid or missing API key".to_string(),
+                })),
+            )
+                .into_response();
+        }
+    }
+
     match crate::db::get_submission(&state.db, id).await {
         Ok(Some(row)) => {
             let resp: ResultResponse = row.into();

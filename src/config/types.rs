@@ -111,7 +111,7 @@ impl DirectoryBinding {
                 Ok(paths) => paths,
                 Err(e) => {
                     // Log security event for path traversal attempt
-                    events::path_traversal_attempt(binding_str.to_string(), None);
+                    events::path_traversal_attempt(binding_str, None);
                     return Err(e);
                 }
             };
@@ -449,7 +449,7 @@ impl std::fmt::Display for OutputIntegrity {
 
 impl Default for OutputIntegrity {
     fn default() -> Self {
-        OutputIntegrity::Complete
+        Self::Complete
     }
 }
 
@@ -628,7 +628,7 @@ impl From<nix::errno::Errno> for IsolateError {
 }
 impl Default for ExecutionStatus {
     fn default() -> Self {
-        ExecutionStatus::Ok
+        Self::Ok
     }
 }
 

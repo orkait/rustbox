@@ -4,10 +4,12 @@
 use crate::config::types::{IsolateError, Result};
 
 /// User namespace policy
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Per plan.md Section 11: Current GA target is rootful strict
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum UserNamespacePolicy {
     /// Rootful strict mode (GA target)
     /// Requires elevated privileges, no user namespace
+    #[default]
     RootfulStrict,
 
     /// Rootless strict mode (deferred until complete userns mapping workflow)
@@ -20,13 +22,6 @@ pub enum UserNamespacePolicy {
 
     /// Disabled - no user namespace
     Disabled,
-}
-
-impl Default for UserNamespacePolicy {
-    fn default() -> Self {
-        // Per plan.md Section 11: Current GA target is rootful strict
-        UserNamespacePolicy::RootfulStrict
-    }
 }
 
 /// User namespace configuration
@@ -192,8 +187,10 @@ mod tests {
 
     #[test]
     fn test_validate_rootless_strict() {
-        let mut config = UserNamespaceConfig::default();
-        config.policy = UserNamespacePolicy::RootlessStrict;
+        let config = UserNamespaceConfig {
+            policy: UserNamespacePolicy::RootlessStrict,
+            ..UserNamespaceConfig::default()
+        };
 
         // Should fail - not yet supported
         let result = validate_userns_config(&config, true);
@@ -206,9 +203,11 @@ mod tests {
 
     #[test]
     fn test_validate_permissive() {
-        let mut config = UserNamespaceConfig::default();
-        config.policy = UserNamespacePolicy::Permissive;
-        config.enable_userns = true;
+        let config = UserNamespaceConfig {
+            policy: UserNamespacePolicy::Permissive,
+            enable_userns: true,
+            ..UserNamespaceConfig::default()
+        };
 
         // Should succeed in permissive mode
         let result = validate_userns_config(&config, false);
@@ -221,8 +220,10 @@ mod tests {
 
     #[test]
     fn test_validate_disabled() {
-        let mut config = UserNamespaceConfig::default();
-        config.policy = UserNamespacePolicy::Disabled;
+        let mut config = UserNamespaceConfig {
+            policy: UserNamespacePolicy::Disabled,
+            ..UserNamespaceConfig::default()
+        };
 
         // Should succeed
         let result = validate_userns_config(&config, true);
@@ -247,8 +248,10 @@ mod tests {
         let desc = get_userns_behavior_description(&config);
         assert!(desc.contains("Rootful strict"));
 
-        let mut config = UserNamespaceConfig::default();
-        config.policy = UserNamespacePolicy::RootlessStrict;
+        let config = UserNamespaceConfig {
+            policy: UserNamespacePolicy::RootlessStrict,
+            ..UserNamespaceConfig::default()
+        };
         let desc = get_userns_behavior_description(&config);
         assert!(desc.contains("NOT SUPPORTED"));
     }

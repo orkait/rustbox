@@ -123,7 +123,7 @@ impl ProcessExecutor {
             Err(e) => {
                 // Log security event for command injection attempt
                 let box_id = self.config.instance_id.parse::<u32>().ok();
-                events::command_injection_attempt(command[0].clone(), box_id);
+                events::command_injection_attempt(&command[0], box_id);
                 Err(e)
             }
         }
@@ -343,8 +343,10 @@ mod tests {
         let remove_calls = Arc::new(AtomicUsize::new(0));
 
         {
-            let mut config = IsolateConfig::default();
-            config.instance_id = "drop-cleanup-test".to_string();
+            let config = IsolateConfig {
+                instance_id: "drop-cleanup-test".to_string(),
+                ..Default::default()
+            };
 
             let mut executor = ProcessExecutor {
                 config,

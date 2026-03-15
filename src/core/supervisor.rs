@@ -65,18 +65,34 @@ fn build_configured_controls(req: &SandboxLaunchRequest) -> Vec<String> {
     controls
 }
 
-fn build_launch_evidence(
-    req: &SandboxLaunchRequest,
+/// Groups the parameters needed to build launch evidence.
+struct LaunchEvidenceParams<'a> {
     running_as_root: bool,
     cgroup_backend_selected: Option<String>,
     cgroup_enforced: bool,
     timed_out: bool,
-    kill_report: Option<&KillReport>,
-    proxy_status: &ProxyStatus,
+    kill_report: Option<&'a KillReport>,
+    proxy_status: &'a ProxyStatus,
     cgroup_evidence: Option<CgroupEvidence>,
     evidence_collection_errors: Vec<String>,
     cleanup_verified: bool,
+}
+
+fn build_launch_evidence(
+    req: &SandboxLaunchRequest,
+    params: LaunchEvidenceParams<'_>,
 ) -> LaunchEvidence {
+    let LaunchEvidenceParams {
+        running_as_root,
+        cgroup_backend_selected,
+        cgroup_enforced,
+        timed_out,
+        kill_report,
+        proxy_status,
+        cgroup_evidence,
+        evidence_collection_errors,
+        cleanup_verified,
+    } = params;
     let configured = build_configured_controls(req);
     let mut applied = Vec::new();
     let mut missing = Vec::new();
@@ -419,10 +435,8 @@ pub fn launch_with_supervisor(
                     if !timed_out && !interrupted_by_signal {
                         std::thread::sleep(Duration::from_millis(10));
                     }
-                } else {
-                    if !interrupted_by_signal {
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
+                } else if !interrupted_by_signal {
+                    std::thread::sleep(Duration::from_millis(10));
                 }
 
                 if interrupted_by_signal {
@@ -528,15 +542,17 @@ pub fn launch_with_supervisor(
     let running_as_root = unsafe { libc::geteuid() } == 0;
     let evidence = build_launch_evidence(
         &req,
-        running_as_root,
-        cgroup_backend_selected,
-        cgroup_enforced,
-        timed_out,
-        kill_report.as_ref(),
-        &status,
-        cgroup_evidence,
-        evidence_collection_errors,
-        true,
+        LaunchEvidenceParams {
+            running_as_root,
+            cgroup_backend_selected,
+            cgroup_enforced,
+            timed_out,
+            kill_report: kill_report.as_ref(),
+            proxy_status: &status,
+            cgroup_evidence,
+            evidence_collection_errors,
+            cleanup_verified: true,
+        },
     );
 
     Ok(SandboxLaunchOutcome {
@@ -589,6 +605,18 @@ fn launch_degraded(
         cmd.env(key, value);
     }
 
+    // VULN-031: Strip dangerous environment variables that could bypass isolation.
+    // The profile merge may have re-introduced these from user-supplied config.
+    const DEGRADED_ENV_BLOCKLIST: &[&str] = &[
+        "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG", "LD_PROFILE",
+        "LD_BIND_NOW", "LD_BIND_NOT", "LD_DYNAMIC_WEAK", "LD_USE_LOAD_BIAS",
+        "BASH_ENV", "ENV", "CDPATH", "PYTHONSTARTUP", "PYTHONPATH", "PERL5OPT", "RUBYOPT",
+        "NODE_OPTIONS", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
+    ];
+    for key in DEGRADED_ENV_BLOCKLIST {
+        cmd.env_remove(key);
+    }
+
     // Drop privileges in degraded mode before exec (only when running as root).
     // Non-root callers are already unprivileged and cannot setresuid.
     if unsafe { libc::geteuid() } == 0 {
@@ -596,6 +624,9 @@ fn launch_degraded(
             use std::os::unix::process::CommandExt;
             unsafe {
                 cmd.pre_exec(move || {
+                    // VULN-038: Restrictive umask before any file operations.
+                    libc::umask(0o077);
+
                     // Clear supplementary groups before dropping to target uid/gid.
                     if libc::setgroups(0, std::ptr::null()) != 0 {
                         return Err(std::io::Error::last_os_error());
@@ -615,6 +646,29 @@ fn launch_degraded(
                         // Ignore errors: some capability numbers may not exist on this kernel.
                         let _ = libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0);
                     }
+
+                    // VULN-032: Enforce rlimits (best-effort in degraded mode).
+                    // RLIMIT_CORE = 0 (no core dumps)
+                    let zero_limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                    libc::setrlimit(libc::RLIMIT_CORE, &zero_limit);
+
+                    // RLIMIT_FSIZE = 256MB
+                    let fsize_limit = libc::rlimit { rlim_cur: 256 * 1024 * 1024, rlim_max: 256 * 1024 * 1024 };
+                    libc::setrlimit(libc::RLIMIT_FSIZE, &fsize_limit);
+
+                    // RLIMIT_NOFILE = 256
+                    let nofile_limit = libc::rlimit { rlim_cur: 256, rlim_max: 256 };
+                    libc::setrlimit(libc::RLIMIT_NOFILE, &nofile_limit);
+
+                    // RLIMIT_NPROC = 64
+                    let nproc_limit = libc::rlimit { rlim_cur: 64, rlim_max: 64 };
+                    libc::setrlimit(libc::RLIMIT_NPROC, &nproc_limit);
+
+                    // VULN-037: Close all FDs > 2 (best-effort).
+                    for fd in 3..1024 {
+                        libc::close(fd);
+                    }
+
                     Ok(())
                 });
             }
@@ -729,15 +783,17 @@ fn launch_degraded(
 
     let evidence = build_launch_evidence(
         &req,
-        false,
-        cgroup_backend_selected,
-        false,
-        timed_out,
-        None,
-        &status,
-        None,
-        evidence_collection_errors,
-        true,
+        LaunchEvidenceParams {
+            running_as_root: false,
+            cgroup_backend_selected,
+            cgroup_enforced: false,
+            timed_out,
+            kill_report: None,
+            proxy_status: &status,
+            cgroup_evidence: None,
+            evidence_collection_errors,
+            cleanup_verified: true,
+        },
     );
 
     Ok(SandboxLaunchOutcome {
@@ -756,15 +812,17 @@ mod tests {
     use crate::config::types::{IsolateConfig, OutputIntegrity};
 
     fn test_request(strict_mode: bool) -> SandboxLaunchRequest {
-        let mut config = IsolateConfig::default();
-        config.instance_id = "evidence-test".to_string();
-        config.strict_mode = strict_mode;
-        config.enable_pid_namespace = true;
-        config.enable_mount_namespace = true;
-        config.enable_network_namespace = true;
-        config.enable_user_namespace = false;
-        config.memory_limit = Some(128 * 1024 * 1024);
-        config.process_limit = Some(2);
+        let config = IsolateConfig {
+            instance_id: "evidence-test".to_string(),
+            strict_mode,
+            enable_pid_namespace: true,
+            enable_mount_namespace: true,
+            enable_network_namespace: true,
+            enable_user_namespace: false,
+            memory_limit: Some(128 * 1024 * 1024),
+            process_limit: Some(2),
+            ..IsolateConfig::default()
+        };
 
         SandboxLaunchRequest::from_config(&config, &[String::from("/bin/true")], None, None)
     }
@@ -790,15 +848,17 @@ mod tests {
         let status = proxy_status(Some("pre-exec failed"));
         let evidence = build_launch_evidence(
             &req,
-            true,
-            Some("cgroup-v1".to_string()),
-            true,
-            false,
-            None,
-            &status,
-            None,
-            Vec::new(),
-            true,
+            LaunchEvidenceParams {
+                running_as_root: true,
+                cgroup_backend_selected: Some("cgroup-v1".to_string()),
+                cgroup_enforced: true,
+                timed_out: false,
+                kill_report: None,
+                proxy_status: &status,
+                cgroup_evidence: None,
+                evidence_collection_errors: Vec::new(),
+                cleanup_verified: true,
+            },
         );
 
         for control in [
@@ -826,15 +886,17 @@ mod tests {
         let status = proxy_status(None);
         let evidence = build_launch_evidence(
             &req,
-            true,
-            Some("cgroup-v1".to_string()),
-            true,
-            false,
-            None,
-            &status,
-            None,
-            Vec::new(),
-            true,
+            LaunchEvidenceParams {
+                running_as_root: true,
+                cgroup_backend_selected: Some("cgroup-v1".to_string()),
+                cgroup_enforced: true,
+                timed_out: false,
+                kill_report: None,
+                proxy_status: &status,
+                cgroup_evidence: None,
+                evidence_collection_errors: Vec::new(),
+                cleanup_verified: true,
+            },
         );
 
         for control in [

@@ -2,7 +2,7 @@
 //!
 //! Derives verdicts as pure functions over immutable evidence bundles.
 
-pub mod verdict;
+pub mod classifier;
 // Deferred to post-V1: envelope, timeout, abuse
 // pub mod envelope;
 // pub mod timeout;

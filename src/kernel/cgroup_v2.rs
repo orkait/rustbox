@@ -2,7 +2,7 @@
 
 use crate::config::types::{CgroupEvidence, IsolateError, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::cgroup::CgroupBackend;
 
@@ -46,7 +46,7 @@ impl CgroupV2 {
         self.instance_path(&self.instance_id)
     }
 
-    fn read_u64_file(path: &PathBuf, name: &str) -> Result<u64> {
+    fn read_u64_file(path: &Path, name: &str) -> Result<u64> {
         let content = fs::read_to_string(path)
             .map_err(|e| IsolateError::Cgroup(format!("failed to read {}: {}", name, e)))?;
         content
@@ -55,7 +55,7 @@ impl CgroupV2 {
             .map_err(|e| IsolateError::Cgroup(format!("failed to parse {}: {}", name, e)))
     }
 
-    fn read_optional_limit(path: &PathBuf, name: &str) -> Result<Option<u64>> {
+    fn read_optional_limit(path: &Path, name: &str) -> Result<Option<u64>> {
         let content = fs::read_to_string(path)
             .map_err(|e| IsolateError::Cgroup(format!("failed to read {}: {}", name, e)))?;
         let value = content.trim();
@@ -152,10 +152,11 @@ impl CgroupV2 {
         let procs_path = path.join("cgroup.procs");
         let content = fs::read_to_string(&procs_path)
             .map_err(|e| IsolateError::Cgroup(format!("failed to read cgroup.procs: {}", e)))?;
-        Ok(content
+        let count = content
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .count() as u32)
+            .count();
+        u32::try_from(count).map_err(|_| IsolateError::Cgroup("process count overflow".to_string()))
     }
 
     fn get_peak_memory_internal(&self, instance_id: &str) -> Result<u64> {
@@ -267,6 +268,9 @@ impl CgroupBackend for CgroupV2 {
     }
 
     fn set_memory_limit(&self, instance_id: &str, limit_bytes: u64) -> Result<()> {
+        if limit_bytes == 0 {
+            return Err(IsolateError::Cgroup("memory limit cannot be zero".to_string()));
+        }
         let path = self.instance_path(instance_id);
 
         fs::write(path.join("memory.max"), limit_bytes.to_string())
@@ -289,6 +293,9 @@ impl CgroupBackend for CgroupV2 {
     }
 
     fn set_process_limit(&self, instance_id: &str, limit: u32) -> Result<()> {
+        if limit == 0 {
+            return Err(IsolateError::Cgroup("process limit cannot be zero".to_string()));
+        }
         let limit_path = self.instance_path(instance_id).join("pids.max");
         fs::write(&limit_path, limit.to_string())
             .map_err(|e| IsolateError::Cgroup(format!("failed to set pids.max: {}", e)))?;

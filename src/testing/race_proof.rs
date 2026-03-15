@@ -86,15 +86,12 @@ pub fn check_process_in_cgroup(pid: u32, cgroup_path: &str) -> Result<bool> {
     let content = fs::read_to_string(&procs_path)
         .map_err(|e| IsolateError::Cgroup(format!("Failed to read cgroup.procs: {}", e)))?;
 
-    for line in content.lines() {
-        if let Ok(cgroup_pid) = line.trim().parse::<u32>() {
-            if cgroup_pid == pid {
-                return Ok(true);
-            }
-        }
-    }
+    let found = content
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .any(|cgroup_pid| cgroup_pid == pid);
 
-    Ok(false)
+    Ok(found)
 }
 
 /// Get all processes in cgroup
@@ -108,12 +105,10 @@ pub fn get_cgroup_processes(cgroup_path: &str) -> Result<Vec<u32>> {
     let content = fs::read_to_string(&procs_path)
         .map_err(|e| IsolateError::Cgroup(format!("Failed to read cgroup.procs: {}", e)))?;
 
-    let mut pids = Vec::new();
-    for line in content.lines() {
-        if let Ok(pid) = line.trim().parse::<u32>() {
-            pids.push(pid);
-        }
-    }
+    let pids = content
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect();
 
     Ok(pids)
 }

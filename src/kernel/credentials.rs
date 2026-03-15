@@ -264,13 +264,13 @@ fn verify_transition(expected_uid: u32, expected_gid: u32, strict_mode: bool) ->
 
     #[cfg(not(target_os = "linux"))]
     {
-        if strict_mode {
+        return if strict_mode {
             Err(IsolateError::Privilege(
                 "credential verification not supported on non-Linux".to_string(),
             ))
         } else {
             Ok(())
-        }
+        };
     }
 
     Ok(())

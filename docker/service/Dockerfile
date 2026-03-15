@@ -24,7 +24,8 @@ COPY --from=builder /build/target/release/judge-service /usr/local/bin/judge-ser
 
 EXPOSE 8080
 
-RUN groupadd -r rustbox && useradd -r -g rustbox -s /bin/false rustbox
-USER rustbox
+# NOTE: Container runs as root because strict-mode sandbox requires root
+# for namespace creation, cgroup attachment, and capability dropping.
+# Container-level hardening is via cap_drop/cap_add/no-new-privileges in docker-compose.yml.
 
 ENTRYPOINT ["judge-service"]

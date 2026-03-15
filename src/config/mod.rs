@@ -2,6 +2,7 @@
 //!
 //! Policy definition, validation, and enforcement.
 
+#[allow(clippy::module_inception)]
 pub mod config;
 pub mod policy;
 pub mod presets;

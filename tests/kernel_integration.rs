@@ -73,8 +73,7 @@ fn test_no_panic_on_permission_denied() {
     let _ = transition_to_unprivileged(1000, 1000, false);
     let _ = set_no_new_privs();
     
-    // If we get here, no panics occurred
-    assert!(true);
+    // If we get here, no panics occurred — the test passes by reaching this point.
 }
 
 #[cfg(unix)]

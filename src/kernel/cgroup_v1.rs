@@ -197,7 +197,7 @@ impl CgroupV1 {
         }
     }
 
-    fn write_value(path: &Path, value: impl ToString, strict_mode: bool, name: &str) -> Result<()> {
+    fn write_value(path: &Path, value: &impl ToString, strict_mode: bool, name: &str) -> Result<()> {
         if let Err(err) = fs::write(path, value.to_string()) {
             if strict_mode {
                 return Err(IsolateError::Cgroup(format!(
@@ -341,26 +341,26 @@ impl CgroupBackend for CgroupV1 {
             return Ok(());
         };
 
-        Self::write_value(
-            &memory_path.join("memory.limit_in_bytes"),
-            limit_bytes,
-            self.strict_mode,
-            "memory.limit_in_bytes",
-        )?;
-
         let memsw = memory_path.join("memory.memsw.limit_in_bytes");
         if memsw.exists() {
             Self::write_value(
                 &memsw,
-                limit_bytes,
+                &limit_bytes,
                 self.strict_mode,
                 "memory.memsw.limit_in_bytes",
             )?;
         }
 
+        Self::write_value(
+            &memory_path.join("memory.limit_in_bytes"),
+            &limit_bytes,
+            self.strict_mode,
+            "memory.limit_in_bytes",
+        )?;
+
         let swappiness = memory_path.join("memory.swappiness");
         if swappiness.exists() {
-            let _ = Self::write_value(&swappiness, 0u8, false, "memory.swappiness");
+            let _ = Self::write_value(&swappiness, &0u8, false, "memory.swappiness");
         }
 
         Ok(())
@@ -387,7 +387,7 @@ impl CgroupBackend for CgroupV1 {
 
         Self::write_value(
             &pids_path.join("pids.max"),
-            limit,
+            &limit,
             self.strict_mode,
             "pids.max",
         )
@@ -411,7 +411,7 @@ impl CgroupBackend for CgroupV1 {
         let shares = limit_usec.clamp(2, 262_144);
         Self::write_value(
             &cpu_path.join("cpu.shares"),
-            shares,
+            &shares,
             self.strict_mode,
             "cpu.shares",
         )?;
@@ -563,6 +563,6 @@ mod tests {
     #[test]
     fn sanitize_rewrites_path_like_instance_ids() {
         assert_eq!(sanitize_instance_id("rustbox/42"), "rustbox_42");
-        assert_eq!(sanitize_instance_id("../x"), ".._x");
+        assert_eq!(sanitize_instance_id("../x"), "default");
     }
 }

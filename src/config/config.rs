@@ -105,6 +105,20 @@ impl RustBoxConfig {
                 if let Some(d) = dir {
                     let candidate = d.join("config.json");
                     if candidate.exists() {
+                        #[cfg(target_os = "linux")]
+                        {
+                            use std::os::unix::fs::MetadataExt;
+                            if let Ok(meta) = std::fs::metadata(&candidate) {
+                                // In strict/root context, reject world-writable config
+                                if unsafe { libc::geteuid() } == 0 && (meta.mode() & 0o002) != 0 {
+                                    log::warn!(
+                                        "Skipping world-writable config file: {}",
+                                        candidate.display()
+                                    );
+                                    continue; // skip this candidate, try next parent
+                                }
+                            }
+                        }
                         candidates.push(candidate);
                         break;
                     }
@@ -136,8 +150,10 @@ impl RustBoxConfig {
 impl IsolateConfig {
     /// Create IsolateConfig with language-specific defaults from config.json
     pub fn with_language_defaults(language: &str, instance_id: String) -> Result<Self> {
-        let mut config = Self::default();
-        config.instance_id = instance_id;
+        let mut config = Self {
+            instance_id,
+            ..Self::default()
+        };
 
         // Derive per-box UID/GID from instance_id (IOI Isolate convention: 60000 + box_id).
         if let Some(box_id_str) = config.instance_id.strip_prefix("rustbox/") {

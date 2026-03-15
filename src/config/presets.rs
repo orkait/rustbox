@@ -341,12 +341,14 @@ mod tests {
         let presets = LanguagePresets::new();
         let cpp = presets.get("cpp17-v1").unwrap();
 
-        let mut config = IsolateConfig::default();
-        // Clear defaults to test envelope application
-        config.memory_limit = None;
-        config.cpu_time_limit = None;
-        config.wall_time_limit = None;
-        config.process_limit = None;
+        let mut config = IsolateConfig {
+            // Clear defaults to test envelope application
+            memory_limit: None,
+            cpu_time_limit: None,
+            wall_time_limit: None,
+            process_limit: None,
+            ..IsolateConfig::default()
+        };
 
         cpp.apply_to_config(&mut config);
 

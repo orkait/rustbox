@@ -31,7 +31,6 @@
 //! ## Observability ([`observability`])
 //! - [`observability::audit`]: Structured audit events
 //! - [`observability::metrics`]: Prometheus metrics export
-//! // Deleted: health, ops (not needed for CLI tool)
 //!
 //! ## Configuration & Policy ([`config`])
 //! - [`config::config`]: Configuration loading and validation

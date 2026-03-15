@@ -15,9 +15,9 @@ impl ServiceConfig {
             workers: env_or("RUSTBOX_WORKERS", 2),
             queue_size: env_or("RUSTBOX_QUEUE_SIZE", 100),
             database_url: std::env::var("RUSTBOX_DATABASE_URL")
-                .unwrap_or_else(|_| "postgres://rustbox:rustbox@localhost/rustbox".to_string()),
+                .expect("RUSTBOX_DATABASE_URL must be set"),
             redis_url: std::env::var("RUSTBOX_REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+                .expect("RUSTBOX_REDIS_URL must be set"),
         }
     }
 }

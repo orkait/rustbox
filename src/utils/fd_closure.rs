@@ -60,12 +60,12 @@ fn close_fds_via_proc(strict_mode: bool) -> Result<()> {
 
     let entries = fs::read_dir(fd_dir).map_err(|e| {
         if strict_mode {
-            return IsolateError::Filesystem(format!("Failed to read {}: {}", fd_dir, e));
+            IsolateError::Filesystem(format!("Failed to read {}: {}", fd_dir, e))
         } else {
             let mut ebuf = [0u8; 20];
             let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
             fs_warn_parts(&["Failed to read ", fd_dir, " (permissive mode): errno ", eno]);
-            return IsolateError::Filesystem(format!("Failed to read {}: {}", fd_dir, e));
+            IsolateError::Filesystem(format!("Failed to read {}: {}", fd_dir, e))
         }
     })?;
 

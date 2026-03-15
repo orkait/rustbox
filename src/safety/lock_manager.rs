@@ -293,6 +293,7 @@ impl RustboxLockManager {
         // Step 1: Open lock file without truncating — never destroy data before holding flock
         let lock_file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(lock_path)?;
@@ -802,6 +803,7 @@ where
 
     let lock_file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&lock_path)?;
@@ -818,10 +820,8 @@ where
         });
     }
 
-    // Execute the operation while holding the lock
-    let result = operation();
-
-    // Lock is automatically released when lock_file goes out of scope (flock released on close)
-    // We intentionally do NOT remove the lock file to avoid inode-reuse races
-    result
+    // Execute the operation while holding the lock.
+    // Lock is automatically released when lock_file goes out of scope (flock released on close).
+    // We intentionally do NOT remove the lock file to avoid inode-reuse races.
+    operation()
 }

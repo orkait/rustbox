@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-rustbox}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -17,9 +17,9 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping"]
       interval: 2s
       timeout: 5s
       retries: 5
@@ -38,7 +38,7 @@ services:
       - no-new-privileges:true
     pids_limit: 256
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,7 +47,7 @@ services:
     environment:
       RUSTBOX_WORKERS: 2
       RUSTBOX_DATABASE_URL: postgres://${POSTGRES_USER:-rustbox}:${POSTGRES_PASSWORD:?}@postgres/${POSTGRES_DB:-rustbox}
-      RUSTBOX_REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379
+      RUSTBOX_REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379
       RUSTBOX_PORT: 8080
       RUST_LOG: info
     deploy:
@@ -67,6 +67,16 @@ services:
       - judge-service
     environment:
       VITE_API_URL: http://localhost:8080
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+    pids_limit: 64
 
 volumes:
   pgdata:

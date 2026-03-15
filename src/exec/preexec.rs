@@ -1,7 +1,7 @@
 use crate::config::types::{IsolateError, Result};
 use crate::core::types::ExecutionProfile;
 use crate::utils::fork_safe_log::{
-    fs_debug, fs_info_parts, fs_warn, fs_warn_parts, itoa_buf, itoa_i32,
+    fs_debug, fs_info_parts, fs_warn_parts, itoa_buf, itoa_i32,
 };
 /// Pre-Exec Ordering Enforcement
 /// Implements P1-ORDER-001: Locked Pre-Exec Ordering Enforcement
@@ -157,7 +157,7 @@ pub fn setup_parent_death_signal() -> Result<()> {
 
     #[cfg(not(target_os = "linux"))]
     {
-        fs_warn("Parent death signal not supported on this platform");
+        crate::utils::fork_safe_log::fs_warn("Parent death signal not supported on this platform");
         Ok(())
     }
 }
@@ -569,9 +569,14 @@ impl Sandbox<CgroupAttached> {
                 "ENV",
                 "CDPATH",
                 "PYTHONSTARTUP",
+                "PYTHONPATH",
                 "PERL5OPT",
                 "RUBYOPT",
                 "NODE_OPTIONS",
+                // Java-specific options injection (VULN-044)
+                "JAVA_TOOL_OPTIONS",
+                "_JAVA_OPTIONS",
+                "JDK_JAVA_OPTIONS",
             ];
             for key in DANGEROUS_ENV_BLOCKLIST {
                 if env_map.remove(*key).is_some() {
@@ -747,13 +752,10 @@ mod typestate_tests {
 
         // Progress through states
         // Note: namespace setup will fail without privileges, but that's OK for testing the type system
-        let sandbox = match sandbox.setup_namespaces(false, false, false, false) {
-            Ok(s) => s,
-            Err(_) => {
-                // Skip test if we don't have privileges
-                // The type-state chain is still validated at compile time
-                return;
-            }
+        let Ok(sandbox) = sandbox.setup_namespaces(false, false, false, false) else {
+            // Skip test if we don't have privileges
+            // The type-state chain is still validated at compile time
+            return;
         };
 
         let sandbox = match sandbox.harden_mount_propagation() {
@@ -809,7 +811,7 @@ mod typestate_tests {
         let sandbox = Sandbox::<FreshChild>::new("test-004".to_string(), true);
 
         assert_eq!(sandbox.instance_id, "test-004");
-        assert_eq!(sandbox.strict_mode, true);
+        assert!(sandbox.strict_mode);
 
         // Metadata is preserved through transitions
         // Skip namespace operations that require privileges
@@ -818,14 +820,14 @@ mod typestate_tests {
             Err(_) => return, // Skip if no privileges
         };
         assert_eq!(sandbox.instance_id, "test-004");
-        assert_eq!(sandbox.strict_mode, true);
+        assert!(sandbox.strict_mode);
 
         let sandbox = match sandbox.harden_mount_propagation() {
             Ok(s) => s,
             Err(_) => return, // Skip if no privileges
         };
         assert_eq!(sandbox.instance_id, "test-004");
-        assert_eq!(sandbox.strict_mode, true);
+        assert!(sandbox.strict_mode);
     }
 
     #[test]
@@ -840,8 +842,7 @@ mod typestate_tests {
 
         // The following would not compile:
         // sandbox.setup_namespaces(false, false, false, false); // COMPILE ERROR! sandbox moved
-
-        assert!(true);
+        // Test passes by reaching this point — the type system enforces move semantics.
     }
 
     #[test]
@@ -850,7 +851,7 @@ mod typestate_tests {
         let sandbox = Sandbox::<FreshChild>::new("test-006".to_string(), true);
 
         assert_eq!(sandbox.instance_id, "test-006");
-        assert_eq!(sandbox.strict_mode, true);
+        assert!(sandbox.strict_mode);
         assert_eq!(sandbox.pid, None);
     }
 

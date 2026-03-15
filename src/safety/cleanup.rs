@@ -35,6 +35,12 @@ pub struct ResourceLedger {
     entries: Vec<ResourceEntry>,
 }
 
+impl Default for ResourceLedger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResourceLedger {
     /// Create new empty ledger
     pub fn new() -> Self {
@@ -96,6 +102,12 @@ impl ResourceLedger {
 pub struct CleanupManager {
     ledger: ResourceLedger,
     cleanup_errors: Vec<String>,
+}
+
+impl Default for CleanupManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CleanupManager {
