@@ -111,6 +111,8 @@ forge.yaml
 .quirks/*
 .github/*
 .agents/*
-
+skills/
+skills-lock.json
+mcp.json
 
 CLAUDE.md
