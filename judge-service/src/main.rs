@@ -59,7 +59,7 @@ async fn main() {
     info!(count = cfg.workers, "worker pool started");
 
     // Build HTTP server
-    let api_key = std::env::var("RUSTBOX_API_KEY").ok();
+    let api_key = std::env::var("RUSTBOX_API_KEY").ok().filter(|k| !k.is_empty());
     if api_key.is_some() {
         info!("API key authentication enabled");
     }
