@@ -192,6 +192,22 @@ def cmd_up():
     if not cmd_infra():
         return
 
+    binary = ROOT / "target" / "debug" / "judge-service"
+    if not binary.exists():
+        log("Building judge-service...", YELLOW)
+        run("cargo build -p judge-service")
+
+    be_env = backend_env()
+    euid = os.geteuid() if hasattr(os, "geteuid") else 1
+
+    # If not root, validate sudo access upfront (prompts for password in foreground)
+    if euid != 0:
+        log("Backend needs root — validating sudo...", YELLOW)
+        result = subprocess.run(["sudo", "-v"], check=False)
+        if result.returncode != 0:
+            err("sudo authentication failed. Run with: sudo python dev.py")
+            return
+
     log("Starting backend + frontend...")
     log("  Backend:  http://localhost:8080/api/health")
     log("  Frontend: http://localhost:3000")
@@ -200,14 +216,6 @@ def cmd_up():
     procs = []
     try:
         # Backend
-        binary = ROOT / "target" / "debug" / "judge-service"
-        if not binary.exists():
-            log("Building judge-service...", YELLOW)
-            run("cargo build -p judge-service")
-
-        be_env = backend_env()
-
-        euid = os.geteuid() if hasattr(os, "geteuid") else 1
         if euid != 0:
             env_args = " ".join(f"{k}={v}" for k, v in be_env.items())
             backend_cmd = f"sudo {env_args} {binary}"
@@ -219,6 +227,28 @@ def cmd_up():
                 [str(binary)], cwd=str(ROOT), env={**os.environ, **be_env},
             )
         procs.append(("backend", backend_proc))
+
+        # Wait for backend to start listening before launching frontend
+        log("Waiting for backend to start...")
+        for i in range(30):
+            if backend_proc.poll() is not None:
+                err(f"Backend exited with code {backend_proc.returncode}")
+                return
+            try:
+                import socket
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.5)
+                s.connect(("127.0.0.1", 8080))
+                s.close()
+                break
+            except (ConnectionRefusedError, OSError):
+                time.sleep(0.5)
+        else:
+            err("Backend failed to start within 15s. Check logs above.")
+            backend_proc.kill()
+            return
+
+        log("Backend ready.", GREEN)
 
         # Frontend
         if not (WEB_DIR / "node_modules").exists():
@@ -242,7 +272,11 @@ def cmd_up():
         log("Shutting down...")
         for name, proc in procs:
             if proc.poll() is None:
-                proc.send_signal(signal.SIGTERM)
+                if name == "backend" and euid != 0:
+                    # sudo process needs sudo kill
+                    subprocess.run(["sudo", "kill", str(proc.pid)], check=False)
+                else:
+                    proc.send_signal(signal.SIGTERM)
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
