@@ -5,6 +5,7 @@ use crate::types::SubmissionRow;
 
 /// Run migrations (create table if not exists).
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
+    // V1: base table
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS submissions (
@@ -19,11 +20,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
             exit_code     INTEGER,
             time_ms       DOUBLE PRECISION,
             memory_kb     BIGINT,
-            cpu_time_ms   DOUBLE PRECISION,
-            wall_time_ms  DOUBLE PRECISION,
-            signal        INTEGER,
-            error_message TEXT,
-            meta          TEXT,
             created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             completed_at  TIMESTAMPTZ
         )
@@ -31,6 +27,22 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    // V2: detailed execution info
+    for col in &[
+        ("cpu_time_ms", "DOUBLE PRECISION"),
+        ("wall_time_ms", "DOUBLE PRECISION"),
+        ("signal", "INTEGER"),
+        ("error_message", "TEXT"),
+        ("meta", "TEXT"),
+    ] {
+        sqlx::query(&format!(
+            "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS {} {}",
+            col.0, col.1
+        ))
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 
