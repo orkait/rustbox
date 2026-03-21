@@ -44,10 +44,8 @@ impl BaselineChecker {
         }
 
         for pid in &current_processes {
-            if !self.baseline_processes.contains(pid) {
-                if Self::is_sandbox_process(*pid) {
-                    violations.push(format!("Leaked sandbox process: {}", pid));
-                }
+            if !self.baseline_processes.contains(pid) && Self::is_sandbox_process(*pid) {
+                violations.push(format!("Leaked sandbox process: {}", pid));
             }
         }
 

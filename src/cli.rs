@@ -301,8 +301,8 @@ extern "C" fn signal_handler(sig: i32) {
 
 fn setup_signal_handlers() {
     unsafe {
-        libc::signal(libc::SIGTERM, signal_handler as usize);
-        libc::signal(libc::SIGINT, signal_handler as usize);
+        libc::signal(libc::SIGTERM, signal_handler as *const () as usize);
+        libc::signal(libc::SIGINT, signal_handler as *const () as usize);
     }
 }
 
