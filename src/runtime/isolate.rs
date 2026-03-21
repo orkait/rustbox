@@ -336,6 +336,9 @@ impl Isolate {
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
         self.ensure_instance_workdir()?;
+        // Clear any artifacts from a prior run before writing new user data.
+        self.wipe_workdir_contents();
+
         let source_file = self.instance.config.workdir.join("solution.js");
         let command = vec![
             "/usr/local/bin/qjs".to_string(),
@@ -343,7 +346,13 @@ impl Isolate {
             source_file.to_string_lossy().to_string(),
         ];
         fs::write(&source_file, code)?;
-        self.execute_with_overrides(&command, overrides)
+        let result = self.execute_with_overrides(&command, overrides);
+
+        // Delete source file immediately — on both the Ok and Err paths.
+        // Rustbox does not own user data; execution and cleanup are first-class.
+        let _ = fs::remove_file(&source_file);
+
+        result
     }
 
     /// Execute TypeScript via Bun
@@ -353,6 +362,9 @@ impl Isolate {
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
         self.ensure_instance_workdir()?;
+        // Clear any artifacts from a prior run before writing new user data.
+        self.wipe_workdir_contents();
+
         let source_file = self.instance.config.workdir.join("solution.ts");
         let command = vec![
             "/usr/local/bin/bun".to_string(),
@@ -360,7 +372,13 @@ impl Isolate {
             source_file.to_string_lossy().to_string(),
         ];
         fs::write(&source_file, code)?;
-        self.execute_with_overrides(&command, overrides)
+        let result = self.execute_with_overrides(&command, overrides);
+
+        // Delete source file and any Bun cache artifacts immediately.
+        // Rustbox does not own user data; execution and cleanup are first-class.
+        let _ = fs::remove_file(&source_file);
+
+        result
     }
 
     /// Execute Python code directly from string
@@ -447,6 +465,9 @@ impl Isolate {
         F: FnMut(&mut IsolateConfig, &IsolateConfig, &ExecutionOverrides),
     {
         self.ensure_instance_workdir()?;
+        // Clear any artifacts from a prior run before writing new user data.
+        self.wipe_workdir_contents();
+
         fs::write(&source_file, code)?;
 
         let original_config = self.instance.config.clone();
@@ -456,6 +477,8 @@ impl Isolate {
             Ok(r) => r,
             Err(e) => {
                 self.instance.config = original_config;
+                // Wipe source + any partial compiler output before returning.
+                self.wipe_workdir_contents();
                 return Err(e);
             }
         };
@@ -463,12 +486,18 @@ impl Isolate {
             if restore_on_return {
                 self.instance.config = original_config;
             }
+            // Wipe source before returning the compile-error verdict.
+            self.wipe_workdir_contents();
             return Ok(Self::build_compile_failure_result(
                 compile_result,
                 stderr_prefix,
                 error_message,
             ));
         }
+
+        // Compilation succeeded — source is no longer needed.
+        // Delete it now so it isn't on disk during the execution phase.
+        let _ = fs::remove_file(&source_file);
 
         if restore_before_execute {
             self.instance.config = original_config.clone();
@@ -478,6 +507,11 @@ impl Isolate {
         if restore_on_return {
             self.instance.config = original_config;
         }
+
+        // Wipe compiled artifacts (binary, .class files, anything the sandboxed
+        // process may have written) immediately after execution completes.
+        // Rustbox does not own user data; execution and cleanup are first-class.
+        self.wipe_workdir_contents();
 
         result
     }
@@ -666,6 +700,42 @@ impl Isolate {
         None
     }
 
+    /// Wipe every file and subdirectory inside workdir without removing the
+    /// directory itself. Called before AND after each execution so that:
+    ///   - No prior-run artifacts are visible to the next run.
+    ///   - User-submitted source + compiled artifacts are deleted as soon as
+    ///     execution completes, not deferred to Isolate::cleanup().
+    ///
+    /// Uses remove_tree_secure (openat/unlinkat) so a sandboxed process that
+    /// planted a symlink inside workdir cannot redirect deletion outside the dir.
+    fn wipe_workdir_contents(&self) {
+        let workdir = &self.instance.config.workdir;
+        if !workdir.as_os_str().is_empty() && workdir.exists() {
+            if let Ok(entries) = fs::read_dir(workdir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() && !path.is_symlink() {
+                        if let Err(e) =
+                            crate::safety::safe_cleanup::remove_tree_secure(&path)
+                        {
+                            warn!(
+                                "wipe_workdir_contents: failed to remove dir {}: {}",
+                                path.display(),
+                                e
+                            );
+                        }
+                    } else if let Err(e) = fs::remove_file(&path) {
+                        warn!(
+                            "wipe_workdir_contents: failed to remove file {}: {}",
+                            path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Clean up this isolate instance
     pub fn cleanup(mut self) -> Result<()> {
         let instance_id = self.instance.config.instance_id.clone();
@@ -680,9 +750,11 @@ impl Isolate {
             instances.remove(&instance_id);
         })?;
 
-        // Clean up filesystem
+        // Clean up filesystem — use remove_tree_secure (openat/unlinkat) rather
+        // than fs::remove_dir_all so a symlink planted by sandboxed code cannot
+        // redirect deletion to paths outside the sandbox base directory.
         if self.base_path.exists() {
-            fs::remove_dir_all(&self.base_path).map_err(IsolateError::Io)?;
+            crate::safety::safe_cleanup::remove_tree_secure(&self.base_path)?;
         }
 
         // Release lock before removing lock file
