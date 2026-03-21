@@ -158,7 +158,9 @@ async fn drain_pending(db: Arc<dyn Database>, sem: Arc<Semaphore>, node_id: Stri
 // ---------------------------------------------------------------------------
 
 async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str) {
-    let sandbox_id = Uuid::new_v4().to_string();
+    // Core sandbox expects numeric box_id (for UID derivation: 60000 + box_id).
+    // Random u32 avoids collision across nodes without changing the core.
+    let sandbox_id = fastrand::u32(10000..u32::MAX).to_string();
 
     // Mark running with our sandbox_id
     if let Err(e) = db.mark_running(job_id, node_id, &sandbox_id).await {

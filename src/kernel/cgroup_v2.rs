@@ -21,7 +21,53 @@ pub struct CgroupV2 {
 
 impl CgroupV2 {
     pub fn new(instance_id: &str, strict_mode: bool) -> Result<Self> {
-        Self::with_base_path("/sys/fs/cgroup/rustbox", instance_id, strict_mode)
+        let base = Self::detect_cgroup_base()?;
+        Self::with_base_path(&base, instance_id, strict_mode)
+    }
+
+    /// Detect a writable cgroup base path for sandbox sub-cgroups.
+    ///
+    /// Strategy: try the traditional `/sys/fs/cgroup/rustbox` first (works on
+    /// bare metal and in Docker with `cgroup: host`). If that's not writable,
+    /// fall back to the process's own cgroup subtree (for unprivileged
+    /// containers with delegated cgroups).
+    fn detect_cgroup_base() -> Result<String> {
+        let traditional = "/sys/fs/cgroup/rustbox";
+
+        // Try creating the traditional path - this works on bare metal and
+        // with Docker `cgroup: host` + privileged.
+        if fs::create_dir_all(traditional).is_ok() {
+            // Verify we can actually enable controllers here
+            let parent_control = Path::new("/sys/fs/cgroup/cgroup.subtree_control");
+            if parent_control.exists() {
+                let _ = fs::write(parent_control, "+memory +pids +cpu");
+            }
+            return Ok(traditional.to_string());
+        }
+
+        // Fall back to process's own cgroup subtree (delegated container)
+        let cgroup_entry = fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+        let self_path = cgroup_entry
+            .lines()
+            .find(|l| l.starts_with("0::"))
+            .and_then(|l| l.strip_prefix("0::"))
+            .unwrap_or("/")
+            .trim()
+            .to_string();
+
+        if self_path != "/" {
+            let base = format!("/sys/fs/cgroup{}/rustbox", self_path);
+            if fs::create_dir_all(&base).is_ok() {
+                // Enable controllers in our cgroup subtree
+                let parent_control = format!("/sys/fs/cgroup{}/cgroup.subtree_control", self_path);
+                let _ = fs::write(&parent_control, "+memory +pids +cpu");
+                return Ok(base);
+            }
+        }
+
+        Err(IsolateError::Cgroup(
+            "cannot find writable cgroup v2 mount point".to_string(),
+        ))
     }
 
     pub fn with_base_path(base_path: &str, instance_id: &str, strict_mode: bool) -> Result<Self> {

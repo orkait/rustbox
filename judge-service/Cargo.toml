@@ -23,6 +23,7 @@ async-channel = "2"
 async-trait = "0.1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 anyhow = "1.0"
+fastrand = "2"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"

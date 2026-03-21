@@ -17,6 +17,10 @@ services:
     build:
       context: ../..
       dockerfile: docker/service/Dockerfile
+    privileged: true
+    cgroup: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
     environment:
       RUSTBOX_DATABASE_URL: "postgres://rustbox:testpassword@postgres:5432/rustbox_test"
       RUSTBOX_NODE_ID: "node-1"
@@ -33,6 +37,10 @@ services:
     build:
       context: ../..
       dockerfile: docker/service/Dockerfile
+    privileged: true
+    cgroup: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
     environment:
       RUSTBOX_DATABASE_URL: "postgres://rustbox:testpassword@postgres:5432/rustbox_test"
       RUSTBOX_NODE_ID: "node-2"
