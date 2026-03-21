@@ -94,7 +94,4 @@ pub mod types {
     pub use crate::config::types::*;
 }
 pub use exec::preexec;
-pub use observability::audit as security_logging;
 pub use safety::cleanup::BaselineChecker;
-// Deferred to post-V1: envelope
-// pub use verdict::envelope;
