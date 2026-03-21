@@ -1,10 +1,3 @@
-mod api;
-mod config;
-mod database;
-mod job_queue;
-mod types;
-mod worker;
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,23 +6,15 @@ use axum::http::{header, HeaderValue, Method};
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
-use crate::database::Database;
-use crate::job_queue::JobQueue;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db: Arc<dyn Database>,
-    pub queue: Arc<JobQueue>,
-    pub worker_count: usize,
-    pub api_key: Option<String>,
-    pub node_id: String,
-}
+use judge_service::database::Database;
+use judge_service::job_queue::JobQueue;
+use judge_service::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let cfg = config::ServiceConfig::from_env();
+    let cfg = judge_service::config::ServiceConfig::from_env();
     info!(
         port = cfg.port,
         workers = cfg.workers,
@@ -39,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Connect to database (SQLite or Postgres based on URL)
-    let db: Arc<dyn Database> = Arc::from(database::connect(&cfg.database_url).await?);
+    let db: Arc<dyn Database> = Arc::from(judge_service::database::connect(&cfg.database_url).await?);
     info!("database ready");
 
     // Create queue and spawn workers based on backend mode
@@ -50,10 +35,10 @@ async fn main() -> anyhow::Result<()> {
         // Cluster mode: Postgres LISTEN/NOTIFY
         // Create a dedicated PgDatabase instance for the listener
         let pg_db = Arc::new(
-            database::postgres::PgDatabase::connect(&cfg.database_url).await?,
+            judge_service::database::postgres::PgDatabase::connect(&cfg.database_url).await?,
         );
         let queue = Arc::new(JobQueue::postgres());
-        let handles = worker::spawn_pg_workers(
+        let handles = judge_service::worker::spawn_pg_workers(
             cfg.workers,
             db.clone(),
             pg_db,
@@ -64,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         // Single-node mode: async-channel
         let queue = Arc::new(JobQueue::channel(cfg.queue_size));
-        let handles = worker::spawn_channel_workers(
+        let handles = judge_service::worker::spawn_channel_workers(
             cfg.workers,
             db.clone(),
             queue.clone(),
@@ -75,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Spawn reaper
-    let _reaper = worker::spawn_reaper(
+    let _reaper = judge_service::worker::spawn_reaper(
         db.clone(),
         Duration::from_secs(cfg.reaper_interval_secs),
         Duration::from_secs(cfg.stale_timeout_secs),
@@ -102,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE]);
 
-    let app = api::router()
+    let app = judge_service::api::router()
         .layer(cors)
         .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB max request body
         .with_state(state);
