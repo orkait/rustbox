@@ -13,7 +13,7 @@ FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     g++ \
-    openjdk-17-jdk-headless \
+    openjdk-21-jdk-headless \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

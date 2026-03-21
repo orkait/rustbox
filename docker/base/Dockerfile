@@ -1,12 +1,12 @@
 # ============================================================================
-# Stage 1: builder — compiles rustbox/isolate/judge binaries
+# Stage 1: builder — compiles rustbox/isolate/judge binaries + QuickJS
 # ============================================================================
 # TODO: Pin to SHA256 digest for production builds
 FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     build-essential \
     pkg-config \
@@ -33,8 +33,14 @@ COPY . .
 RUN cargo build --release
 
 # ============================================================================
-# Stage 2: runtime — Ubuntu 22.04 + C++ / Python 3.11 / Java 21
-# NOTE: runs as root — required for strict mode (namespaces + cgroup attach)
+# Stage 2: runtime — language runtimes, headless/no-recommends variants
+#
+# Size budget per language runtime (approximate installed sizes):
+#   g++ (--no-install-recommends):  ~130 MB  (was ~250 MB with recommends)
+#   python3.11:                     ~60 MB
+#   openjdk-21-jdk-headless:        ~280 MB  (was ~450 MB for full JDK)
+#   bun binary:                     ~95 MB
+#   qjs binary:                     ~1 MB
 # ============================================================================
 FROM ubuntu:22.04
 
@@ -43,12 +49,11 @@ ENV JAVA_HOME=/usr/lib/jvm/default-java
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-RUN apt-get update && apt-get install -y \
+# Language runtimes — headless + no-recommends to cut ~300 MB vs naive install
+RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     python3.11 \
-    openjdk-21-jdk \
-    curl \
-    unzip \
+    openjdk-21-jdk-headless \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -59,9 +64,14 @@ RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 \
 # QuickJS binary (built in builder stage, same Ubuntu 22.04 libc)
 COPY --from=builder /usr/local/bin/qjs /usr/local/bin/qjs
 
-# Bun — installed system-wide at /usr/local for TypeScript execution
+# Bun — install via curl+unzip, then purge them in the same layer so they
+# don't bloat the final image (only the ~95 MB bun binary stays)
 ENV BUN_INSTALL=/usr/local
-RUN curl -fsSL https://bun.sh/install | bash
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl unzip \
+    && curl -fsSL https://bun.sh/install | bash \
+    && apt-get purge -y --auto-remove curl unzip \
+    && rm -rf /var/lib/apt/lists/*
 
 # UID/GID 65534 (nobody) — rustbox drops payload to this user inside the sandbox
 RUN groupadd -r -g 65534 sandbox 2>/dev/null || true \
