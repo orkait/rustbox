@@ -77,8 +77,27 @@ impl PgDatabase {
     }
 
     /// Create the submissions table, indexes, and LISTEN/NOTIFY trigger if they
-    /// do not yet exist. All DDL is idempotent.
+    /// do not yet exist. Uses an advisory lock on a single connection so
+    /// concurrent node startups don't race on DDL.
     pub async fn run_migrations(&self) -> anyhow::Result<()> {
+        // Acquire a dedicated connection (advisory locks are per-connection).
+        let mut conn = self.pool.acquire().await?;
+
+        // Advisory lock prevents concurrent migration races across nodes.
+        sqlx::query("SELECT pg_advisory_lock(42)")
+            .execute(&mut *conn)
+            .await?;
+
+        let result = self.run_migrations_inner(&mut conn).await;
+
+        let _ = sqlx::query("SELECT pg_advisory_unlock(42)")
+            .execute(&mut *conn)
+            .await;
+
+        result
+    }
+
+    async fn run_migrations_inner(&self, conn: &mut sqlx::PgConnection) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS submissions (
@@ -106,26 +125,23 @@ impl PgDatabase {
             )
             "#,
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
 
-        // Speed up pending-queue scans.
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_submissions_status_created \
              ON submissions (status, created_at)",
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
 
-        // Index on node_id for stale-reap queries.
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_submissions_node_id \
              ON submissions (node_id) WHERE node_id IS NOT NULL",
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
 
-        // LISTEN/NOTIFY: fire pg_notify('new_submission', id) after every INSERT.
         sqlx::query(
             r#"
             CREATE OR REPLACE FUNCTION notify_new_submission() RETURNS TRIGGER AS $$
@@ -136,11 +152,9 @@ impl PgDatabase {
             $$ LANGUAGE plpgsql
             "#,
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
 
-        // Guard with a DO block so the statement is idempotent even when the
-        // trigger already exists (avoids duplicate_object error on re-run).
         sqlx::query(
             r#"
             DO $$ BEGIN
@@ -151,7 +165,7 @@ impl PgDatabase {
             END $$
             "#,
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
 
         Ok(())
