@@ -1,41 +1,8 @@
 use crate::core::types::{ExecutionProfile, RunWorkspace};
 use crate::judge::adapter::JudgeAdapter;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default)]
 pub struct JavaAdapter;
-
-fn profile(memory_mb: u64, process_limit: u32, cpu_ms: u64, wall_ms: u64) -> ExecutionProfile {
-    ExecutionProfile {
-        command: Vec::new(),
-        stdin_data: None,
-        environment: vec![(
-            "JAVA_TOOL_OPTIONS".to_string(),
-            "-Dfile.encoding=UTF-8".to_string(),
-        )],
-        inherit_fds: false,
-        workdir: PathBuf::from("."),
-        chroot_dir: None,
-        uid: Some(65534),
-        gid: Some(65534),
-        strict_mode: true,
-        enable_pid_namespace: true,
-        enable_mount_namespace: true,
-        enable_network_namespace: true,
-        enable_user_namespace: false,
-        allow_degraded: false,
-        memory_limit: Some(memory_mb * 1024 * 1024),
-        file_size_limit: Some(64 * 1024 * 1024),
-        stack_limit: Some(8 * 1024 * 1024),
-        core_limit: Some(0),
-        process_limit: Some(process_limit),
-        cpu_time_limit_ms: Some(cpu_ms),
-        wall_time_limit_ms: Some(wall_ms),
-        fd_limit: Some(256),
-        virtual_memory_limit: Some(4 * 1024 * 1024 * 1024), // 4 GB (Java 17+ compressed class pointers)
-        directory_bindings: Vec::new(),
-    }
-}
 
 fn detect_class_name(workspace: &RunWorkspace) -> String {
     let source = workspace.workdir.join("Main.java");
@@ -51,8 +18,6 @@ fn detect_class_name(workspace: &RunWorkspace) -> String {
                 .unwrap_or("Main")
                 .trim_end_matches('{')
                 .trim();
-            // Sanitize: only allow Java identifier characters (alphanumeric + underscore)
-            // to prevent path traversal via crafted class names
             if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
                 return name.to_string();
             }
@@ -61,30 +26,47 @@ fn detect_class_name(workspace: &RunWorkspace) -> String {
     "Main".to_string()
 }
 
+fn java_env() -> Vec<(String, String)> {
+    vec![("JAVA_TOOL_OPTIONS".to_string(), "-Dfile.encoding=UTF-8".to_string())]
+}
+
 impl JudgeAdapter for JavaAdapter {
     fn language(&self) -> &'static str {
         "java"
     }
 
     fn compile_profile(&self) -> ExecutionProfile {
-        profile(768, 320, 30_000, 45_000)
+        ExecutionProfile {
+            environment: java_env(),
+            memory_limit: Some(768 * 1024 * 1024),
+            process_limit: Some(320),
+            cpu_time_limit_ms: Some(30_000),
+            wall_time_limit_ms: Some(45_000),
+            fd_limit: Some(256),
+            virtual_memory_limit: Some(4 * 1024 * 1024 * 1024),
+            ..super::base_profile()
+        }
     }
 
     fn run_profile(&self) -> ExecutionProfile {
-        profile(512, 256, 10_000, 20_000)
+        ExecutionProfile {
+            environment: java_env(),
+            memory_limit: Some(512 * 1024 * 1024),
+            process_limit: Some(256),
+            wall_time_limit_ms: Some(20_000),
+            fd_limit: Some(256),
+            virtual_memory_limit: Some(4 * 1024 * 1024 * 1024),
+            ..super::base_profile()
+        }
     }
 
     fn compile_command(&self, workspace: &RunWorkspace) -> Vec<String> {
         vec![
             "/usr/bin/javac".to_string(),
-            "-proc:none".to_string(), // disable annotation processing
+            "-proc:none".to_string(),
             "-encoding".to_string(),
             "UTF-8".to_string(),
-            workspace
-                .workdir
-                .join("Main.java")
-                .to_string_lossy()
-                .to_string(),
+            workspace.workdir.join("Main.java").to_string_lossy().to_string(),
         ]
     }
 
@@ -120,15 +102,15 @@ mod tests {
         std::fs::write(dir.path().join("Main.java"), source).unwrap();
         let path = dir.path().to_path_buf();
         let ws = RunWorkspace { root: path.clone(), workdir: path.clone(), temp_dir: path };
-        (ws, dir) // caller holds TempDir to keep it alive
+        (ws, dir)
     }
 
     #[test]
     fn compile_command_uses_javac_with_utf8() {
         let cmd = JavaAdapter.compile_command(&workspace());
         assert_eq!(cmd[0], "/usr/bin/javac");
-        assert!(cmd.contains(&"-encoding".to_string()), "missing -encoding");
-        assert!(cmd.contains(&"UTF-8".to_string()), "missing UTF-8");
+        assert!(cmd.contains(&"-encoding".to_string()));
+        assert!(cmd.contains(&"UTF-8".to_string()));
         assert!(cmd.last().unwrap().ends_with("Main.java"));
     }
 
@@ -136,9 +118,9 @@ mod tests {
     fn run_command_uses_java_with_heap_and_gc_flags() {
         let cmd = JavaAdapter.run_command(&workspace());
         assert_eq!(cmd[0], "/usr/bin/java");
-        assert!(cmd.contains(&"-Xmx256m".to_string()), "missing -Xmx256m");
-        assert!(cmd.contains(&"-Xss1m".to_string()), "missing -Xss1m");
-        assert!(cmd.contains(&"-XX:+UseSerialGC".to_string()), "missing UseSerialGC");
+        assert!(cmd.contains(&"-Xmx256m".to_string()));
+        assert!(cmd.contains(&"-Xss1m".to_string()));
+        assert!(cmd.contains(&"-XX:+UseSerialGC".to_string()));
     }
 
     #[test]
@@ -157,7 +139,7 @@ mod tests {
 
     #[test]
     fn detect_class_name_defaults_to_main_when_no_source() {
-        let cmd = JavaAdapter.run_command(&workspace()); // no Main.java in /tmp/rustbox/box-1
+        let cmd = JavaAdapter.run_command(&workspace());
         assert_eq!(cmd.last().unwrap(), "Main");
     }
 
