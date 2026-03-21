@@ -42,26 +42,14 @@ fn detect_pidfd_mode() -> crate::config::types::PidfdMode {
 }
 
 fn build_configured_controls(req: &SandboxLaunchRequest) -> Vec<String> {
-    let mut controls = Vec::new();
-    if req.profile.enable_pid_namespace {
-        controls.push("pid_namespace".to_string());
-    }
-    if req.profile.enable_mount_namespace {
-        controls.push("mount_namespace".to_string());
-    }
-    if req.profile.enable_network_namespace {
-        controls.push("network_namespace".to_string());
-    }
-    if req.profile.enable_user_namespace {
-        controls.push("user_namespace".to_string());
-    }
-    if req.profile.memory_limit.is_some() {
-        controls.push("memory_limit".to_string());
-    }
-    if req.profile.process_limit.is_some() {
-        controls.push("process_limit".to_string());
-    }
-    controls.push("no_new_privileges".to_string());
+    let mut controls = Vec::with_capacity(8);
+    if req.profile.enable_pid_namespace { controls.push("pid_namespace".into()); }
+    if req.profile.enable_mount_namespace { controls.push("mount_namespace".into()); }
+    if req.profile.enable_network_namespace { controls.push("network_namespace".into()); }
+    if req.profile.enable_user_namespace { controls.push("user_namespace".into()); }
+    if req.profile.memory_limit.is_some() { controls.push("memory_limit".into()); }
+    if req.profile.process_limit.is_some() { controls.push("process_limit".into()); }
+    controls.push("no_new_privileges".into());
     controls
 }
 
