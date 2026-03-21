@@ -28,14 +28,34 @@ impl CgroupV1 {
         }
 
         let sanitized_instance = super::cgroup::sanitize_instance_id(instance_id);
+        let self_cgroups = Self::detect_self_cgroup_paths();
         let mut controller_paths = HashMap::new();
+
         for controller in CONTROLLERS {
             let controller_root = Path::new("/sys/fs/cgroup").join(controller);
-            if controller_root.exists() {
-                controller_paths.insert(
-                    controller.to_string(),
-                    controller_root.join("rustbox").join(&sanitized_instance),
-                );
+            if !controller_root.exists() {
+                continue;
+            }
+
+            // Try traditional path first (bare metal / Docker cgroup:host)
+            let traditional = controller_root.join("rustbox").join(&sanitized_instance);
+            if fs::create_dir_all(traditional.parent().unwrap_or(&controller_root)).is_ok() {
+                controller_paths.insert(controller.to_string(), traditional);
+                continue;
+            }
+
+            // Fall back to process's own cgroup subtree (container with delegation)
+            if let Some(self_path) = self_cgroups.get(controller) {
+                if self_path != "/" {
+                    let delegated = controller_root
+                        .join(self_path.trim_start_matches('/'))
+                        .join("rustbox")
+                        .join(&sanitized_instance);
+                    if fs::create_dir_all(delegated.parent().unwrap_or(&controller_root)).is_ok() {
+                        controller_paths.insert(controller.to_string(), delegated);
+                        continue;
+                    }
+                }
             }
         }
 
@@ -57,6 +77,30 @@ impl CgroupV1 {
             enabled,
             controller_paths,
         })
+    }
+
+    /// Parse /proc/self/cgroup to find per-controller cgroup paths.
+    /// V1 format: `<hierarchy-id>:<controllers>:<path>`
+    /// Example: `12:memory:/docker/abc123`
+    fn detect_self_cgroup_paths() -> HashMap<String, String> {
+        let mut paths = HashMap::new();
+        let content = fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+        for line in content.lines() {
+            let parts: Vec<&str> = line.splitn(3, ':').collect();
+            if parts.len() != 3 {
+                continue;
+            }
+            let controllers = parts[1];
+            let path = parts[2].to_string();
+            // V1 lines have non-empty controller field (v2 unified is "0::")
+            if controllers.is_empty() {
+                continue;
+            }
+            for controller in controllers.split(',') {
+                paths.insert(controller.to_string(), path.clone());
+            }
+        }
+        paths
     }
 
     fn controller_path(&self, controller: &str) -> Option<&PathBuf> {
