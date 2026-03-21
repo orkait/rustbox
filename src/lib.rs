@@ -26,11 +26,9 @@
 //! ## Safety & Cleanup ([`safety`])
 //! - [`safety::cleanup`]: Idempotent cleanup with baseline equivalence
 //! - [`safety::lock_manager`]: State integrity with stable lock inodes
-//! - [`safety::workspace`]: Run-scoped artifact isolation
 //!
 //! ## Observability ([`observability`])
 //! - [`observability::audit`]: Structured audit events
-//! - [`observability::metrics`]: Prometheus metrics export
 //!
 //! ## Configuration & Policy ([`config`])
 //! - [`config::config`]: Configuration loading and validation
@@ -105,7 +103,7 @@ pub mod types {
 }
 pub use exec::preexec;
 pub use observability::audit as security_logging;
-pub use safety::cleanup;
+pub use safety::cleanup::BaselineChecker;
 pub use testing::mount_invariance;
 pub use testing::race_proof;
 // Deferred to post-V1: envelope

@@ -317,11 +317,17 @@ impl Isolate {
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
         match language.to_lowercase().as_str() {
-            "python" | "py" => self.execute_python_string(code, overrides),
+            "python" | "py" => {
+                self.execute_interpreted(code, "solution.py", &["/usr/bin/python3", "-u"], overrides)
+            }
+            "javascript" | "js" => {
+                self.execute_interpreted(code, "solution.js", &["/usr/local/bin/qjs", "--std"], overrides)
+            }
+            "typescript" | "ts" => {
+                self.execute_interpreted(code, "solution.ts", &["/usr/local/bin/bun", "run"], overrides)
+            }
             "cpp" | "c++" | "cxx" => self.compile_and_execute_cpp(code, overrides),
             "java" => self.compile_and_execute_java(code, overrides),
-            "javascript" | "js" => self.execute_js_string(code, overrides),
-            "typescript" | "ts" => self.execute_ts_string(code, overrides),
             _ => Err(IsolateError::Config(format!(
                 "Unsupported language: {}",
                 language
@@ -329,81 +335,58 @@ impl Isolate {
         }
     }
 
-    /// Execute JavaScript via QuickJS
-    fn execute_js_string(
+    /// Execute an interpreted language: write source → run → delete.
+    ///
+    /// Unified path for Python, JavaScript, and TypeScript. The `filename`
+    /// is the source file name (e.g. "solution.py") and `prefix_args` are
+    /// the runtime args placed before the source path in the command.
+    fn execute_interpreted(
         &mut self,
         code: &str,
+        filename: &str,
+        prefix_args: &[&str],
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
         self.ensure_instance_workdir()?;
-        // Clear any artifacts from a prior run before writing new user data.
         self.wipe_workdir_contents();
 
-        let source_file = self.instance.config.workdir.join("solution.js");
-        let command = vec![
-            "/usr/local/bin/qjs".to_string(),
-            "--std".to_string(),
-            source_file.to_string_lossy().to_string(),
-        ];
+        let source_file = self.instance.config.workdir.join(filename);
+        let mut command: Vec<String> = prefix_args.iter().map(|s| s.to_string()).collect();
+        command.push(source_file.to_string_lossy().to_string());
+
         fs::write(&source_file, code)?;
         let result = self.execute_with_overrides(&command, overrides);
-
-        // Delete source file immediately — on both the Ok and Err paths.
-        // Rustbox does not own user data; execution and cleanup are first-class.
         let _ = fs::remove_file(&source_file);
-
         result
     }
 
-    /// Execute TypeScript via Bun
-    fn execute_ts_string(
-        &mut self,
-        code: &str,
+    /// Shared compile-phase config: permissive mode, generous limits.
+    /// Only the default memory and minimum process limit differ between C++ and Java.
+    fn configure_compile_phase(
+        config: &mut IsolateConfig,
+        original_config: &IsolateConfig,
         overrides: &ExecutionOverrides,
-    ) -> Result<ExecutionResult> {
-        self.ensure_instance_workdir()?;
-        // Clear any artifacts from a prior run before writing new user data.
-        self.wipe_workdir_contents();
+        default_memory_mb: u64,
+        min_process_limit: u32,
+    ) {
+        config.strict_mode = false;
+        config.allow_degraded = unsafe { libc::geteuid() } != 0;
+        config.process_limit = Some(min_process_limit);
 
-        let source_file = self.instance.config.workdir.join("solution.ts");
-        let command = vec![
-            "/usr/local/bin/bun".to_string(),
-            "run".to_string(),
-            source_file.to_string_lossy().to_string(),
-        ];
-        fs::write(&source_file, code)?;
-        let result = self.execute_with_overrides(&command, overrides);
+        config.memory_limit = Some(
+            overrides
+                .max_memory
+                .map(|mb| mb * 1024 * 1024)
+                .unwrap_or(default_memory_mb * 1024 * 1024),
+        );
 
-        // Delete source file and any Bun cache artifacts immediately.
-        // Rustbox does not own user data; execution and cleanup are first-class.
-        let _ = fs::remove_file(&source_file);
-
-        result
-    }
-
-    /// Execute Python code from string.
-    /// Writes to a file in workdir rather than passing via `-c` so that the
-    /// source code is NOT visible in /proc/PID/cmdline (SEC-1).
-    fn execute_python_string(
-        &mut self,
-        code: &str,
-        overrides: &ExecutionOverrides,
-    ) -> Result<ExecutionResult> {
-        self.ensure_instance_workdir()?;
-        self.wipe_workdir_contents();
-
-        let source_file = self.instance.config.workdir.join("solution.py");
-        let command = vec![
-            "/usr/bin/python3".to_string(),
-            "-u".to_string(),
-            source_file.to_string_lossy().to_string(),
-        ];
-        fs::write(&source_file, code)?;
-        let result = self.execute_with_overrides(&command, overrides);
-
-        let _ = fs::remove_file(&source_file);
-
-        result
+        let original_cpu = original_config.cpu_time_limit.map(|d| d.as_secs()).unwrap_or(8);
+        let original_wall = original_config.wall_time_limit.map(|d| d.as_secs()).unwrap_or(10);
+        let cpu = overrides.max_cpu.or(overrides.max_time).unwrap_or(original_cpu).max(15);
+        let wall = overrides.max_wall_time.unwrap_or(original_wall).max(30);
+        config.cpu_time_limit = Some(Duration::from_secs(cpu));
+        config.time_limit = Some(Duration::from_secs(cpu));
+        config.wall_time_limit = Some(Duration::from_secs(wall));
     }
 
     fn build_compile_failure_result(
@@ -532,70 +515,19 @@ impl Isolate {
         code: &str,
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        // Ensure workdir is initialized before computing source_file path.
         self.ensure_instance_workdir()?;
         let source_file = self.instance.config.workdir.join("solution.cpp");
-        let compile_command = vec![
-            "/usr/bin/g++".to_string(),
-            "-o".to_string(),
-            "solution".to_string(),
-            "solution.cpp".to_string(),
-            "-std=c++17".to_string(),
-            "-O2".to_string(),
-        ];
-        let execute_command = vec!["./solution".to_string()];
-
         self.compile_and_execute_with_spec(
             code,
             source_file,
-            compile_command,
-            execute_command,
+            vec!["/usr/bin/g++".into(), "-o".into(), "solution".into(),
+                 "solution.cpp".into(), "-std=c++17".into(), "-O2".into()],
+            vec!["./solution".into()],
             overrides,
             "Compilation Error",
             "Compilation failed",
-            true,
-            true,
-            |config, original_config, runtime_overrides| {
-                // Compilation uses a trusted compiler on untrusted source.
-                // Run in permissive mode so the compiler can access host toolchains.
-                // The compiled binary is executed under the original (strict) config.
-                config.strict_mode = false;
-                // Only allow degraded fallback when non-root (already unprivileged).
-                // When root, the namespace path MUST succeed to ensure UID drop.
-                config.allow_degraded = unsafe { libc::geteuid() } != 0;
-
-                // C++ toolchain can fan out many helper processes/threads (cc1plus/as/ld).
-                // Keep compile phase process headroom well above runtime defaults.
-                config.process_limit = Some(120);
-
-                if let Some(memory) = runtime_overrides.max_memory {
-                    config.memory_limit = Some(memory * 1024 * 1024);
-                } else {
-                    config.memory_limit = Some(256 * 1024 * 1024); // 256MB for C++
-                }
-
-                // Compilation needs a wider window than execution defaults.
-                let original_cpu_secs = original_config
-                    .cpu_time_limit
-                    .map(|d| d.as_secs())
-                    .unwrap_or(8);
-                let original_wall_secs = original_config
-                    .wall_time_limit
-                    .map(|d| d.as_secs())
-                    .unwrap_or(10);
-                let compile_cpu_secs = runtime_overrides
-                    .max_cpu
-                    .or(runtime_overrides.max_time)
-                    .unwrap_or(original_cpu_secs)
-                    .max(15);
-                let compile_wall_secs = runtime_overrides
-                    .max_wall_time
-                    .unwrap_or(original_wall_secs)
-                    .max(30);
-                config.cpu_time_limit = Some(Duration::from_secs(compile_cpu_secs));
-                config.time_limit = Some(Duration::from_secs(compile_cpu_secs));
-                config.wall_time_limit = Some(Duration::from_secs(compile_wall_secs));
-            },
+            true, true,
+            |cfg, orig, ovr| Self::configure_compile_phase(cfg, orig, ovr, 256, 120),
         )
     }
 
@@ -605,87 +537,22 @@ impl Isolate {
         code: &str,
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        // Ensure workdir is initialized before computing source_file path.
         self.ensure_instance_workdir()?;
-        // Extract class name from code (simple heuristic)
         let class_name = self
             .extract_java_class_name(code)
             .unwrap_or_else(|| "Main".to_string());
-        let source_file = self
-            .instance
-            .config
-            .workdir
-            .join(format!("{}.java", class_name));
-        let compile_command = vec![
-            "javac".to_string(),
-            "-proc:none".to_string(), // disable annotation processing
-            "-cp".to_string(),
-            ".".to_string(),
-            format!("{}.java", class_name),
-        ];
-        let execute_command = vec![
-            "java".to_string(),
-            "-cp".to_string(),
-            ".".to_string(),
-            class_name,
-        ];
-
+        let source_file = self.instance.config.workdir.join(format!("{}.java", class_name));
         self.compile_and_execute_with_spec(
             code,
             source_file,
-            compile_command,
-            execute_command,
+            vec!["javac".into(), "-proc:none".into(), "-cp".into(), ".".into(),
+                 format!("{}.java", class_name)],
+            vec!["java".into(), "-cp".into(), ".".into(), class_name],
             overrides,
             "Java Compilation Error",
             "Java compilation failed",
-            true,
-            true,
-            |config, original_config, runtime_overrides| {
-                // Compilation uses a trusted compiler on untrusted source.
-                // Run in permissive mode so javac can access host JVM paths.
-                // The compiled class is executed under the original (strict) config.
-                config.strict_mode = false;
-                // Only allow degraded fallback when non-root (already unprivileged).
-                // When root, the namespace path MUST succeed to ensure UID drop.
-                config.allow_degraded = unsafe { libc::geteuid() } != 0;
-
-                // Increase resource limits for JVM
-                if let Some(memory) = runtime_overrides.max_memory {
-                    config.memory_limit = Some(memory * 1024 * 1024);
-                } else {
-                    config.memory_limit = Some(512 * 1024 * 1024); // 512MB default for Java
-                }
-
-                // JVM/Javac can fan out many threads; too-low pids.max causes hard launch failures.
-                // Keep a higher floor while still allowing user overrides to increase further.
-                let requested_process_limit = runtime_overrides
-                    .process_limit
-                    .or(original_config.process_limit)
-                    .unwrap_or(16);
-                config.process_limit = Some(requested_process_limit.max(1024));
-
-                // JVM startup is slow; give compilation generous time limits.
-                let original_cpu_secs = original_config
-                    .cpu_time_limit
-                    .map(|d| d.as_secs())
-                    .unwrap_or(8);
-                let original_wall_secs = original_config
-                    .wall_time_limit
-                    .map(|d| d.as_secs())
-                    .unwrap_or(10);
-                let compile_cpu_secs = runtime_overrides
-                    .max_cpu
-                    .or(runtime_overrides.max_time)
-                    .unwrap_or(original_cpu_secs)
-                    .max(15);
-                let compile_wall_secs = runtime_overrides
-                    .max_wall_time
-                    .unwrap_or(original_wall_secs)
-                    .max(30);
-                config.cpu_time_limit = Some(Duration::from_secs(compile_cpu_secs));
-                config.time_limit = Some(Duration::from_secs(compile_cpu_secs));
-                config.wall_time_limit = Some(Duration::from_secs(compile_wall_secs));
-            },
+            true, true,
+            |cfg, orig, ovr| Self::configure_compile_phase(cfg, orig, ovr, 512, 1024),
         )
     }
 
