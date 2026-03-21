@@ -1,23 +1,26 @@
-<p align="center">
-  <h1 align="center">Rustbox</h1>
-  <p align="center">
-    Kernel-enforced process isolation for competitive programming judges.
-    <br />
-    Inspired by <a href="https://github.com/ioi/isolate">IOI Isolate</a>.
-  </p>
-</p>
+<div align="center">
 
-<p align="center">
-  <img src="https://img.shields.io/badge/status-v0.1.0-blue" alt="Status" />
-  <img src="https://img.shields.io/badge/languages-Python%20%7C%20C%2B%2B%20%7C%20Java-green" alt="Languages" />
-  <img src="https://img.shields.io/badge/platform-Linux-orange" alt="Platform" />
-  <img src="https://img.shields.io/badge/tests-237%20passing-brightgreen" alt="Tests" />
-  <img src="https://img.shields.io/badge/clippy-0%20warnings-brightgreen" alt="Clippy" />
-</p>
+# Rustbox
+
+**Kernel-enforced process isolation for competitive programming judges.**
+
+Inspired by [IOI Isolate](https://github.com/ioi/isolate).
+
+<br />
+
+![Rust](https://img.shields.io/badge/Rust-1.70%2B-f74c00?logo=rust&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-cgroups%20v1%2Fv2-FCC624?logo=linux&logoColor=black)
+![Status](https://img.shields.io/badge/status-v0.1.0-blue)
+![Tests](https://img.shields.io/badge/tests-144%20unit%20%7C%2026%20integration-brightgreen)
+![Clippy](https://img.shields.io/badge/clippy-0%20warnings-brightgreen)
+![Languages](https://img.shields.io/badge/languages-Python%20%7C%20C%2B%2B%20%7C%20Java%20%7C%20JS%20%7C%20TS-green)
+![Lines](https://img.shields.io/badge/codebase-15.3k%20lines-informational)
+
+</div>
 
 ---
 
-Rustbox executes untrusted code inside kernel-enforced sandboxes with deterministic resource limits and evidence-backed verdicts. It uses Linux namespaces, cgroups (v1/v2), capability dropping, and rlimits to ensure submitted code cannot escape, interfere with other submissions, or harm the host.
+Rustbox executes untrusted code inside kernel-enforced sandboxes with deterministic resource limits and evidence-backed verdicts. It uses Linux namespaces, cgroups (v1/v2), capability dropping, and rlimits to make sure submitted code can't escape, interfere with other submissions, or touch the host.
 
 ```
                     +-----------+
@@ -30,17 +33,17 @@ Rustbox executes untrusted code inside kernel-enforced sandboxes with determinis
                      rlimits
 ```
 
-## Quick Start
+## :rocket: Quick Start
 
 ```bash
 # Build
 cargo build --release
 
-# Permissive mode (no root needed, for development)
+# Permissive mode (no root needed, great for development)
 target/release/judge execute-code --permissive --box-id 1 \
   --language python --code 'print("hello")'
 
-# Strict mode (root required, full isolation)
+# Strict mode (root required, full kernel isolation)
 sudo target/release/judge execute-code --strict --box-id 1 \
   --language python --code 'print("hello")'
 ```
@@ -59,7 +62,8 @@ Output is `JudgeResultV1` JSON on stdout:
 }
 ```
 
-### All Three Languages
+<details>
+<summary><strong>:test_tube: All Five Languages</strong></summary>
 
 ```bash
 # Python
@@ -82,25 +86,35 @@ public class Main {
     }
 }
 '
+
+# JavaScript (QuickJS)
+sudo target/release/judge execute-code --strict --box-id 4 \
+  --language javascript --code 'console.log(2 + 2)'
+
+# TypeScript (Bun)
+sudo target/release/judge execute-code --strict --box-id 5 \
+  --language typescript --code 'console.log("typed!")'
 ```
 
-## Security Model
+</details>
 
-Rustbox applies **7 independent layers** of kernel-enforced isolation. Every layer must pass before untrusted code executes — failure in any layer aborts the sandbox in strict mode.
+## :shield: Security Model
 
-| Layer | Mechanism | Enforces |
-|-------|-----------|----------|
-| Process isolation | `CLONE_NEWPID`, `CLONE_NEWIPC` | Can't see/signal host processes |
+Rustbox applies **7 independent layers** of kernel-enforced isolation. Every layer must pass before untrusted code runs - failure in any layer aborts the sandbox in strict mode.
+
+| Layer | Mechanism | What it stops |
+|-------|-----------|---------------|
+| Process isolation | `CLONE_NEWPID`, `CLONE_NEWIPC` | Can't see or signal host processes |
 | Filesystem | tmpfs chroot + read-only bind mounts | Writable workdir only, no host access |
 | Network | `CLONE_NEWNET` | No network access (strict mode) |
 | Memory | cgroup `memory.max` + `RLIMIT_AS` | Physical + virtual memory caps |
 | CPU | `RLIMIT_CPU` + cgroup watchdog | Hard CPU time limit |
 | Processes | cgroup `pids.max` + `RLIMIT_NPROC` | Fork bomb prevention |
-| Privileges | `setresuid` + all caps zeroed + `PR_SET_NO_NEW_PRIVS` | No root, no escalation, no suid |
+| Privileges | `setresuid` + caps zeroed + `NO_NEW_PRIVS` | No root, no escalation, no suid |
 
-### Type-State Pre-Exec Chain
+### :lock: Type-State Pre-Exec Chain
 
-The core safety mechanism. Sandbox setup is enforced **at compile time** through Rust's type system — skipping or reordering steps is a compile error:
+The core safety mechanism. Sandbox setup is enforced **at compile time** through Rust's type system - skipping or reordering steps is a compile error:
 
 ```
 FreshChild
@@ -112,17 +126,22 @@ FreshChild
             -> ExecReady    // only this state can call exec_payload()
 ```
 
-This is verified by 7 [trybuild](https://docs.rs/trybuild) compile-fail tests in `tests/typestate_compile_fail/`.
+Verified by [trybuild](https://docs.rs/trybuild) compile-fail tests in `tests/typestate_compile_fail/`.
 
-### Environment Sanitization
+### :no_entry: Environment Sanitization
 
 A blocklist strips dangerous environment variables **after** config merge, preventing injection through `config.json`:
 
+<details>
+<summary>Blocked variables</summary>
+
 `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `BASH_ENV`, `PYTHONSTARTUP`, `PYTHONPATH`, `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `PERL5OPT`, `RUBYOPT`, and more.
 
-## Architecture
+</details>
 
-### Three Binaries, One CLI
+## :building_construction: Architecture
+
+### :package: Three Binaries, One CLI
 
 All binaries call `rustbox::cli::run()` with a different mode:
 
@@ -132,7 +151,7 @@ All binaries call `rustbox::cli::run()` with a different mode:
 | `judge` | Language adapter | `execute-code`, `check-deps` |
 | `rustbox` | All commands | Everything above |
 
-### Module Layout
+### :file_folder: Module Layout
 
 ```
 src/
@@ -141,17 +160,16 @@ src/
                     credentials, signals
   exec/           Type-state pre-exec chain, process executor
   core/           Supervisor (clone/waitpid), proxy (PID 1), types
-  config/         Config loading, validation, per-language defaults, policy
-  runtime/        Isolate lifecycle, security validation, language adapters
+  config/         Config loading, validation, per-language presets
+  runtime/        Isolate lifecycle, security validation
   verdict/        Evidence-backed verdict classification
   safety/         Idempotent cleanup, lock manager, workspace
-  observability/  Audit logging, Prometheus metrics
-  utils/          FD closure, env hygiene, fork-safe logging
-  judge/          Language-specific adapters (Python, C++, Java)
-  testing/        Mount invariance and race condition proof frameworks
+  observability/  Security audit logging
+  utils/          FD closure, env hygiene, fork-safe logging, JSON schema
+  judge/          Language adapters (Python, C++, Java, JavaScript, TypeScript)
 ```
 
-### Execution Flow
+### :arrows_counterclockwise: Execution Flow
 
 ```
 CLI args
@@ -173,9 +191,12 @@ CLI args
   -> JudgeResultV1 JSON to stdout
 ```
 
-## Configuration
+## :gear: Configuration
 
 `config.json` defines per-language resource limits and environment:
+
+<details>
+<summary>Example config.json</summary>
 
 ```json
 {
@@ -196,28 +217,40 @@ CLI args
       "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
       "processes": { "max_processes": 256 },
       "environment": { "JAVA_TOOL_OPTIONS": "-Xmx256m -Xms64m -XX:+UseSerialGC" }
+    },
+    "javascript": {
+      "memory": { "limit_mb": 256 },
+      "time": { "cpu_time_seconds": 4, "wall_time_seconds": 7 },
+      "processes": { "max_processes": 4 }
+    },
+    "typescript": {
+      "memory": { "limit_mb": 512 },
+      "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
+      "processes": { "max_processes": 16 }
     }
   }
 }
 ```
 
+</details>
+
 Config is loaded from `./config.json` (dev) or `/etc/rustbox/config.json` (production). When running as root, world-writable config files are rejected.
 
-## Build and Test
+## :hammer_and_wrench: Build and Test
 
 ```bash
 # Build
 cargo build                    # debug
 cargo build --release          # release
 
-# Test (non-root, 237 tests)
+# Test (non-root)
 cargo test --all
 
 # Strict mode tests (root required)
 sudo cargo test --test integration_execution -- --include-ignored
 
 # Clippy (zero warnings)
-cargo clippy --all-targets
+cargo clippy --all-targets -- -D warnings
 
 # Smoke test
 target/debug/judge execute-code --permissive --box-id 1 --language python --code 'print(1)'
@@ -226,17 +259,16 @@ target/debug/judge execute-code --permissive --box-id 1 --language python --code
 target/debug/judge check-deps --verbose
 ```
 
-### Test Coverage
+### :bar_chart: Test Coverage
 
-| Suite | Description | Count |
-|-------|-------------|-------|
-| Unit | All modules | 186 |
-| Integration (permissive) | All languages, verdict types | 19 |
+| Suite | What it tests | Count |
+|-------|---------------|-------|
+| Unit | All modules (types, config, verdict, cleanup, presets, adapters) | 144 |
+| Integration (permissive) | All languages, verdict types, stdin, timeouts | 19 |
 | Integration (strict) | Full isolation chain, requires root | 7 (ignored without root) |
-| Compile-fail | Type-state invariant verification | 7 |
-| Kernel/mount/namespace | Kernel primitive tests | 31 |
+| Compile-fail | Type-state invariant verification via trybuild | 7 |
 
-## Docker
+## :whale: Docker
 
 ### Standalone
 
@@ -248,7 +280,8 @@ docker run --cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt no-new-privile
   rustbox judge execute-code --strict --box-id 1 --language python --code 'print(1)'
 ```
 
-### Full Stack (judge service + web UI)
+<details>
+<summary><strong>:rocket: Full Stack (judge service + web UI)</strong></summary>
 
 ```bash
 # Set required credentials
@@ -265,7 +298,9 @@ curl -X POST http://localhost:8080/api/submit \
   -d '{"language": "python", "code": "print(42)"}'
 ```
 
-## Requirements
+</details>
+
+## :clipboard: Requirements
 
 | Requirement | Details |
 |-------------|---------|
@@ -275,7 +310,9 @@ curl -X POST http://localhost:8080/api/submit \
 | Python | `python3` |
 | C++ | `g++` (GCC) |
 | Java | `javac` + `java` (OpenJDK 17+) |
+| JavaScript | `qjs` ([QuickJS](https://bellard.org/quickjs/)) |
+| TypeScript | `bun` ([Bun](https://bun.sh/)) |
 
-## Acknowledgments
+## :pray: Acknowledgments
 
 Inspired by [IOI Isolate](https://github.com/ioi/isolate) by Martin Mares and Bernard Blackham.
