@@ -4,13 +4,6 @@
 use crate::config::types::*;
 use serde::{Deserialize, Serialize};
 
-/// Build capability report from runtime launch evidence.
-pub fn create_capability_report_from_evidence(
-    evidence: &crate::core::types::LaunchEvidence,
-) -> CapabilityReport {
-    evidence.to_capability_report()
-}
-
 /// Stable JSON result schema for judge consumers (v1)
 /// This schema is frozen and backward compatible
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -139,28 +132,6 @@ impl JudgeResultV1 {
     }
 }
 
-/// Minimal result for quick status checks
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MinimalResult {
-    pub status: ExecutionStatus,
-    pub cpu_time: f64,
-    pub wall_time: f64,
-    pub memory_peak: u64,
-    pub exit_code: Option<i32>,
-}
-
-impl From<&JudgeResultV1> for MinimalResult {
-    fn from(result: &JudgeResultV1) -> Self {
-        Self {
-            status: result.status.clone(),
-            cpu_time: result.cpu_time,
-            wall_time: result.wall_time,
-            memory_peak: result.memory_peak,
-            exit_code: result.exit_code,
-        }
-    }
-}
-
 /// Convert ExecutionResult to JudgeResultV1 with full provenance
 impl JudgeResultV1 {
     /// Create from ExecutionResult with capability report and envelope
@@ -173,7 +144,6 @@ impl JudgeResultV1 {
         language_runtime_envelope: Option<String>,
     ) -> Self {
         let now = chrono::Utc::now().to_rfc3339();
-
         let output_integrity = result.output_integrity.clone();
 
         // Build immutable evidence bundle from runtime artifacts.
@@ -253,7 +223,7 @@ impl JudgeResultV1 {
             execution_envelope_id,
             evidence_bundle,
             language_runtime_envelope,
-            now.clone(),
+            now.clone(), // execution_start == execution_end (same instant)
             now,
         )
     }
@@ -354,17 +324,6 @@ mod tests {
     fn test_schema_version_validation() {
         let result = create_test_result();
         assert!(result.validate_schema_version().is_ok());
-    }
-
-    #[test]
-    fn test_minimal_result_conversion() {
-        let result = create_test_result();
-        let minimal = MinimalResult::from(&result);
-
-        assert_eq!(minimal.status, ExecutionStatus::Ok);
-        assert_eq!(minimal.cpu_time, 0.5);
-        assert_eq!(minimal.wall_time, 1.0);
-        assert_eq!(minimal.memory_peak, 1024 * 1024);
     }
 
     #[test]

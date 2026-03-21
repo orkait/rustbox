@@ -209,8 +209,8 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
         OutputIntegrity::Complete
     };
 
-    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+    let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
     Ok(ProxyStatus {
         payload_pid: Some(payload_pid.as_raw()),

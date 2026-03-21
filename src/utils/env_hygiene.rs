@@ -238,29 +238,6 @@ impl EnvHygiene {
     }
 }
 
-/// Validate environment safety
-pub fn validate_environment_safety(env_map: &HashMap<String, String>) -> Vec<String> {
-    let mut warnings = Vec::new();
-
-    // Check for dangerous LD_* variables
-    let dangerous_ld_vars: &[&str] = &["LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"];
-
-    for &var in dangerous_ld_vars {
-        if env_map.contains_key(var) {
-            warnings.push(format!("Dangerous environment variable present: {}", var));
-        }
-    }
-
-    // Check for non-deterministic PATH
-    if let Some(path) = env_map.get("PATH") {
-        if path.contains("..") || path.contains("~") {
-            warnings.push("PATH contains relative or home directory references".to_string());
-        }
-    }
-
-    warnings
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,21 +294,6 @@ mod tests {
         // Should not have dangerous LD_* variables
         assert!(!env_map.contains_key("LD_PRELOAD"));
         assert!(!env_map.contains_key("LD_LIBRARY_PATH"));
-    }
-
-    #[test]
-    fn test_validate_environment_safety() {
-        let mut env_map = HashMap::new();
-        env_map.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
-
-        let warnings = validate_environment_safety(&env_map);
-        assert_eq!(warnings.len(), 0);
-
-        // Add dangerous variable
-        env_map.insert("LD_PRELOAD".to_string(), "/evil.so".to_string());
-        let warnings = validate_environment_safety(&env_map);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("LD_PRELOAD"));
     }
 
     #[test]

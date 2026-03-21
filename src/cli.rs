@@ -301,8 +301,8 @@ extern "C" fn signal_handler(sig: i32) {
 
 fn setup_signal_handlers() {
     unsafe {
-        libc::signal(libc::SIGTERM, signal_handler as usize);
-        libc::signal(libc::SIGINT, signal_handler as usize);
+        libc::signal(libc::SIGTERM, signal_handler as *const () as usize);
+        libc::signal(libc::SIGINT, signal_handler as *const () as usize);
     }
 }
 
@@ -796,8 +796,7 @@ fn emit_judge_json(
             "Missing runtime launch evidence; refusing to emit static capability claims"
         )
     })?;
-    let capability_report =
-        crate::utils::json_schema::create_capability_report_from_evidence(evidence);
+    let capability_report = evidence.to_capability_report();
     let envelope_id = build_envelope_id(config, &capability_report, language_runtime_envelope);
     let judge_result = crate::utils::json_schema::JudgeResultV1::from_execution_result(
         result,

@@ -35,17 +35,12 @@
 //! - [`config::validator`]: Config-to-enforcement matrix
 //! - [`config::types`]: Shared type definitions and closed enums
 //! - [`config::presets`]: Versioned language runtime envelopes
-//! - [`config::policy`]: Policy enforcement modules
 //!
 //! ## Utilities ([`utils`])
 //! - [`utils::fd_closure`]: FD closure hardening
 //! - [`utils::env_hygiene`]: Environment and permission hygiene
 //! - [`utils::output`]: Bounded output collection
 //! - [`utils::json_schema`]: JSON schema validation
-//!
-//! ## Testing Infrastructure ([`testing`])
-//! - [`testing::mount_invariance`]: Mount invariance proof framework
-//! - [`testing::race_proof`]: Race condition proof framework
 //!
 //! # Design Principles
 //!
@@ -85,9 +80,6 @@ pub mod config;
 // Utilities
 pub mod utils;
 
-// Testing Infrastructure
-pub mod testing;
-
 // CLI entrypoint wiring shared by isolate/judge/rustbox binaries.
 pub mod cli;
 
@@ -102,9 +94,4 @@ pub mod types {
     pub use crate::config::types::*;
 }
 pub use exec::preexec;
-pub use observability::audit as security_logging;
 pub use safety::cleanup::BaselineChecker;
-pub use testing::mount_invariance;
-pub use testing::race_proof;
-// Deferred to post-V1: envelope
-// pub use verdict::envelope;

@@ -32,53 +32,7 @@ pub enum DirectoryPermissions {
 }
 
 impl DirectoryBinding {
-    /// Parse directory binding from string format like "source=target:options"
-    #[deprecated(note = "Use parse_secure() instead — this method has no path validation")]
-    pub fn parse(binding_str: &str) -> std::result::Result<Self, String> {
-        let parts: Vec<&str> = binding_str.split(':').collect();
-        let path_part = parts[0];
-        let options = if parts.len() > 1 { parts[1] } else { "" };
-
-        let (source, target) = if path_part.contains('=') {
-            let path_parts: Vec<&str> = path_part.split('=').collect();
-            if path_parts.len() != 2 {
-                return Err(
-                    "Invalid directory binding format. Use: source=target or source=target:options"
-                        .to_string(),
-                );
-            }
-            (PathBuf::from(path_parts[0]), PathBuf::from(path_parts[1]))
-        } else {
-            // If no target specified, use same path in sandbox
-            (PathBuf::from(path_part), PathBuf::from(path_part))
-        };
-
-        let mut permissions = DirectoryPermissions::ReadOnly;
-        let mut maybe = false;
-        let mut is_tmp = false;
-
-        for option in options.split(',') {
-            match option.trim() {
-                "rw" => permissions = DirectoryPermissions::ReadWrite,
-                "ro" => permissions = DirectoryPermissions::ReadOnly,
-                "noexec" => permissions = DirectoryPermissions::NoExec,
-                "maybe" => maybe = true,
-                "tmp" => is_tmp = true,
-                "" => {} // Empty option
-                _ => return Err(format!("Unknown directory binding option: {}", option)),
-            }
-        }
-
-        Ok(DirectoryBinding {
-            source,
-            target,
-            permissions,
-            maybe,
-            is_tmp,
-        })
-    }
-
-    /// Parse directory binding with enhanced security validation
+    /// Parse directory binding with security validation
     pub fn parse_secure(binding_str: &str) -> crate::config::types::Result<Self> {
         use crate::observability::audit::events;
         use crate::runtime::security::path_validation;
@@ -321,9 +275,10 @@ pub struct ExecutionResult {
 
 /// Status of process execution - STABLE TAXONOMY (v1 frozen)
 /// Per plan.md Section 8.4: Status set is closed in v1
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum ExecutionStatus {
     /// Process completed successfully (exit code 0, no violations)
+    #[default]
     #[serde(rename = "OK")]
     Ok,
     /// Time limit exceeded (CPU or wall time)
@@ -425,8 +380,9 @@ pub enum VerdictCause {
 
 /// Output integrity classification
 /// Per plan.md Section 12
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum OutputIntegrity {
+    #[default]
     #[serde(rename = "complete")]
     Complete,
     #[serde(rename = "truncated_by_judge_limit")]
@@ -451,11 +407,6 @@ impl std::fmt::Display for OutputIntegrity {
     }
 }
 
-impl Default for OutputIntegrity {
-    fn default() -> Self {
-        Self::Complete
-    }
-}
 
 /// CPU vs Wall divergence classification
 /// Per plan.md Section 13
@@ -610,8 +561,8 @@ impl From<std::process::Output> for ExecutionResult {
         Self {
             exit_code: output.status.code(),
             status,
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             output_integrity: OutputIntegrity::Complete,
             cpu_time: 0.0,  // Not available from std::process::Output
             wall_time: 0.0, // Not available from std::process::Output
@@ -628,11 +579,6 @@ impl From<std::process::Output> for ExecutionResult {
 impl From<nix::errno::Errno> for IsolateError {
     fn from(err: nix::errno::Errno) -> Self {
         IsolateError::Process(err.to_string())
-    }
-}
-impl Default for ExecutionStatus {
-    fn default() -> Self {
-        Self::Ok
     }
 }
 

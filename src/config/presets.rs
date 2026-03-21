@@ -100,20 +100,6 @@ impl LanguageEnvelope {
         log::info!("Applied language envelope: {} ({})", self.id, self.name);
     }
 
-    /// Get envelope metadata for result recording
-    pub fn get_metadata(&self) -> HashMap<String, String> {
-        let mut metadata = HashMap::new();
-        metadata.insert("envelope_id".to_string(), self.id.clone());
-        metadata.insert("envelope_name".to_string(), self.name.clone());
-        metadata.insert("envelope_version".to_string(), self.version.clone());
-        metadata.insert("language".to_string(), self.language.clone());
-        metadata.insert(
-            "startup_overhead_ms".to_string(),
-            self.startup_overhead_ms.to_string(),
-        );
-
-        metadata
-    }
 }
 
 /// Language preset registry
@@ -375,17 +361,6 @@ mod tests {
         let presets = LanguagePresets::new();
         let list = presets.list();
         assert_eq!(list.len(), 5);
-    }
-
-    #[test]
-    fn test_envelope_metadata() {
-        let presets = LanguagePresets::new();
-        let cpp = presets.get("cpp17-v1").unwrap();
-
-        let metadata = cpp.get_metadata();
-        assert_eq!(metadata.get("envelope_id").unwrap(), "cpp17-v1");
-        assert_eq!(metadata.get("language").unwrap(), "cpp");
-        assert_eq!(metadata.get("envelope_version").unwrap(), "1.0");
     }
 
     #[test]
