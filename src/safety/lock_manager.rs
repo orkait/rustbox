@@ -51,15 +51,11 @@ struct LockManagerMetrics {
     stale_locks_cleaned: AtomicU64,
 }
 
-/// Individual box lock (simplified - no heartbeat thread)
+/// Individual box lock - holds flock for RAII release
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct BoxLock {
     box_id: u32,
-    lock_file: File,
-    lock_path: PathBuf,
-    owner_pid: u32,
-    created_at: SystemTime,
+    _lock_file: File, // held open to maintain flock
 }
 
 /// RAII guard for box locks
@@ -338,10 +334,7 @@ impl RustboxLockManager {
         // Step 4: Create the lock object (no heartbeat)
         let lock = BoxLock {
             box_id,
-            lock_file: lock_file_mut,
-            lock_path: lock_path.to_owned(),
-            owner_pid: std::process::id(),
-            created_at: SystemTime::now(),
+            _lock_file: lock_file_mut,
         };
 
         // Step 5: Increment active lock counter

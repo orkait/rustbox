@@ -63,12 +63,6 @@ impl SignalHandler {
         SIGNAL_RECEIVED.load(Ordering::SeqCst)
     }
 
-    #[allow(dead_code)]
-    pub fn reset(&self) {
-        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
-        SIGNAL_RECEIVED.store(0, Ordering::SeqCst);
-    }
-
     pub fn wait_for_signal(&self, timeout: Duration) -> bool {
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {
