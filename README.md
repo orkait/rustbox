@@ -8,13 +8,12 @@ Inspired by [IOI Isolate](https://github.com/ioi/isolate).
 
 <br />
 
-![Rust](https://img.shields.io/badge/Rust-1.70%2B-f74c00?logo=rust&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-2021%20edition-f74c00?logo=rust&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-cgroups%20v1%2Fv2-FCC624?logo=linux&logoColor=black)
 ![Status](https://img.shields.io/badge/status-v0.1.0-blue)
-![Tests](https://img.shields.io/badge/tests-144%20unit%20%7C%2026%20integration-brightgreen)
+![Tests](https://img.shields.io/badge/tests-144%20unit%20%2B%207%20trybuild-brightgreen)
 ![Clippy](https://img.shields.io/badge/clippy-0%20warnings-brightgreen)
-![Languages](https://img.shields.io/badge/languages-Python%20%7C%20C%2B%2B%20%7C%20Java%20%7C%20JS%20%7C%20TS-green)
-![Lines](https://img.shields.io/badge/codebase-15.3k%20lines-informational)
+![Languages](https://img.shields.io/badge/sandbox-Python%20%7C%20C%2B%2B%20%7C%20Java%20%7C%20JS%20%7C%20TS-green)
 
 </div>
 
@@ -24,7 +23,7 @@ Rustbox executes untrusted code inside kernel-enforced sandboxes with determinis
 
 ```
                     +-----------+
-  source code ----->|  rustbox  |-----> verdict (OK / TLE / MLE / RE / Signaled)
+  source code ----->|  rustbox  |-----> status (OK / TLE / MLE / RE / Signaled)
   + language        |  (judge)  |-----> stdout, stderr
   + limits          +-----------+-----> evidence bundle (controls, memory peak, cpu time)
                      namespaces
@@ -48,19 +47,24 @@ sudo target/release/judge execute-code --strict --box-id 1 \
   --language python --code 'print("hello")'
 ```
 
-Output is `JudgeResultV1` JSON on stdout:
+Output is `JudgeResultV1` JSON on stdout. Here's what the key fields look like (full output includes evidence bundle, capability report, and provenance):
 
 ```json
 {
-  "verdict": "OK",
+  "schema_version": "1.0",
+  "status": "OK",
   "exit_code": 0,
-  "cpu_time_ms": 11,
-  "wall_time_ms": 15,
-  "memory_peak_kb": 8192,
   "stdout": "hello\n",
-  "stderr": ""
+  "stderr": "",
+  "cpu_time": 0.011,
+  "wall_time": 0.015,
+  "memory_peak": 8388608,
+  "output_integrity": "complete",
+  "execution_envelope_id": "sha256:..."
 }
 ```
+
+> `cpu_time` and `wall_time` are in **seconds** (float). `memory_peak` is in **bytes**.
 
 <details>
 <summary><strong>:test_tube: All Five Languages</strong></summary>
@@ -70,14 +74,14 @@ Output is `JudgeResultV1` JSON on stdout:
 sudo target/release/judge execute-code --strict --box-id 1 \
   --language python --code 'print(sum(range(100)))'
 
-# C++
+# C++ (compiled then executed)
 sudo target/release/judge execute-code --strict --box-id 2 \
   --language cpp --code '
 #include <iostream>
 int main() { std::cout << 42 << std::endl; }
 '
 
-# Java
+# Java (compiled then executed)
 sudo target/release/judge execute-code --strict --box-id 3 \
   --language java --code '
 public class Main {
@@ -87,14 +91,16 @@ public class Main {
 }
 '
 
-# JavaScript (QuickJS)
+# JavaScript (QuickJS - interpreted)
 sudo target/release/judge execute-code --strict --box-id 4 \
   --language javascript --code 'console.log(2 + 2)'
 
-# TypeScript (Bun)
+# TypeScript (Bun - interpreted)
 sudo target/release/judge execute-code --strict --box-id 5 \
   --language typescript --code 'console.log("typed!")'
 ```
+
+Language aliases: `py`, `c++`/`cxx`/`cc`/`c`, `js`, `ts`
 
 </details>
 
@@ -110,7 +116,7 @@ Rustbox applies **7 independent layers** of kernel-enforced isolation. Every lay
 | Memory | cgroup `memory.max` + `RLIMIT_AS` | Physical + virtual memory caps |
 | CPU | `RLIMIT_CPU` + cgroup watchdog | Hard CPU time limit |
 | Processes | cgroup `pids.max` + `RLIMIT_NPROC` | Fork bomb prevention |
-| Privileges | `setresuid` + caps zeroed + `NO_NEW_PRIVS` | No root, no escalation, no suid |
+| Privileges | `setresuid` + all caps zeroed + `PR_SET_NO_NEW_PRIVS` | No root, no escalation, no suid |
 
 ### :lock: Type-State Pre-Exec Chain
 
@@ -118,24 +124,28 @@ The core safety mechanism. Sandbox setup is enforced **at compile time** through
 
 ```
 FreshChild
-  -> NamespacesConfigured
-    -> MountsHardened
+  -> NamespacesReady
+    -> MountsPrivate
       -> CgroupAttached
-        -> CredentialsDropped
-          -> PrivilegesLocked
+        -> CredsDropped
+          -> PrivsLocked
             -> ExecReady    // only this state can call exec_payload()
 ```
 
-Verified by [trybuild](https://docs.rs/trybuild) compile-fail tests in `tests/typestate_compile_fail/`.
+Verified by 7 [trybuild](https://docs.rs/trybuild) compile-fail tests in `tests/typestate_compile_fail/`.
 
 ### :no_entry: Environment Sanitization
 
-A blocklist strips dangerous environment variables **after** config merge, preventing injection through `config.json`:
+A blocklist strips dangerous environment variables **after** config merge (preventing re-injection through `config.json`):
 
 <details>
 <summary>Blocked variables</summary>
 
-`LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `BASH_ENV`, `PYTHONSTARTUP`, `PYTHONPATH`, `NODE_OPTIONS`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `PERL5OPT`, `RUBYOPT`, and more.
+**Loader hijack** (VULN-002): `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, `LD_PROFILE`, `LD_BIND_NOW`, `LD_BIND_NOT`, `LD_DYNAMIC_WEAK`, `LD_USE_LOAD_BIAS`
+
+**Interpreter injection** (VULN-014): `BASH_ENV`, `ENV`, `CDPATH`, `PYTHONSTARTUP`, `PERL5OPT`, `RUBYOPT`, `NODE_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`
+
+**Allowed but validated**: `JAVA_TOOL_OPTIONS` (checked for `-javaagent:`, `-agentpath:`, `-agentlib:` flags). `PYTHONPATH` is allowed since filesystem isolation is the control.
 
 </details>
 
@@ -158,15 +168,15 @@ src/
   kernel/         Thin unsafe wrappers around Linux primitives
                     namespaces, cgroups v1/v2, capabilities, mounts,
                     credentials, signals
-  exec/           Type-state pre-exec chain, process executor
-  core/           Supervisor (clone/waitpid), proxy (PID 1), types
+  exec/           Type-state pre-exec chain (preexec.rs), process executor
+  core/           Supervisor (clone/waitpid), proxy (PID 1 in sandbox), types
   config/         Config loading, validation, per-language presets
   runtime/        Isolate lifecycle, security validation
-  verdict/        Evidence-backed verdict classification
-  safety/         Idempotent cleanup, lock manager, workspace
-  observability/  Security audit logging
+  verdict/        Evidence-backed verdict classification (pure functions)
+  safety/         Idempotent cleanup, file-lock manager
+  observability/  Security audit logging (injection + traversal detection)
   utils/          FD closure, env hygiene, fork-safe logging, JSON schema
-  judge/          Language adapters (Python, C++, Java, JavaScript, TypeScript)
+  judge/          Language adapters (Python, C++, Java, JS, TS)
 ```
 
 ### :arrows_counterclockwise: Execution Flow
@@ -193,44 +203,55 @@ CLI args
 
 ## :gear: Configuration
 
-`config.json` defines per-language resource limits and environment:
+`config.json` defines per-language resource limits, environment, filesystem bindings, and compilation settings:
 
 <details>
-<summary>Example config.json</summary>
+<summary>Example config.json (simplified)</summary>
 
 ```json
 {
+  "isolate": {
+    "box_dir": "/tmp/rustbox",
+    "run_dir": "/var/run/rustbox"
+  },
+  "security": {
+    "drop_capabilities": true,
+    "use_namespaces": true,
+    "use_cgroups": true,
+    "no_new_privileges": true
+  },
   "languages": {
     "python": {
       "memory": { "limit_mb": 128 },
       "time": { "cpu_time_seconds": 4, "wall_time_seconds": 7 },
       "processes": { "max_processes": 10 },
-      "environment": { "PYTHONDONTWRITEBYTECODE": "1" }
+      "filesystem": {
+        "max_file_size_kb": 512,
+        "required_binaries": ["/usr/bin/python3"]
+      },
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "compilation": { "enabled": false }
     },
     "cpp": {
       "memory": { "limit_mb": 256 },
       "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
-      "processes": { "max_processes": 8 }
-    },
-    "java": {
-      "memory": { "limit_mb": 512 },
-      "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
-      "processes": { "max_processes": 256 },
-      "environment": { "JAVA_TOOL_OPTIONS": "-Xmx256m -Xms64m -XX:+UseSerialGC" }
-    },
-    "javascript": {
-      "memory": { "limit_mb": 256 },
-      "time": { "cpu_time_seconds": 4, "wall_time_seconds": 7 },
-      "processes": { "max_processes": 4 }
-    },
-    "typescript": {
-      "memory": { "limit_mb": 512 },
-      "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
-      "processes": { "max_processes": 16 }
+      "processes": { "max_processes": 8 },
+      "filesystem": {
+        "required_binaries": ["/usr/bin/gcc", "/usr/bin/g++"]
+      },
+      "compilation": {
+        "enabled": true,
+        "compiler": "g++ -std=c++17 -O2"
+      }
     }
   }
 }
 ```
+
+Each language also supports `java`, `javascript`, and `typescript` sections. See `config.json` for the full schema.
 
 </details>
 
@@ -243,10 +264,10 @@ Config is loaded from `./config.json` (dev) or `/etc/rustbox/config.json` (produ
 cargo build                    # debug
 cargo build --release          # release
 
-# Test (non-root)
+# Run all tests (non-root)
 cargo test --all
 
-# Strict mode tests (root required)
+# Strict mode integration tests (root required)
 sudo cargo test --test integration_execution -- --include-ignored
 
 # Clippy (zero warnings)
@@ -259,14 +280,14 @@ target/debug/judge execute-code --permissive --box-id 1 --language python --code
 target/debug/judge check-deps --verbose
 ```
 
-### :bar_chart: Test Coverage
+### :bar_chart: Test Suites
 
 | Suite | What it tests | Count |
 |-------|---------------|-------|
-| Unit | All modules (types, config, verdict, cleanup, presets, adapters) | 144 |
-| Integration (permissive) | All languages, verdict types, stdin, timeouts | 19 |
-| Integration (strict) | Full isolation chain, requires root | 7 (ignored without root) |
-| Compile-fail | Type-state invariant verification via trybuild | 7 |
+| Unit | Types, config, verdict classifier, cleanup, presets, language adapters | 144 |
+| Integration (permissive) | All 5 languages, verdict types, stdin, timeouts | 19 |
+| Integration (strict) | Full isolation chain under root | 7 (ignored without root) |
+| Compile-fail (trybuild) | Type-state invariants - verifies misordering is a compile error | 7 |
 
 ## :whale: Docker
 
@@ -281,7 +302,7 @@ docker run --cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt no-new-privile
 ```
 
 <details>
-<summary><strong>:rocket: Full Stack (judge service + web UI)</strong></summary>
+<summary><strong>Full Stack (judge service + web UI)</strong></summary>
 
 ```bash
 # Set required credentials
@@ -306,12 +327,12 @@ curl -X POST http://localhost:8080/api/submit \
 |-------------|---------|
 | OS | Linux with cgroups v1 or v2 |
 | Privileges | Root for strict mode (namespaces, cgroups, credential drop) |
-| Rust | 1.70+ |
-| Python | `python3` |
+| Rust | Edition 2021 |
+| Python | `python3` in `$PATH` |
 | C++ | `g++` (GCC) |
 | Java | `javac` + `java` (OpenJDK 17+) |
-| JavaScript | `qjs` ([QuickJS](https://bellard.org/quickjs/)) |
-| TypeScript | `bun` ([Bun](https://bun.sh/)) |
+| JavaScript | [`qjs`](https://bellard.org/quickjs/) (QuickJS) |
+| TypeScript | [`bun`](https://bun.sh/) (Bun runtime) |
 
 ## :pray: Acknowledgments
 
