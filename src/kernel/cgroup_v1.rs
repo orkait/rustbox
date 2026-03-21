@@ -351,12 +351,10 @@ impl CgroupBackend for CgroupV1 {
 
         Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
 
-        if has_memsw {
-            if Self::write_value(&memsw, &limit_bytes, self.strict_mode, "memory.memsw.limit_in_bytes").is_err() {
-                // Retry: set memsw first (raise ceiling), then memory
-                let _ = Self::write_value(&memsw, &limit_bytes, false, "memory.memsw.limit_in_bytes");
-                Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
-            }
+        if has_memsw && Self::write_value(&memsw, &limit_bytes, self.strict_mode, "memory.memsw.limit_in_bytes").is_err() {
+            // Retry: set memsw first (raise ceiling), then memory
+            let _ = Self::write_value(&memsw, &limit_bytes, false, "memory.memsw.limit_in_bytes");
+            Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
         }
 
         let swappiness = memory_path.join("memory.swappiness");
