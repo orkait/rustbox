@@ -317,7 +317,15 @@ impl Isolate {
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
         match language.to_lowercase().as_str() {
-            "python" | "py" => self.execute_python_string(code, overrides),
+            "python" | "py" => {
+                self.execute_interpreted(code, "solution.py", &["/usr/bin/python3", "-u"], overrides)
+            }
+            "javascript" | "js" => {
+                self.execute_interpreted(code, "solution.js", &["/usr/local/bin/qjs", "--std"], overrides)
+            }
+            "typescript" | "ts" => {
+                self.execute_interpreted(code, "solution.ts", &["/usr/local/bin/bun", "run"], overrides)
+            }
             "cpp" | "c++" | "cxx" => self.compile_and_execute_cpp(code, overrides),
             "java" => self.compile_and_execute_java(code, overrides),
             _ => Err(IsolateError::Config(format!(
@@ -327,19 +335,58 @@ impl Isolate {
         }
     }
 
-    /// Execute Python code directly from string
-    fn execute_python_string(
+    /// Execute an interpreted language: write source → run → delete.
+    ///
+    /// Unified path for Python, JavaScript, and TypeScript. The `filename`
+    /// is the source file name (e.g. "solution.py") and `prefix_args` are
+    /// the runtime args placed before the source path in the command.
+    fn execute_interpreted(
         &mut self,
         code: &str,
+        filename: &str,
+        prefix_args: &[&str],
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        let command = vec![
-            "/usr/bin/python3".to_string(),
-            "-u".to_string(),
-            "-c".to_string(),
-            code.to_string(),
-        ];
-        self.execute_with_overrides(&command, overrides)
+        self.ensure_instance_workdir()?;
+        self.wipe_workdir_contents();
+
+        let source_file = self.instance.config.workdir.join(filename);
+        let mut command: Vec<String> = prefix_args.iter().map(|s| s.to_string()).collect();
+        command.push(source_file.to_string_lossy().to_string());
+
+        fs::write(&source_file, code)?;
+        let result = self.execute_with_overrides(&command, overrides);
+        let _ = fs::remove_file(&source_file);
+        result
+    }
+
+    /// Shared compile-phase config: permissive mode, generous limits.
+    /// Only the default memory and minimum process limit differ between C++ and Java.
+    fn configure_compile_phase(
+        config: &mut IsolateConfig,
+        original_config: &IsolateConfig,
+        overrides: &ExecutionOverrides,
+        default_memory_mb: u64,
+        min_process_limit: u32,
+    ) {
+        config.strict_mode = false;
+        config.allow_degraded = unsafe { libc::geteuid() } != 0;
+        config.process_limit = Some(min_process_limit);
+
+        config.memory_limit = Some(
+            overrides
+                .max_memory
+                .map(|mb| mb * 1024 * 1024)
+                .unwrap_or(default_memory_mb * 1024 * 1024),
+        );
+
+        let original_cpu = original_config.cpu_time_limit.map(|d| d.as_secs()).unwrap_or(8);
+        let original_wall = original_config.wall_time_limit.map(|d| d.as_secs()).unwrap_or(10);
+        let cpu = overrides.max_cpu.or(overrides.max_time).unwrap_or(original_cpu).max(15);
+        let wall = overrides.max_wall_time.unwrap_or(original_wall).max(30);
+        config.cpu_time_limit = Some(Duration::from_secs(cpu));
+        config.time_limit = Some(Duration::from_secs(cpu));
+        config.wall_time_limit = Some(Duration::from_secs(wall));
     }
 
     fn build_compile_failure_result(
@@ -411,6 +458,9 @@ impl Isolate {
         F: FnMut(&mut IsolateConfig, &IsolateConfig, &ExecutionOverrides),
     {
         self.ensure_instance_workdir()?;
+        // Clear any artifacts from a prior run before writing new user data.
+        self.wipe_workdir_contents();
+
         fs::write(&source_file, code)?;
 
         let original_config = self.instance.config.clone();
@@ -420,6 +470,8 @@ impl Isolate {
             Ok(r) => r,
             Err(e) => {
                 self.instance.config = original_config;
+                // Wipe source + any partial compiler output before returning.
+                self.wipe_workdir_contents();
                 return Err(e);
             }
         };
@@ -427,12 +479,18 @@ impl Isolate {
             if restore_on_return {
                 self.instance.config = original_config;
             }
+            // Wipe source before returning the compile-error verdict.
+            self.wipe_workdir_contents();
             return Ok(Self::build_compile_failure_result(
                 compile_result,
                 stderr_prefix,
                 error_message,
             ));
         }
+
+        // Compilation succeeded — source is no longer needed.
+        // Delete it now so it isn't on disk during the execution phase.
+        let _ = fs::remove_file(&source_file);
 
         if restore_before_execute {
             self.instance.config = original_config.clone();
@@ -443,6 +501,11 @@ impl Isolate {
             self.instance.config = original_config;
         }
 
+        // Wipe compiled artifacts (binary, .class files, anything the sandboxed
+        // process may have written) immediately after execution completes.
+        // Rustbox does not own user data; execution and cleanup are first-class.
+        self.wipe_workdir_contents();
+
         result
     }
 
@@ -452,70 +515,19 @@ impl Isolate {
         code: &str,
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        // Ensure workdir is initialized before computing source_file path.
         self.ensure_instance_workdir()?;
         let source_file = self.instance.config.workdir.join("solution.cpp");
-        let compile_command = vec![
-            "/usr/bin/g++".to_string(),
-            "-o".to_string(),
-            "solution".to_string(),
-            "solution.cpp".to_string(),
-            "-std=c++17".to_string(),
-            "-O2".to_string(),
-        ];
-        let execute_command = vec!["./solution".to_string()];
-
         self.compile_and_execute_with_spec(
             code,
             source_file,
-            compile_command,
-            execute_command,
+            vec!["/usr/bin/g++".into(), "-o".into(), "solution".into(),
+                 "solution.cpp".into(), "-std=c++17".into(), "-O2".into()],
+            vec!["./solution".into()],
             overrides,
             "Compilation Error",
             "Compilation failed",
-            true,
-            true,
-            |config, original_config, runtime_overrides| {
-                // Compilation uses a trusted compiler on untrusted source.
-                // Run in permissive mode so the compiler can access host toolchains.
-                // The compiled binary is executed under the original (strict) config.
-                config.strict_mode = false;
-                // Only allow degraded fallback when non-root (already unprivileged).
-                // When root, the namespace path MUST succeed to ensure UID drop.
-                config.allow_degraded = unsafe { libc::geteuid() } != 0;
-
-                // C++ toolchain can fan out many helper processes/threads (cc1plus/as/ld).
-                // Keep compile phase process headroom well above runtime defaults.
-                config.process_limit = Some(120);
-
-                if let Some(memory) = runtime_overrides.max_memory {
-                    config.memory_limit = Some(memory * 1024 * 1024);
-                } else {
-                    config.memory_limit = Some(256 * 1024 * 1024); // 256MB for C++
-                }
-
-                // Compilation needs a wider window than execution defaults.
-                let original_cpu_secs = original_config
-                    .cpu_time_limit
-                    .map(|d| d.as_secs())
-                    .unwrap_or(8);
-                let original_wall_secs = original_config
-                    .wall_time_limit
-                    .map(|d| d.as_secs())
-                    .unwrap_or(10);
-                let compile_cpu_secs = runtime_overrides
-                    .max_cpu
-                    .or(runtime_overrides.max_time)
-                    .unwrap_or(original_cpu_secs)
-                    .max(15);
-                let compile_wall_secs = runtime_overrides
-                    .max_wall_time
-                    .unwrap_or(original_wall_secs)
-                    .max(30);
-                config.cpu_time_limit = Some(Duration::from_secs(compile_cpu_secs));
-                config.time_limit = Some(Duration::from_secs(compile_cpu_secs));
-                config.wall_time_limit = Some(Duration::from_secs(compile_wall_secs));
-            },
+            true, true,
+            |cfg, orig, ovr| Self::configure_compile_phase(cfg, orig, ovr, 256, 120),
         )
     }
 
@@ -525,87 +537,22 @@ impl Isolate {
         code: &str,
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        // Ensure workdir is initialized before computing source_file path.
         self.ensure_instance_workdir()?;
-        // Extract class name from code (simple heuristic)
         let class_name = self
             .extract_java_class_name(code)
             .unwrap_or_else(|| "Main".to_string());
-        let source_file = self
-            .instance
-            .config
-            .workdir
-            .join(format!("{}.java", class_name));
-        let compile_command = vec![
-            "javac".to_string(),
-            "-proc:none".to_string(), // disable annotation processing
-            "-cp".to_string(),
-            ".".to_string(),
-            format!("{}.java", class_name),
-        ];
-        let execute_command = vec![
-            "java".to_string(),
-            "-cp".to_string(),
-            ".".to_string(),
-            class_name,
-        ];
-
+        let source_file = self.instance.config.workdir.join(format!("{}.java", class_name));
         self.compile_and_execute_with_spec(
             code,
             source_file,
-            compile_command,
-            execute_command,
+            vec!["javac".into(), "-proc:none".into(), "-cp".into(), ".".into(),
+                 format!("{}.java", class_name)],
+            vec!["java".into(), "-cp".into(), ".".into(), class_name],
             overrides,
             "Java Compilation Error",
             "Java compilation failed",
-            true,
-            true,
-            |config, original_config, runtime_overrides| {
-                // Compilation uses a trusted compiler on untrusted source.
-                // Run in permissive mode so javac can access host JVM paths.
-                // The compiled class is executed under the original (strict) config.
-                config.strict_mode = false;
-                // Only allow degraded fallback when non-root (already unprivileged).
-                // When root, the namespace path MUST succeed to ensure UID drop.
-                config.allow_degraded = unsafe { libc::geteuid() } != 0;
-
-                // Increase resource limits for JVM
-                if let Some(memory) = runtime_overrides.max_memory {
-                    config.memory_limit = Some(memory * 1024 * 1024);
-                } else {
-                    config.memory_limit = Some(512 * 1024 * 1024); // 512MB default for Java
-                }
-
-                // JVM/Javac can fan out many threads; too-low pids.max causes hard launch failures.
-                // Keep a higher floor while still allowing user overrides to increase further.
-                let requested_process_limit = runtime_overrides
-                    .process_limit
-                    .or(original_config.process_limit)
-                    .unwrap_or(16);
-                config.process_limit = Some(requested_process_limit.max(1024));
-
-                // JVM startup is slow; give compilation generous time limits.
-                let original_cpu_secs = original_config
-                    .cpu_time_limit
-                    .map(|d| d.as_secs())
-                    .unwrap_or(8);
-                let original_wall_secs = original_config
-                    .wall_time_limit
-                    .map(|d| d.as_secs())
-                    .unwrap_or(10);
-                let compile_cpu_secs = runtime_overrides
-                    .max_cpu
-                    .or(runtime_overrides.max_time)
-                    .unwrap_or(original_cpu_secs)
-                    .max(15);
-                let compile_wall_secs = runtime_overrides
-                    .max_wall_time
-                    .unwrap_or(original_wall_secs)
-                    .max(30);
-                config.cpu_time_limit = Some(Duration::from_secs(compile_cpu_secs));
-                config.time_limit = Some(Duration::from_secs(compile_cpu_secs));
-                config.wall_time_limit = Some(Duration::from_secs(compile_wall_secs));
-            },
+            true, true,
+            |cfg, orig, ovr| Self::configure_compile_phase(cfg, orig, ovr, 512, 1024),
         )
     }
 
@@ -630,6 +577,42 @@ impl Isolate {
         None
     }
 
+    /// Wipe every file and subdirectory inside workdir without removing the
+    /// directory itself. Called before AND after each execution so that:
+    ///   - No prior-run artifacts are visible to the next run.
+    ///   - User-submitted source + compiled artifacts are deleted as soon as
+    ///     execution completes, not deferred to Isolate::cleanup().
+    ///
+    /// Uses remove_tree_secure (openat/unlinkat) so a sandboxed process that
+    /// planted a symlink inside workdir cannot redirect deletion outside the dir.
+    fn wipe_workdir_contents(&self) {
+        let workdir = &self.instance.config.workdir;
+        if !workdir.as_os_str().is_empty() && workdir.exists() {
+            if let Ok(entries) = fs::read_dir(workdir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() && !path.is_symlink() {
+                        if let Err(e) =
+                            crate::safety::safe_cleanup::remove_tree_secure(&path)
+                        {
+                            warn!(
+                                "wipe_workdir_contents: failed to remove dir {}: {}",
+                                path.display(),
+                                e
+                            );
+                        }
+                    } else if let Err(e) = fs::remove_file(&path) {
+                        warn!(
+                            "wipe_workdir_contents: failed to remove file {}: {}",
+                            path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Clean up this isolate instance
     pub fn cleanup(mut self) -> Result<()> {
         let instance_id = self.instance.config.instance_id.clone();
@@ -644,9 +627,11 @@ impl Isolate {
             instances.remove(&instance_id);
         })?;
 
-        // Clean up filesystem
+        // Clean up filesystem — use remove_tree_secure (openat/unlinkat) rather
+        // than fs::remove_dir_all so a symlink planted by sandboxed code cannot
+        // redirect deletion to paths outside the sandbox base directory.
         if self.base_path.exists() {
-            fs::remove_dir_all(&self.base_path).map_err(IsolateError::Io)?;
+            crate::safety::safe_cleanup::remove_tree_secure(&self.base_path)?;
         }
 
         // Release lock before removing lock file
@@ -852,6 +837,11 @@ impl Isolate {
 
 impl Drop for Isolate {
     fn drop(&mut self) {
+        // Defense-in-depth: wipe any residual user data from workdir even if
+        // the caller forgot to call cleanup() (panic, early return, library
+        // misuse). The execute methods already wipe inline, so this is a
+        // safety net — not the primary cleanup path. (SEC-3)
+        self.wipe_workdir_contents();
         // Lock is automatically released when file descriptor is closed
         self.release_lock();
     }

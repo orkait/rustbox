@@ -133,6 +133,8 @@ impl LanguagePresets {
         presets.register_cpp17_v1();
         presets.register_java17_v1();
         presets.register_python311_v1();
+        presets.register_javascript_v1();
+        presets.register_typescript_v1();
 
         presets
     }
@@ -236,6 +238,56 @@ impl LanguagePresets {
         self.envelopes.insert(envelope.id.clone(), envelope);
     }
 
+    /// Register JavaScript v1 envelope (runs via QuickJS)
+    fn register_javascript_v1(&mut self) {
+        let envelope = LanguageEnvelope {
+            id: "javascript-v1".to_string(),
+            name: "JavaScript (QuickJS)".to_string(),
+            version: "1.0".to_string(),
+            language: "javascript".to_string(),
+            compiler: None,
+            runtime: RuntimeConfig {
+                executable: "/usr/bin/qjs".to_string(),
+                args: vec!["--std".to_string()],
+            },
+            default_limits: ResourceLimits {
+                memory_mb: Some(256),
+                cpu_time_sec: Some(10),
+                wall_time_sec: Some(15),
+                process_limit: Some(4), // proxy + qjs payload + headroom
+                stack_mb: Some(64),
+            },
+            startup_overhead_ms: 5, // ~1-5ms startup vs ~150ms for Bun
+        };
+
+        self.envelopes.insert(envelope.id.clone(), envelope);
+    }
+
+    /// Register TypeScript v1 envelope (runs via Bun)
+    fn register_typescript_v1(&mut self) {
+        let envelope = LanguageEnvelope {
+            id: "typescript-v1".to_string(),
+            name: "TypeScript".to_string(),
+            version: "1.0".to_string(),
+            language: "typescript".to_string(),
+            compiler: None,
+            runtime: RuntimeConfig {
+                executable: "/usr/local/bin/bun".to_string(),
+                args: vec!["run".to_string()],
+            },
+            default_limits: ResourceLimits {
+                memory_mb: Some(512),
+                cpu_time_sec: Some(10),
+                wall_time_sec: Some(15),
+                process_limit: Some(16), // JavaScriptCore GC and JIT threads
+                stack_mb: Some(64),
+            },
+            startup_overhead_ms: 150,
+        };
+
+        self.envelopes.insert(envelope.id.clone(), envelope);
+    }
+
     /// Get envelope by ID
     pub fn get(&self, id: &str) -> Option<&LanguageEnvelope> {
         self.envelopes.get(id)
@@ -280,6 +332,8 @@ mod tests {
         assert!(presets.has("cpp17-v1"));
         assert!(presets.has("java17-v1"));
         assert!(presets.has("python3.11-v1"));
+        assert!(presets.has("javascript-v1"));
+        assert!(presets.has("typescript-v1"));
     }
 
     #[test]
@@ -320,7 +374,7 @@ mod tests {
     fn test_list_envelopes() {
         let presets = LanguagePresets::new();
         let list = presets.list();
-        assert_eq!(list.len(), 3);
+        assert_eq!(list.len(), 5);
     }
 
     #[test]
@@ -399,5 +453,51 @@ mod tests {
         assert!(presets.has("cpp17-v1"));
         assert!(presets.has("java17-v1"));
         assert!(presets.has("python3.11-v1"));
+        assert!(presets.has("javascript-v1"));
+        assert!(presets.has("typescript-v1"));
+    }
+
+    #[test]
+    fn test_javascript_envelope() {
+        let presets = LanguagePresets::new();
+        let js = presets.get("javascript-v1").unwrap();
+
+        assert_eq!(js.id, "javascript-v1");
+        assert_eq!(js.language, "javascript");
+        assert!(js.compiler.is_none());
+        assert_eq!(js.runtime.executable, "/usr/bin/qjs");
+        assert!(js.runtime.args.contains(&"--std".to_string()), "missing --std");
+        assert_eq!(js.default_limits.memory_mb, Some(256));
+        assert_eq!(js.default_limits.process_limit, Some(4)); // proxy + payload + headroom
+        assert!(js.startup_overhead_ms < 20, "QuickJS startup should be near-instant");
+    }
+
+    #[test]
+    fn test_typescript_envelope() {
+        let presets = LanguagePresets::new();
+        let ts = presets.get("typescript-v1").unwrap();
+
+        assert_eq!(ts.id, "typescript-v1");
+        assert_eq!(ts.language, "typescript");
+        assert!(ts.compiler.is_none());
+        assert_eq!(ts.startup_overhead_ms, 150);
+        assert_eq!(ts.default_limits.memory_mb, Some(512));
+        assert!(ts.default_limits.process_limit.unwrap() >= 8);
+    }
+
+    #[test]
+    fn test_get_by_language_javascript() {
+        let presets = LanguagePresets::new();
+        let js = presets.get_by_language("javascript");
+        assert!(js.is_some());
+        assert_eq!(js.unwrap().id, "javascript-v1");
+    }
+
+    #[test]
+    fn test_get_by_language_typescript() {
+        let presets = LanguagePresets::new();
+        let ts = presets.get_by_language("typescript");
+        assert!(ts.is_some());
+        assert_eq!(ts.unwrap().id, "typescript-v1");
     }
 }

@@ -182,7 +182,11 @@ pub struct IsolateConfig {
     /// Per-language: Java needs >=4GB for compressed class pointers;
     /// Python/C++ use 1GB to prevent mmap(MAP_NORESERVE) VMA exhaustion.
     pub virtual_memory_limit: Option<u64>,
-    /// Custom environment variables
+    /// Custom environment variables.
+    /// SECURITY: never persisted to instances.json — environment may contain
+    /// secrets or user-specific tokens. Populated at runtime from config.json
+    /// via IsolateConfig::with_language_defaults(). (SEC-8)
+    #[serde(skip_serializing, default)]
     pub environment: Vec<(String, String)>,
     /// Strict mode: fail hard if cgroups unavailable or permission denied
     pub strict_mode: bool,

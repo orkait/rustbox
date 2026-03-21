@@ -191,9 +191,12 @@ impl IsolateConfig {
 
                 // Per-language virtual address space limit (RLIMIT_AS).
                 // Java 17+ needs >=4GB for compressed class pointers.
+                // Bun/JavaScriptCore JIT needs >=2GB for code memory.
                 config.virtual_memory_limit = Some(match language.to_lowercase().as_str() {
-                    "java" => 4 * 1024 * 1024 * 1024_u64,     // 4 GB
-                    _ => 1024 * 1024 * 1024_u64,               // 1 GB for python, cpp
+                    "java" => 4 * 1024 * 1024 * 1024_u64,         // 4 GB (compressed class ptrs)
+                    "typescript" => 2 * 1024 * 1024 * 1024_u64,  // 2 GB (Bun/JSC JIT)
+                    "javascript" => 512 * 1024 * 1024_u64,        // 512 MB (QuickJS is tiny)
+                    _ => 1024 * 1024 * 1024_u64,                  // 1 GB for python, cpp
                 });
 
                 // Apply language-specific environment variables

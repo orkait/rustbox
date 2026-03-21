@@ -79,6 +79,62 @@
 				"max_compilation_memory_mb": 256
 			}
 		},
+		"javascript": {
+			"memory": {
+				"limit_mb": 256,
+				"limit_kb": 262144
+			},
+			"time": {
+				"cpu_time_seconds": 8,
+				"wall_time_seconds": 12
+			},
+			"processes": {
+				"max_processes": 4,
+				"max_forks": 0
+			},
+			"filesystem": {
+				"max_file_size_kb": 512,
+				"max_open_files": 64,
+				"additional_read_only_paths": [],
+				"required_binaries": ["/usr/local/bin/qjs"]
+			},
+			"environment": {},
+			"compilation": {
+				"enabled": false,
+				"compiler": "",
+				"compiler_args": [],
+				"max_compilation_time": null,
+				"max_compilation_memory_mb": null
+			}
+		},
+		"typescript": {
+			"memory": {
+				"limit_mb": 512,
+				"limit_kb": 524288
+			},
+			"time": {
+				"cpu_time_seconds": 8,
+				"wall_time_seconds": 12
+			},
+			"processes": {
+				"max_processes": 16,
+				"max_forks": 0
+			},
+			"filesystem": {
+				"max_file_size_kb": 512,
+				"max_open_files": 128,
+				"additional_read_only_paths": ["/usr/local/lib/bun", "/usr/local/bin/bun"],
+				"required_binaries": ["/usr/local/bin/bun"]
+			},
+			"environment": {},
+			"compilation": {
+				"enabled": false,
+				"compiler": "",
+				"compiler_args": [],
+				"max_compilation_time": null,
+				"max_compilation_memory_mb": null
+			}
+		},
 		"cpp": {
 			"memory": {
 				"limit_mb": 256,
