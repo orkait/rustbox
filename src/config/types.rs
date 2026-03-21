@@ -561,8 +561,8 @@ impl From<std::process::Output> for ExecutionResult {
         Self {
             exit_code: output.status.code(),
             status,
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             output_integrity: OutputIntegrity::Complete,
             cpu_time: 0.0,  // Not available from std::process::Output
             wall_time: 0.0, // Not available from std::process::Output

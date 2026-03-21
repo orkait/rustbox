@@ -144,7 +144,6 @@ impl JudgeResultV1 {
         language_runtime_envelope: Option<String>,
     ) -> Self {
         let now = chrono::Utc::now().to_rfc3339();
-
         let output_integrity = result.output_integrity.clone();
 
         // Build immutable evidence bundle from runtime artifacts.
@@ -224,7 +223,7 @@ impl JudgeResultV1 {
             execution_envelope_id,
             evidence_bundle,
             language_runtime_envelope,
-            now.clone(),
+            now.clone(), // execution_start == execution_end (same instant)
             now,
         )
     }

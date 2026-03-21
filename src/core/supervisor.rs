@@ -82,37 +82,28 @@ fn build_launch_evidence(
         cleanup_verified,
     } = params;
     let configured = build_configured_controls(req);
-    let mut applied = Vec::new();
+    let mut applied = Vec::with_capacity(configured.len());
     let mut missing = Vec::new();
     // Namespace/no_new_privs setup is performed in proxy pre-exec.
     // Do not claim these controls when proxy reports setup failure.
     let setup_controls_applied = req.profile.strict_mode && proxy_status.internal_error.is_none();
 
     for control in &configured {
-        match control.as_str() {
+        let dest = match control.as_str() {
             "memory_limit" | "process_limit" => {
-                if cgroup_enforced {
-                    applied.push(control.clone());
-                } else {
-                    missing.push(control.clone());
-                }
+                if cgroup_enforced { &mut applied } else { &mut missing }
             }
             "pid_namespace" | "mount_namespace" | "network_namespace" | "user_namespace"
             | "no_new_privileges" => {
-                if setup_controls_applied {
-                    applied.push(control.clone());
-                } else {
-                    // In permissive mode these controls may log-and-continue on failure.
-                    // Do not over-claim enforcement when runtime verification is absent.
-                    missing.push(control.clone());
-                }
+                if setup_controls_applied { &mut applied } else { &mut missing }
             }
-            _ => applied.push(control.clone()),
-        }
+            _ => &mut applied,
+        };
+        dest.push(control.clone());
     }
 
-    if timed_out && !applied.contains(&"process_lifecycle".to_string()) {
-        applied.push("process_lifecycle".to_string());
+    if timed_out && !applied.iter().any(|c| c == "process_lifecycle") {
+        applied.push("process_lifecycle".into());
     }
 
     let process_lifecycle = ProcessLifecycleEvidence {
@@ -725,8 +716,8 @@ fn launch_degraded(
         match output {
             Ok(out) => (
                 out.status.code(),
-                String::from_utf8_lossy(&out.stdout).to_string(),
-                String::from_utf8_lossy(&out.stderr).to_string(),
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+                String::from_utf8_lossy(&out.stderr).into_owned(),
             ),
             Err(_) => (None, String::new(), String::new()),
         }
