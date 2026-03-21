@@ -5,8 +5,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use uuid::Uuid;
 
+use crate::database::types::Submission;
 use crate::types::{ErrorResponse, HealthResponse, ResultResponse, SubmitRequest, SubmitResponse};
 use crate::AppState;
 
@@ -59,11 +61,77 @@ async fn submit(
             .into_response();
     }
 
-    let id = Uuid::new_v4();
+    // Parse optional Idempotency-Key header; generate UUID if absent
+    let id = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .unwrap_or_else(Uuid::new_v4);
 
-    // Insert into Postgres
-    if let Err(e) = crate::db::create_submission(&state.db, id, &lang, &req.code, &req.stdin).await
-    {
+    // Idempotency check: if this ID already exists, return current state
+    match state.db.get_submission(id).await {
+        Ok(Some(existing)) => {
+            tracing::info!(%id, "idempotent hit - submission already exists");
+            return (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "id": existing.id,
+                    "status": existing.status,
+                })),
+            )
+                .into_response();
+        }
+        Ok(None) => { /* new submission, proceed */ }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to check idempotency");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!(ErrorResponse {
+                    error: "database error".to_string(),
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // Check queue backpressure before inserting
+    if state.queue.is_full() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!(ErrorResponse {
+                error: "queue full, try again later".to_string(),
+            })),
+        )
+            .into_response();
+    }
+
+    // Build new submission
+    let submission = Submission {
+        id,
+        user_id: None,
+        ip_address: None,
+        language: lang.clone(),
+        code: req.code,
+        stdin: req.stdin,
+        status: "pending".to_string(),
+        node_id: None,
+        sandbox_id: None,
+        verdict: None,
+        exit_code: None,
+        stdout: None,
+        stderr: None,
+        signal: None,
+        error_message: None,
+        cpu_time: None,
+        wall_time: None,
+        memory_peak: None,
+        created_at: Utc::now(),
+        started_at: None,
+        completed_at: None,
+    };
+
+    // Insert into database
+    if let Err(e) = state.db.insert_submission(&submission).await {
         tracing::error!(error = %e, "failed to create submission");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -74,27 +142,13 @@ async fn submit(
             .into_response();
     }
 
-    // Push to Redis queue (MultiplexedConnection is cheaply cloneable)
-    let mut con = state.redis.clone();
-
-    // Enforce queue size limit to prevent unbounded accumulation
-    let queue_depth = crate::queue::queue_depth(&mut con).await.unwrap_or(0);
-    if queue_depth >= state.max_queue_size {
+    // Enqueue to job queue (no-op in Postgres mode; trigger fires NOTIFY)
+    if let Err(e) = state.queue.enqueue(id).await {
+        tracing::error!(error = %e, "failed to enqueue job");
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!(ErrorResponse {
                 error: "queue full, try again later".to_string(),
-            })),
-        )
-            .into_response();
-    }
-
-    if let Err(e) = crate::queue::enqueue(&mut con, id).await {
-        tracing::error!(error = %e, "failed to enqueue job");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!(ErrorResponse {
-                error: "queue error".to_string(),
             })),
         )
             .into_response();
@@ -123,9 +177,9 @@ async fn result(
         }
     }
 
-    match crate::db::get_submission(&state.db, id).await {
-        Ok(Some(row)) => {
-            let resp: ResultResponse = row.into();
+    match state.db.get_submission(id).await {
+        Ok(Some(sub)) => {
+            let resp: ResultResponse = sub.into();
             (StatusCode::OK, Json(serde_json::json!(resp))).into_response()
         }
         Ok(None) => (
@@ -153,12 +207,10 @@ async fn languages() -> Json<Vec<&'static str>> {
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    let mut con = state.redis.clone();
-    let queue_depth = crate::queue::queue_depth(&mut con).await.unwrap_or(0);
-
     Json(HealthResponse {
         status: "ok".to_string(),
         workers: state.worker_count,
-        queue_depth,
+        queue_depth: state.queue.depth(),
+        node_id: state.node_id.clone(),
     })
 }

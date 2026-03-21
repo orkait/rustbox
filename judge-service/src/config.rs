@@ -5,10 +5,10 @@ pub struct ServiceConfig {
     pub workers: usize,
     pub queue_size: usize,
     pub database_url: String,
-    pub redis_url: String,
-    /// Store full execution metadata (JudgeResultV1 JSON, compressed) in DB.
-    /// Opt-in via RUSTBOX_STORE_META=true.
-    pub store_meta: bool,
+    pub api_key: Option<String>,
+    pub node_id: String,
+    pub reaper_interval_secs: u64,
+    pub stale_timeout_secs: u64,
 }
 
 impl ServiceConfig {
@@ -18,10 +18,14 @@ impl ServiceConfig {
             workers: env_or("RUSTBOX_WORKERS", 2),
             queue_size: env_or("RUSTBOX_QUEUE_SIZE", 100),
             database_url: std::env::var("RUSTBOX_DATABASE_URL")
-                .expect("RUSTBOX_DATABASE_URL must be set"),
-            redis_url: std::env::var("RUSTBOX_REDIS_URL")
-                .expect("RUSTBOX_REDIS_URL must be set"),
-            store_meta: env_or("RUSTBOX_STORE_META", false),
+                .unwrap_or_else(|_| "sqlite:rustbox.db".to_string()),
+            api_key: std::env::var("RUSTBOX_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty()),
+            node_id: std::env::var("RUSTBOX_NODE_ID")
+                .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string()),
+            reaper_interval_secs: env_or("RUSTBOX_REAPER_INTERVAL_SECS", 60),
+            stale_timeout_secs: env_or("RUSTBOX_STALE_TIMEOUT_SECS", 300),
         }
     }
 }

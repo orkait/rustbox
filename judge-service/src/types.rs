@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use uuid::Uuid;
+
+use crate::database::types::Submission;
 
 #[derive(Debug, Deserialize)]
 pub struct SubmitRequest {
@@ -15,76 +16,49 @@ pub struct SubmitResponse {
     pub id: Uuid,
 }
 
-#[derive(Debug, Clone, Serialize, FromRow)]
-pub struct SubmissionRow {
-    pub id: Uuid,
-    pub language: String,
-    pub code: String,
-    pub stdin: String,
-    pub status: String,
-    pub verdict: Option<String>,
-    pub stdout: Option<String>,
-    pub stderr: Option<String>,
-    pub exit_code: Option<i32>,
-    pub time_ms: Option<f64>,
-    pub memory_kb: Option<i64>,
-    pub cpu_time_ms: Option<f64>,
-    pub wall_time_ms: Option<f64>,
-    pub signal: Option<i32>,
-    pub error_message: Option<String>,
-    pub meta: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct ResultResponse {
     pub id: Uuid,
     pub status: String,
+    pub language: String,
     pub verdict: Option<String>,
     pub stdout: Option<String>,
     pub stderr: Option<String>,
     pub exit_code: Option<i32>,
-    pub time_ms: Option<f64>,
-    pub memory_kb: Option<i64>,
-    pub cpu_time_ms: Option<f64>,
-    pub wall_time_ms: Option<f64>,
     pub signal: Option<i32>,
     pub error_message: Option<String>,
-    pub language: String,
-    /// Compressed execution metadata (base64-encoded deflate of full JudgeResultV1 JSON).
-    /// Only present when RUSTBOX_STORE_META=true.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<serde_json::Value>,
+    pub cpu_time: Option<f64>,
+    pub wall_time: Option<f64>,
+    pub memory_peak: Option<i64>,
     pub created_at: String,
+    pub started_at: Option<String>,
     pub completed_at: Option<String>,
 }
 
-impl From<SubmissionRow> for ResultResponse {
-    fn from(row: SubmissionRow) -> Self {
-        let meta = row.meta.and_then(|compressed| decompress_meta(&compressed));
+impl From<Submission> for ResultResponse {
+    fn from(sub: Submission) -> Self {
         Self {
-            id: row.id,
-            status: row.status,
-            verdict: row.verdict,
-            stdout: row.stdout,
-            stderr: row.stderr,
-            exit_code: row.exit_code,
-            time_ms: row.time_ms,
-            memory_kb: row.memory_kb,
-            cpu_time_ms: row.cpu_time_ms,
-            wall_time_ms: row.wall_time_ms,
-            signal: row.signal,
-            error_message: row.error_message,
-            language: row.language,
-            meta,
-            created_at: row.created_at.to_rfc3339(),
-            completed_at: row.completed_at.map(|t| t.to_rfc3339()),
+            id: sub.id,
+            status: sub.status,
+            language: sub.language,
+            verdict: sub.verdict,
+            stdout: sub.stdout,
+            stderr: sub.stderr,
+            exit_code: sub.exit_code,
+            signal: sub.signal,
+            error_message: sub.error_message,
+            cpu_time: sub.cpu_time,
+            wall_time: sub.wall_time,
+            memory_peak: sub.memory_peak,
+            created_at: sub.created_at.to_rfc3339(),
+            started_at: sub.started_at.map(|t| t.to_rfc3339()),
+            completed_at: sub.completed_at.map(|t| t.to_rfc3339()),
         }
     }
 }
 
 /// Compress JSON string to base64-encoded deflate.
+#[allow(dead_code)]
 pub fn compress_meta(json: &str) -> String {
     use base64::Engine;
     use flate2::write::DeflateEncoder;
@@ -98,7 +72,8 @@ pub fn compress_meta(json: &str) -> String {
 }
 
 /// Decompress base64-encoded deflate back to JSON Value.
-fn decompress_meta(compressed: &str) -> Option<serde_json::Value> {
+#[allow(dead_code)]
+pub fn decompress_meta(compressed: &str) -> Option<serde_json::Value> {
     use base64::Engine;
     use flate2::read::DeflateDecoder;
     use std::io::Read;
@@ -115,6 +90,7 @@ pub struct HealthResponse {
     pub status: String,
     pub workers: usize,
     pub queue_depth: usize,
+    pub node_id: String,
 }
 
 #[derive(Debug, Serialize)]

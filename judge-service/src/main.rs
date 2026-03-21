@@ -1,77 +1,98 @@
 mod api;
 mod config;
-mod db;
-mod queue;
+mod database;
+mod job_queue;
 mod types;
 mod worker;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderValue, Method};
-use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
+use crate::database::Database;
+use crate::job_queue::JobQueue;
+
 #[derive(Clone)]
 pub struct AppState {
-    pub db: sqlx::PgPool,
-    pub redis: redis::aio::MultiplexedConnection,
+    pub db: Arc<dyn Database>,
+    pub queue: Arc<JobQueue>,
     pub worker_count: usize,
-    pub max_queue_size: usize,
     pub api_key: Option<String>,
+    pub node_id: String,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let cfg = config::ServiceConfig::from_env();
     info!(
         port = cfg.port,
         workers = cfg.workers,
+        node_id = %cfg.node_id,
+        database_url = %cfg.database_url,
         "starting judge-service"
     );
 
-    // Connect to Postgres
-    let pool = PgPoolOptions::new()
-        .max_connections(cfg.workers as u32 + 5)
-        .connect(&cfg.database_url)
-        .await
-        .expect("failed to connect to postgres");
-
-    // Run migrations
-    db::run_migrations(&pool)
-        .await
-        .expect("failed to run migrations");
+    // Connect to database (SQLite or Postgres based on URL)
+    let db: Arc<dyn Database> = Arc::from(database::connect(&cfg.database_url).await?);
     info!("database ready");
 
-    // Connect to Redis
-    let redis_client =
-        redis::Client::open(cfg.redis_url.as_str()).expect("failed to create redis client");
+    // Create queue and spawn workers based on backend mode
+    let is_postgres = cfg.database_url.starts_with("postgres://")
+        || cfg.database_url.starts_with("postgresql://");
 
-    let redis_con = redis_client
-        .get_multiplexed_async_connection()
-        .await
-        .expect("failed to connect to redis");
-    info!("redis ready");
+    let (queue, _worker_handles) = if is_postgres {
+        // Cluster mode: Postgres LISTEN/NOTIFY
+        // Create a dedicated PgDatabase instance for the listener
+        let pg_db = Arc::new(
+            database::postgres::PgDatabase::connect(&cfg.database_url).await?,
+        );
+        let queue = Arc::new(JobQueue::postgres());
+        let handles = worker::spawn_pg_workers(
+            cfg.workers,
+            db.clone(),
+            pg_db,
+            cfg.node_id.clone(),
+        );
+        info!(count = cfg.workers, mode = "postgres", "worker pool started");
+        (queue, handles)
+    } else {
+        // Single-node mode: async-channel
+        let queue = Arc::new(JobQueue::channel(cfg.queue_size));
+        let handles = worker::spawn_channel_workers(
+            cfg.workers,
+            db.clone(),
+            queue.clone(),
+            cfg.node_id.clone(),
+        );
+        info!(count = cfg.workers, mode = "channel", "worker pool started");
+        (queue, handles)
+    };
 
-    // Spawn worker pool
-    let store_meta = cfg.store_meta;
-    let _workers = worker::spawn_workers(cfg.workers, pool.clone(), redis_client, store_meta);
-    info!(count = cfg.workers, store_meta, "worker pool started");
+    // Spawn reaper
+    let _reaper = worker::spawn_reaper(
+        db.clone(),
+        Duration::from_secs(cfg.reaper_interval_secs),
+        Duration::from_secs(cfg.stale_timeout_secs),
+    );
 
     // Build HTTP server
-    let api_key = std::env::var("RUSTBOX_API_KEY").ok().filter(|k| !k.is_empty());
-    if api_key.is_some() {
+    let state = AppState {
+        db,
+        queue,
+        worker_count: cfg.workers,
+        api_key: cfg.api_key,
+        node_id: cfg.node_id,
+    };
+
+    if state.api_key.is_some() {
         info!("API key authentication enabled");
     }
-
-    let state = AppState {
-        db: pool,
-        redis: redis_con,
-        worker_count: cfg.workers,
-        max_queue_size: cfg.queue_size,
-        api_key,
-    };
 
     let cors_origin = std::env::var("RUSTBOX_CORS_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
@@ -89,9 +110,8 @@ async fn main() {
     let addr = format!("0.0.0.0:{}", cfg.port);
     info!(%addr, "listening");
 
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .expect("failed to bind");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app).await?;
 
-    axum::serve(listener, app).await.expect("server error");
+    Ok(())
 }
