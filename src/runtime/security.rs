@@ -58,6 +58,8 @@ pub mod command_validation {
         "/usr/bin/javac",
         "/usr/lib/jvm/java-17-openjdk-amd64/bin/javac",
         "/usr/lib/jvm/java-21-openjdk-amd64/bin/javac",
+        "/usr/local/bin/qjs",  // QuickJS — JavaScript runtime
+        "/usr/local/bin/bun",  // Bun — TypeScript runtime
         "/usr/bin/node",
         "/usr/bin/go",
         "/usr/lib/go-1.22/bin/go",

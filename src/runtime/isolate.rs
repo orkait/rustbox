@@ -320,11 +320,47 @@ impl Isolate {
             "python" | "py" => self.execute_python_string(code, overrides),
             "cpp" | "c++" | "cxx" => self.compile_and_execute_cpp(code, overrides),
             "java" => self.compile_and_execute_java(code, overrides),
+            "javascript" | "js" => self.execute_js_string(code, overrides),
+            "typescript" | "ts" => self.execute_ts_string(code, overrides),
             _ => Err(IsolateError::Config(format!(
                 "Unsupported language: {}",
                 language
             ))),
         }
+    }
+
+    /// Execute JavaScript via QuickJS
+    fn execute_js_string(
+        &mut self,
+        code: &str,
+        overrides: &ExecutionOverrides,
+    ) -> Result<ExecutionResult> {
+        self.ensure_instance_workdir()?;
+        let source_file = self.instance.config.workdir.join("solution.js");
+        let command = vec![
+            "/usr/local/bin/qjs".to_string(),
+            "--std".to_string(),
+            source_file.to_string_lossy().to_string(),
+        ];
+        fs::write(&source_file, code)?;
+        self.execute_with_overrides(&command, overrides)
+    }
+
+    /// Execute TypeScript via Bun
+    fn execute_ts_string(
+        &mut self,
+        code: &str,
+        overrides: &ExecutionOverrides,
+    ) -> Result<ExecutionResult> {
+        self.ensure_instance_workdir()?;
+        let source_file = self.instance.config.workdir.join("solution.ts");
+        let command = vec![
+            "/usr/local/bin/bun".to_string(),
+            "run".to_string(),
+            source_file.to_string_lossy().to_string(),
+        ];
+        fs::write(&source_file, code)?;
+        self.execute_with_overrides(&command, overrides)
     }
 
     /// Execute Python code directly from string

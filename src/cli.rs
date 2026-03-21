@@ -267,6 +267,8 @@ fn source_language_for_path(path: &std::path::Path) -> Option<&'static str> {
         "py" => Some("python"),
         "cpp" | "cc" | "cxx" => Some("cpp"),
         "java" => Some("java"),
+        "js" => Some("javascript"),
+        "ts" => Some("typescript"),
         _ => None,
     }
 }
@@ -590,6 +592,8 @@ pub fn run(mode: CliMode) -> Result<()> {
             let language = match language.to_lowercase().as_str() {
                 "py" => "python".to_string(),
                 "c" | "cc" | "c++" | "cxx" => "cpp".to_string(),
+                "js" => "javascript".to_string(),
+                "ts" => "typescript".to_string(),
                 other => other.to_string(),
             };
 
@@ -894,6 +898,7 @@ fn check_language_dependencies(verbose: bool, primary_binary: &str) -> Result<()
         ("Python", vec![("python3", "--version")]),
         ("C++", vec![("gcc", "--version"), ("g++", "--version")]),
         ("Java", vec![("java", "-version"), ("javac", "-version")]),
+        ("JavaScript/TypeScript", vec![("bun", "--version")]),
     ];
 
     for (lang_name, commands) in &languages {
@@ -992,6 +997,7 @@ fn check_language_dependencies(verbose: bool, primary_binary: &str) -> Result<()
                 "Python" => println!("  • Python: sudo apt install python3 python3-pip"),
                 "C++" => println!("  • C++: sudo apt install build-essential gcc g++"),
                 "Java" => println!("  • Java: sudo apt install openjdk-17-jdk"),
+                "JavaScript/TypeScript" => println!("  • Bun runtime: curl -fsSL https://bun.sh/install | bash"),
                 _ => {}
             }
         }
