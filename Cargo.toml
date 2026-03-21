@@ -31,6 +31,9 @@ sha2 = "0.10"
 caps = "0.5"
 once_cell = "1.19"
 
+[profile.release]
+strip = "symbols"
+
 [dev-dependencies]
 trybuild = "1.0"
 
