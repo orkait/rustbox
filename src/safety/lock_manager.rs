@@ -408,15 +408,74 @@ impl RustboxLockManager {
         std::path::Path::new(&format!("/proc/{}", pid)).exists()
     }
 
-    /// Force cleanup box resources
+    /// Force cleanup box resources left behind by a dead process. (SEC-7)
+    ///
+    /// Called when a stale lock is detected (owning PID no longer exists).
+    /// Best-effort: individual failures are logged but do not abort cleanup.
     fn force_cleanup_box_resources(&self, box_id: u32) -> LockResult<()> {
         warn!("Force cleaning up resources for box {}", box_id);
-        // In a real implementation, this would cleanup:
-        // - Kill processes in the box
-        // - Unmount filesystems
-        // - Remove cgroups
-        // - Clean up network namespaces
-        // For now, we'll just log it
+        let instance_id = format!("rustbox/{}", box_id);
+
+        // 1. Kill any sandbox-UID processes (UID = 60000 + box_id, per IOI convention)
+        let sandbox_uid = 60000_u32.saturating_add(box_id);
+        if sandbox_uid < 65534 {
+            // SIGKILL all processes owned by the sandbox UID.
+            // SAFETY: kill(-1, SIGKILL) with euid set is dangerous, but we
+            // target a specific UID via /proc scan instead.
+            if let Ok(entries) = std::fs::read_dir("/proc") {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    if let Ok(pid_str) = name.into_string() {
+                        if let Ok(pid) = pid_str.parse::<u32>() {
+                            let status_path = format!("/proc/{}/status", pid);
+                            if let Ok(status) = std::fs::read_to_string(&status_path) {
+                                for line in status.lines() {
+                                    if let Some(uid_str) = line.strip_prefix("Uid:\t") {
+                                        let real_uid: u32 = uid_str
+                                            .split_whitespace()
+                                            .next()
+                                            .and_then(|s| s.parse().ok())
+                                            .unwrap_or(0);
+                                        if real_uid == sandbox_uid {
+                                            warn!("Killing orphaned sandbox process {} (uid {})", pid, sandbox_uid);
+                                            unsafe { libc::kill(pid as i32, libc::SIGKILL); }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Remove cgroup directory (v2: /sys/fs/cgroup/rustbox/{sanitized_id})
+        let sanitized_id = instance_id.replace('/', "_");
+        let cgroup_path = std::path::PathBuf::from("/sys/fs/cgroup/rustbox").join(&sanitized_id);
+        if cgroup_path.exists() {
+            // Must drain pids before rmdir — write all to parent's cgroup.procs
+            let parent_procs = std::path::PathBuf::from("/sys/fs/cgroup/rustbox/cgroup.procs");
+            if let Ok(pids) = std::fs::read_to_string(cgroup_path.join("cgroup.procs")) {
+                for pid in pids.lines() {
+                    let _ = std::fs::write(&parent_procs, pid);
+                }
+            }
+            if let Err(e) = std::fs::remove_dir(&cgroup_path) {
+                warn!("force_cleanup: failed to remove cgroup {}: {}", cgroup_path.display(), e);
+            }
+        }
+
+        // 3. Wipe the box workdir using remove_tree_secure (no symlink follow)
+        let state_root = crate::config::types::IsolateConfig::runtime_root_dir();
+        let box_base = state_root.join(&instance_id);
+        if box_base.exists() {
+            if let Err(e) = crate::safety::safe_cleanup::remove_tree_secure(&box_base) {
+                warn!("force_cleanup: failed to remove box dir {}: {}", box_base.display(), e);
+            }
+        }
+
+        info!("Force cleanup completed for box {}", box_id);
         Ok(())
     }
 

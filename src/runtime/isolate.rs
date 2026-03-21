@@ -381,19 +381,29 @@ impl Isolate {
         result
     }
 
-    /// Execute Python code directly from string
+    /// Execute Python code from string.
+    /// Writes to a file in workdir rather than passing via `-c` so that the
+    /// source code is NOT visible in /proc/PID/cmdline (SEC-1).
     fn execute_python_string(
         &mut self,
         code: &str,
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
+        self.ensure_instance_workdir()?;
+        self.wipe_workdir_contents();
+
+        let source_file = self.instance.config.workdir.join("solution.py");
         let command = vec![
             "/usr/bin/python3".to_string(),
             "-u".to_string(),
-            "-c".to_string(),
-            code.to_string(),
+            source_file.to_string_lossy().to_string(),
         ];
-        self.execute_with_overrides(&command, overrides)
+        fs::write(&source_file, code)?;
+        let result = self.execute_with_overrides(&command, overrides);
+
+        let _ = fs::remove_file(&source_file);
+
+        result
     }
 
     fn build_compile_failure_result(
@@ -960,6 +970,11 @@ impl Isolate {
 
 impl Drop for Isolate {
     fn drop(&mut self) {
+        // Defense-in-depth: wipe any residual user data from workdir even if
+        // the caller forgot to call cleanup() (panic, early return, library
+        // misuse). The execute methods already wipe inline, so this is a
+        // safety net — not the primary cleanup path. (SEC-3)
+        self.wipe_workdir_contents();
         // Lock is automatically released when file descriptor is closed
         self.release_lock();
     }

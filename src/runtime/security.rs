@@ -71,7 +71,11 @@ pub mod command_validation {
         "/usr/bin/cmake",
     ];
 
-    /// Additional safe system commands that are commonly needed
+    /// Additional safe system commands that are commonly needed.
+    ///
+    /// SECURITY: awk and sed are intentionally EXCLUDED — awk supports
+    /// arbitrary code execution via system(), and sed supports `e` for
+    /// command execution. These are unsafe in a sandbox allowlist. (SEC-5)
     static SAFE_SYSTEM_COMMANDS: &[&str] = &[
         "/bin/cat",
         "/usr/bin/cat",
@@ -86,9 +90,6 @@ pub mod command_validation {
         "/usr/bin/uniq",
         "/bin/grep",
         "/usr/bin/grep",
-        "/usr/bin/awk",
-        "/bin/sed",
-        "/usr/bin/sed",
     ];
 
     /// Validate and resolve command path with security checks
