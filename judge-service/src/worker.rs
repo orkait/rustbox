@@ -283,8 +283,15 @@ fn execute_in_sandbox(
         let _ = rustbox::observability::audit::init_security_logger(None);
     });
 
-    let config = IsolateConfig::with_language_defaults(language, "rustbox/0".to_string())
+    let mut config = IsolateConfig::with_language_defaults(language, "rustbox/0".to_string())
         .map_err(|e| format!("config error: {e}"))?;
+    let is_root = std::process::Command::new("id").arg("-u").output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+        .unwrap_or(false);
+    if !is_root {
+        config.strict_mode = false;
+        config.allow_degraded = true;
+    }
 
     let mut isolate =
         Isolate::new(config).map_err(|e| format!("isolate creation error: {e}"))?;

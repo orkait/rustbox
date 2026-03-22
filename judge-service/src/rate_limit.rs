@@ -52,9 +52,88 @@ impl RateLimiter {
         }
     }
 
-    pub fn cleanup_stale(&self) {
+        pub fn cleanup_stale(&self) {
         let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         buckets.retain(|_, b| now.duration_since(b.last_refill).as_secs() < 300);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn ip(last: u8) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::new(10, 0, 0, last))
+    }
+
+    #[test]
+    fn allows_up_to_limit() {
+        let limiter = RateLimiter::new(5);
+        let addr = ip(1);
+        for _ in 0..5 {
+            assert!(limiter.check(addr));
+        }
+    }
+
+    #[test]
+    fn blocks_over_limit() {
+        let limiter = RateLimiter::new(3);
+        let addr = ip(2);
+        assert!(limiter.check(addr));
+        assert!(limiter.check(addr));
+        assert!(limiter.check(addr));
+        assert!(!limiter.check(addr));
+    }
+
+    #[test]
+    fn independent_per_ip() {
+        let limiter = RateLimiter::new(2);
+        let a = ip(3);
+        let b = ip(4);
+        assert!(limiter.check(a));
+        assert!(limiter.check(a));
+        assert!(!limiter.check(a));
+        assert!(limiter.check(b));
+        assert!(limiter.check(b));
+        assert!(!limiter.check(b));
+    }
+
+    #[test]
+    fn refills_after_window() {
+        let limiter = RateLimiter::new(1);
+        let addr = ip(5);
+        assert!(limiter.check(addr));
+        assert!(!limiter.check(addr));
+
+        {
+            let mut buckets = limiter.buckets.lock().unwrap();
+            let bucket = buckets.get_mut(&addr).unwrap();
+            bucket.last_refill = Instant::now() - std::time::Duration::from_secs(61);
+        }
+
+        assert!(limiter.check(addr));
+    }
+
+    #[test]
+    fn cleanup_removes_stale() {
+        let limiter = RateLimiter::new(10);
+        let a = ip(6);
+        let b = ip(7);
+        limiter.check(a);
+        limiter.check(b);
+
+        {
+            let mut buckets = limiter.buckets.lock().unwrap();
+            let bucket = buckets.get_mut(&a).unwrap();
+            bucket.last_refill = Instant::now() - std::time::Duration::from_secs(301);
+        }
+
+        limiter.cleanup_stale();
+
+        let buckets = limiter.buckets.lock().unwrap();
+        assert!(!buckets.contains_key(&a));
+        assert!(buckets.contains_key(&b));
     }
 }
