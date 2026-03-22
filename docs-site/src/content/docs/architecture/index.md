@@ -13,23 +13,6 @@ The result is a 2.8MB binary that provides 8 layers of isolation, evidence-backe
 
 ## Module map
 
-```
-┌─────────────────────────────────────────────┐
-│                   CLI / API                  │
-├─────────────────────────────────────────────┤
-│              runtime/isolate.rs              │  Lifecycle: new → execute → cleanup
-├──────────┬──────────┬───────────────────────┤
-│ verdict/ │ config/  │     observability/     │  Pure logic, no syscalls
-├──────────┴──────────┴───────────────────────┤
-│           core/supervisor + proxy            │  Process management: clone, waitpid
-├─────────────────────────────────────────────┤
-│          exec/preexec (typestate chain)      │  Compile-time ordered setup
-├─────────────────────────────────────────────┤
-│                  kernel/                     │  Thin unsafe wrappers over Linux
-│  namespaces │ cgroups │ seccomp │ mount │ …  │  primitives. All unsafe lives here.
-├─────────────────────────────────────────────┤
-│             safety/ + utils/                 │  Cleanup, UID pool, fd hygiene
-└─────────────────────────────────────────────┘
-```
+![Module map](../../../assets/module-map.svg)
 
 Each layer only talks to the layer directly below it. `verdict/` never touches the kernel. `kernel/` never makes policy decisions. This isn't just good architecture - it's the reason the unsafe audit passes: `verdict/` has zero unsafe blocks because it never needs to touch a syscall.
