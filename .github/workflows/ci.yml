@@ -48,3 +48,75 @@ jobs:
 
       - name: Dependency audit (CVEs, licenses, sources)
         uses: EmbarkStudios/cargo-deny-action@v2
+
+  docker-language-tests:
+    runs-on: ubuntu-latest
+    needs: build-and-core-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: python-only
+            args: "LANG_C_CPP=false LANG_JAVA=false LANG_JAVASCRIPT=false LANG_TYPESCRIPT=false"
+            test_lang: python
+            test_code: "print(42)"
+          - name: c-cpp-only
+            args: "LANG_PYTHON=false LANG_JAVA=false LANG_JAVASCRIPT=false LANG_TYPESCRIPT=false"
+            test_lang: cpp
+            test_code: "#include<iostream>\nint main(){std::cout<<42<<std::endl;}"
+          - name: java-only
+            args: "LANG_PYTHON=false LANG_C_CPP=false LANG_JAVASCRIPT=false LANG_TYPESCRIPT=false"
+            test_lang: java
+            test_code: "public class Main { public static void main(String[] args) { System.out.println(42); } }"
+          - name: js-ts-only
+            args: "LANG_PYTHON=false LANG_C_CPP=false LANG_JAVA=false"
+            test_lang: javascript
+            test_code: "console.log(42)"
+          - name: all-default
+            args: ""
+            test_lang: python
+            test_code: "print(42)"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image (${{ matrix.name }})
+        run: |
+          BUILD_ARGS=""
+          for arg in ${{ matrix.args }}; do
+            BUILD_ARGS="$BUILD_ARGS --build-arg $arg"
+          done
+          docker build $BUILD_ARGS -t rustbox:${{ matrix.name }} .
+
+      - name: Start container
+        run: |
+          docker run -d --name test-${{ matrix.name }} -p 4096:4096 \
+            --cap-add SYS_ADMIN --cap-add SETUID --cap-add SETGID \
+            --cap-add NET_ADMIN --cap-add MKNOD --cap-add DAC_OVERRIDE \
+            --security-opt seccomp=unconfined \
+            --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            rustbox:${{ matrix.name }}
+          sleep 3
+
+      - name: Health check
+        run: |
+          curl -sf http://localhost:4096/api/health | python3 -m json.tool
+          curl -sf http://localhost:4096/api/health/ready | python3 -m json.tool
+
+      - name: Languages endpoint
+        run: curl -sf http://localhost:4096/api/languages
+
+      - name: Submit test (${{ matrix.test_lang }})
+        run: |
+          RESULT=$(curl -sf -X POST "http://localhost:4096/api/submit?wait=true" \
+            -H "Content-Type: application/json" \
+            -d "{\"language\": \"${{ matrix.test_lang }}\", \"code\": \"${{ matrix.test_code }}\"}")
+          echo "$RESULT" | python3 -m json.tool
+          echo "$RESULT" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['verdict']=='AC', f'expected AC got {d}'"
+
+      - name: Image size
+        run: docker images rustbox:${{ matrix.name }} --format '{{.Size}}'
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f test-${{ matrix.name }} 2>/dev/null || true
