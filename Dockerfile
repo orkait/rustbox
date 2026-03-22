@@ -8,7 +8,6 @@ ARG LANG_JAVASCRIPT=true
 ARG LANG_TYPESCRIPT=true
 ARG LANG_GO=false
 ARG LANG_RUST=false
-ARG LANG_ZIG=false
 
 # ============================================================================
 # Stage 1: Rust builder
@@ -48,8 +47,6 @@ ARG LANG_JAVASCRIPT
 ARG LANG_TYPESCRIPT
 ARG LANG_GO
 ARG LANG_RUST
-ARG LANG_ZIG
-ARG ZIG_VERSION=0.13.0
 
 # All installs in ONE RUN = one layer = no wasted space from conditional copies
 RUN apt-get update \
@@ -58,6 +55,8 @@ RUN apt-get update \
     # C / C++
     && if [ "$LANG_C_CPP" = "true" ]; then \
          apt-get install -y --no-install-recommends g++; \
+       elif [ "$LANG_RUST" = "true" ]; then \
+         apt-get install -y --no-install-recommends gcc libc6-dev; \
        fi \
     #
     # Python
@@ -107,13 +106,6 @@ RUN apt-get update \
          && rm -rf /usr/local/rust/lib/rustlib/src /usr/local/rust/share \
          && ln -sf /usr/local/rust/bin/rustc /usr/local/bin/rustc \
          && rm -rf /root/.cargo /root/.rustup; \
-       fi \
-    #
-    # Zig (download official tarball)
-    && if [ "$LANG_ZIG" = "true" ]; then \
-         curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
-         | tar -xJ -C /usr/local \
-         && ln -sf /usr/local/zig-linux-x86_64-${ZIG_VERSION}/zig /usr/local/bin/zig; \
        fi \
     #
     # Cleanup

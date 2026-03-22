@@ -187,7 +187,6 @@ fn detect_installed_languages() -> Vec<String> {
         ("typescript", &["/usr/local/bin/bun"]),
         ("go", &["/usr/local/go/bin/go"]),
         ("rust", &["/usr/local/bin/rustc"]),
-        ("zig", &["/usr/local/bin/zig"]),
     ];
     checks
         .iter()

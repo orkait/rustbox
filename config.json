@@ -4,7 +4,11 @@
 		"run_dir": "/var/run/rustbox",
 		"user": "sandbox",
 		"group": "sandbox",
-		"preserve_env": ["PATH", "HOME", "USER"]
+		"preserve_env": [
+			"PATH",
+			"HOME",
+			"USER"
+		]
 	},
 	"security": {
 		"drop_capabilities": true,
@@ -30,14 +34,19 @@
 			"filesystem": {
 				"max_file_size_kb": 512,
 				"max_open_files": 32,
-				"additional_read_only_paths": ["/usr/lib/python3*", "/usr/local/lib/python3*"],
-				"required_binaries": ["/usr/bin/python3"]
+				"additional_read_only_paths": [
+					"/usr/lib/python3*",
+					"/usr/local/lib/python3*"
+				],
+				"required_binaries": [
+					"/usr/bin/python3"
+				]
 			},
-				"environment": {
-					"PYTHONPATH": "/usr/lib/python3.11:/usr/local/lib/python3.11/dist-packages",
-					"PYTHONDONTWRITEBYTECODE": "1",
-					"PYTHONUNBUFFERED": "1"
-				},
+			"environment": {
+				"PYTHONPATH": "/usr/lib/python3.11:/usr/local/lib/python3.11/dist-packages",
+				"PYTHONDONTWRITEBYTECODE": "1",
+				"PYTHONUNBUFFERED": "1"
+			},
 			"compilation": {
 				"enabled": false,
 				"compiler": "",
@@ -63,18 +72,28 @@
 			"filesystem": {
 				"max_file_size_kb": 2048,
 				"max_open_files": 128,
-				"additional_read_only_paths": ["/usr/lib/jvm", "/usr/share/java"],
-				"required_binaries": ["/usr/bin/java", "/usr/bin/javac"]
+				"additional_read_only_paths": [
+					"/usr/lib/jvm",
+					"/usr/share/java"
+				],
+				"required_binaries": [
+					"/usr/bin/java",
+					"/usr/bin/javac"
+				]
 			},
-				"environment": {
-					"JAVA_HOME": "/usr/lib/jvm/default-java",
-					"CLASSPATH": ".",
-					"JAVA_TOOL_OPTIONS": "-Xmx256m -Xms64m -XX:+UseSerialGC"
-				},
+			"environment": {
+				"JAVA_HOME": "/usr/lib/jvm/default-java",
+				"CLASSPATH": ".",
+				"JAVA_TOOL_OPTIONS": "-Xmx256m -Xms64m -XX:+UseSerialGC"
+			},
 			"compilation": {
 				"enabled": true,
 				"compiler": "javac -d {output} {source}",
-				"compiler_args": ["-d", "{output}", "{source}"],
+				"compiler_args": [
+					"-d",
+					"{output}",
+					"{source}"
+				],
 				"max_compilation_time": 10,
 				"max_compilation_memory_mb": 256
 			}
@@ -82,7 +101,7 @@
 		"javascript": {
 			"memory": {
 				"limit_mb": 512,
-				"limit_kb": 262144
+				"limit_kb": 524288
 			},
 			"time": {
 				"cpu_time_seconds": 8,
@@ -96,7 +115,9 @@
 				"max_file_size_kb": 512,
 				"max_open_files": 64,
 				"additional_read_only_paths": [],
-				"required_binaries": ["/usr/local/bin/bun"]
+				"required_binaries": [
+					"/usr/local/bin/bun"
+				]
 			},
 			"environment": {},
 			"compilation": {
@@ -123,8 +144,13 @@
 			"filesystem": {
 				"max_file_size_kb": 512,
 				"max_open_files": 128,
-				"additional_read_only_paths": ["/usr/local/lib/bun", "/usr/local/bin/bun"],
-				"required_binaries": ["/usr/local/bin/bun"]
+				"additional_read_only_paths": [
+					"/usr/local/lib/bun",
+					"/usr/local/bin/bun"
+				],
+				"required_binaries": [
+					"/usr/local/bin/bun"
+				]
 			},
 			"environment": {},
 			"compilation": {
@@ -138,7 +164,7 @@
 		"cpp": {
 			"memory": {
 				"limit_mb": 512,
-				"limit_kb": 262144
+				"limit_kb": 524288
 			},
 			"time": {
 				"cpu_time_seconds": 8,
@@ -152,21 +178,112 @@
 			"filesystem": {
 				"max_file_size_kb": 1024,
 				"max_open_files": 64,
-				"additional_read_only_paths": ["/usr/include", "/usr/lib/gcc"],
-				"required_binaries": ["/usr/bin/gcc", "/usr/bin/g++"],
+				"additional_read_only_paths": [
+					"/usr/include",
+					"/usr/lib/gcc"
+				],
+				"required_binaries": [
+					"/usr/bin/gcc",
+					"/usr/bin/g++"
+				],
 				"compilation_output_limit_kb": 4096
 			},
-				"environment": {
-					"PATH": "/usr/bin:/bin",
-					"CFLAGS": "-O2 -std=c++17",
+			"environment": {
+				"PATH": "/usr/bin:/bin",
+				"CFLAGS": "-O2 -std=c++17",
 				"CXXFLAGS": "-O2 -std=c++17"
 			},
 			"compilation": {
 				"enabled": true,
 				"compiler": "g++",
-				"compiler_args": ["-O2", "-std=c++17", "-o", "{output}", "{source}"],
+				"compiler_args": [
+					"-O2",
+					"-std=c++17",
+					"-o",
+					"{output}",
+					"{source}"
+				],
 				"max_compilation_time": 4,
 				"max_compilation_memory_mb": 256
+			}
+		},
+		"go": {
+			"memory": {
+				"limit_mb": 256,
+				"limit_kb": 262144
+			},
+			"time": {
+				"cpu_time_seconds": 8,
+				"wall_time_seconds": 10
+			},
+			"processes": {
+				"max_processes": 1024,
+				"max_forks": 0
+			},
+			"filesystem": {
+				"max_file_size_kb": 1024,
+				"max_open_files": 64,
+				"additional_read_only_paths": [
+					"/usr/local/go"
+				],
+				"required_binaries": [
+					"/usr/local/go/bin/go"
+				]
+			},
+			"environment": {
+				"CGO_ENABLED": "0",
+				"GOCACHE": "/tmp/go-cache",
+				"GOPATH": "/tmp/gopath",
+				"HOME": "/tmp"
+			},
+			"compilation": {
+				"enabled": true,
+				"compiler": "go",
+				"compiler_args": [
+					"build",
+					"-o",
+					"{output}",
+					"{source}"
+				],
+				"max_compilation_time": 30,
+				"max_compilation_memory_mb": 512
+			}
+		},
+		"rust": {
+			"memory": {
+				"limit_mb": 256,
+				"limit_kb": 262144
+			},
+			"time": {
+				"cpu_time_seconds": 8,
+				"wall_time_seconds": 15
+			},
+			"processes": {
+				"max_processes": 64,
+				"max_forks": 0
+			},
+			"filesystem": {
+				"max_file_size_kb": 1024,
+				"max_open_files": 64,
+				"additional_read_only_paths": [
+					"/usr/local/rust"
+				],
+				"required_binaries": [
+					"/usr/local/bin/rustc"
+				]
+			},
+			"environment": {},
+			"compilation": {
+				"enabled": true,
+				"compiler": "rustc",
+				"compiler_args": [
+					"-O",
+					"-o",
+					"{output}",
+					"{source}"
+				],
+				"max_compilation_time": 30,
+				"max_compilation_memory_mb": 512
 			}
 		}
 	}

@@ -220,7 +220,6 @@ impl Isolate {
             "cpp" | "c++" => self.compile_and_execute_cpp(code, overrides),
             "go" => self.compile_and_execute_go(code, overrides),
             "rust" | "rs" => self.compile_and_execute_rust(code, overrides),
-            "zig" => self.compile_and_execute_zig(code, overrides),
             "java" => self.compile_and_execute_java(code, overrides),
             _ => Err(IsolateError::Config(format!("Unsupported language: {}", language))),
         }
@@ -319,7 +318,7 @@ impl Isolate {
         let src = self.config.workdir.join("solution.c");
         self.compile_and_execute(
             code, src,
-            vec!["/usr/bin/gcc".into(), "-o".into(), "solution".into(), "solution.c".into(), "-std=c17".into(), "-O2".into(), "-lm".into()],
+            vec!["/usr/bin/gcc".into(), "-o".into(), "solution".into(), "solution.c".into(), "-std=c17".into(), "-O2".into(), "-lm".into(), "-DONLINE_JUDGE".into()],
             vec!["./solution".into()],
             overrides, "Compilation Error", "Compilation failed",
             |c, o, v| Self::configure_compile_phase(c, o, v, 256, 120),
@@ -335,10 +334,13 @@ impl Isolate {
             vec!["./solution".into()],
             overrides, "Compilation Error", "Compilation failed",
             |c, o, v| {
-                Self::configure_compile_phase(c, o, v, 512, 120);
+                Self::configure_compile_phase(c, o, v, 1024, 1024);
+                c.fd_limit = Some(1024);
+                c.file_size_limit = Some(256 * 1024 * 1024);
                 c.environment.push(("CGO_ENABLED".into(), "0".into()));
                 c.environment.push(("GOCACHE".into(), "/tmp/go-cache".into()));
                 c.environment.push(("GOPATH".into(), "/tmp/gopath".into()));
+                c.environment.push(("HOME".into(), "/tmp".into()));
             },
         )
     }
@@ -348,22 +350,14 @@ impl Isolate {
         let src = self.config.workdir.join("solution.rs");
         self.compile_and_execute(
             code, src,
-            vec!["/usr/local/bin/rustc".into(), "-O".into(), "-o".into(), "solution".into(), "solution.rs".into()],
+            vec!["/usr/local/bin/rustc".into(), "-O".into(), "--edition".into(), "2021".into(), "-o".into(), "solution".into(), "solution.rs".into()],
             vec!["./solution".into()],
             overrides, "Compilation Error", "Compilation failed",
-            |c, o, v| Self::configure_compile_phase(c, o, v, 512, 10),
-        )
-    }
-
-    fn compile_and_execute_zig(&mut self, code: &str, overrides: &ExecutionOverrides) -> Result<ExecutionResult> {
-        self.ensure_workdir()?;
-        let src = self.config.workdir.join("solution.zig");
-        self.compile_and_execute(
-            code, src,
-            vec!["/usr/local/bin/zig".into(), "build-exe".into(), "solution.zig".into(), "-OReleaseFast".into()],
-            vec!["./solution".into()],
-            overrides, "Compilation Error", "Compilation failed",
-            |c, o, v| Self::configure_compile_phase(c, o, v, 512, 10),
+            |c, o, v| {
+                Self::configure_compile_phase(c, o, v, 1024, 64);
+                c.fd_limit = Some(512);
+                c.file_size_limit = Some(256 * 1024 * 1024);
+            },
         )
     }
 
@@ -372,7 +366,7 @@ impl Isolate {
         let src = self.config.workdir.join("solution.cpp");
         self.compile_and_execute(
             code, src,
-            vec!["/usr/bin/g++".into(), "-o".into(), "solution".into(), "solution.cpp".into(), "-std=c++17".into(), "-O2".into()],
+            vec!["/usr/bin/g++".into(), "-o".into(), "solution".into(), "solution.cpp".into(), "-std=c++17".into(), "-O2".into(), "-DONLINE_JUDGE".into()],
             vec!["./solution".into()],
             overrides, "Compilation Error", "Compilation failed",
             |c, o, v| Self::configure_compile_phase(c, o, v, 256, 120),
@@ -386,7 +380,7 @@ impl Isolate {
         self.compile_and_execute(
             code, src,
             vec!["javac".into(), "-proc:none".into(), "-cp".into(), ".".into(), format!("{}.java", class)],
-            vec!["java".into(), "-cp".into(), ".".into(), class],
+            vec!["java".into(), "-XX:+ExitOnOutOfMemoryError".into(), "-cp".into(), ".".into(), class],
             overrides, "Java Compilation Error", "Java compilation failed",
             |c, o, v| Self::configure_compile_phase(c, o, v, 512, 1024),
         )

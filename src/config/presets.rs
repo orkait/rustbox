@@ -86,7 +86,7 @@ const ENVELOPES: &[EnvelopeDef] = &[
     EnvelopeDef {
         id: "python3.11-v1", name: "Python 3.11", language: "python",
         compiler: None,
-        runtime_exe: "/usr/bin/python3", runtime_args: &["-B", "-S"],
+        runtime_exe: "/usr/bin/python3", runtime_args: &["-u", "-B"],
         memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 100,
     },
     EnvelopeDef {
@@ -103,13 +103,7 @@ const ENVELOPES: &[EnvelopeDef] = &[
     },
     EnvelopeDef {
         id: "rust-v1", name: "Rust", language: "rust",
-        compiler: Some(("/usr/local/bin/rustc", &["-O", "-o", "solution"], "solution", 30)),
-        runtime_exe: "./solution", runtime_args: &[],
-        memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 50,
-    },
-    EnvelopeDef {
-        id: "zig-v1", name: "Zig", language: "zig",
-        compiler: Some(("/usr/local/bin/zig", &["build-exe", "-OReleaseFast"], "solution", 30)),
+        compiler: Some(("/usr/local/bin/rustc", &["-O", "--edition", "2021", "-o", "solution"], "solution", 30)),
         runtime_exe: "./solution", runtime_args: &[],
         memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 50,
     },
