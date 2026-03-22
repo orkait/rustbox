@@ -34,14 +34,20 @@ jobs:
       - name: Compile-fail typestate invariants
         run: cargo test --test trybuild -- --nocapture
 
-  unsafe-audit:
+  supply-chain-audit:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Unsafe boundary audit
         run: bash scripts/unsafe-audit.sh
+
+      - name: Dependency audit (CVEs, licenses, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
 
   fuzz-targets:
     runs-on: ubuntu-latest
