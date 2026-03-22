@@ -565,15 +565,14 @@ impl FilesystemSecurity {
             fs::set_permissions(&dir_path, perms)?;
         }
 
-        self.create_essential_devices(chroot_path)?;
+        self.create_essential_devices(&chroot_path.join("dev"))?;
         Ok(())
     }
 
     #[cfg(unix)]
-    fn create_essential_devices(&self, chroot_path: &Path) -> Result<()> {
-        let dev_dir = chroot_path.join("dev");
+    fn create_essential_devices(&self, dev_dir: &Path) -> Result<()> {
         for device in DeviceNode::ESSENTIAL_DEVICES {
-            self.create_device_node(&dev_dir, device)?;
+            self.create_device_node(dev_dir, device)?;
         }
         Ok(())
     }
