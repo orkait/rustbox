@@ -340,6 +340,8 @@ impl Isolate {
                 c.environment.push(("CGO_ENABLED".into(), "0".into()));
                 c.environment.push(("GOCACHE".into(), "/tmp/go-cache".into()));
                 c.environment.push(("GOPATH".into(), "/tmp/gopath".into()));
+                c.environment.push(("GOTMPDIR".into(), "/tmp".into()));
+                c.environment.push(("GONOSUMCHECK".into(), "*".into()));
                 c.environment.push(("HOME".into(), "/tmp".into()));
             },
         )
@@ -380,7 +382,7 @@ impl Isolate {
         self.compile_and_execute(
             code, src,
             vec!["javac".into(), "-proc:none".into(), "-cp".into(), ".".into(), format!("{}.java", class)],
-            vec!["java".into(), "-XX:+ExitOnOutOfMemoryError".into(), "-cp".into(), ".".into(), class],
+            vec!["java".into(), "-XX:+UseSerialGC".into(), "-XX:+ExitOnOutOfMemoryError".into(), "-XX:TieredStopAtLevel=1".into(), "-XX:MaxMetaspaceSize=64m".into(), "-Xss512k".into(), "-Dfile.encoding=UTF-8".into(), "-cp".into(), ".".into(), class],
             overrides, "Java Compilation Error", "Java compilation failed",
             |c, o, v| Self::configure_compile_phase(c, o, v, 512, 1024),
         )

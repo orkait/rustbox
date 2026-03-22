@@ -92,7 +92,9 @@ RUN apt-get update \
     # Go (download official tarball)
     && if [ "$LANG_GO" = "true" ]; then \
          curl -fsSL "https://go.dev/dl/go1.22.10.linux-amd64.tar.gz" \
-         | tar -xz -C /usr/local; \
+         | tar -xz -C /usr/local \
+         && mkdir -p /usr/local/go-cache \
+         && GOCACHE=/usr/local/go-cache CGO_ENABLED=0 /usr/local/go/bin/go build -a std 2>/dev/null || true; \
        fi \
     #
     # Rust (install rustup, extract sysroot, delete rustup)

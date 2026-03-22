@@ -278,6 +278,8 @@
 				"compiler": "rustc",
 				"compiler_args": [
 					"-O",
+					"--edition",
+					"2021",
 					"-o",
 					"{output}",
 					"{source}"
