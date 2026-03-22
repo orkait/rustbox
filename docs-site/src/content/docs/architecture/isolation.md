@@ -5,7 +5,7 @@ description: The 8-layer security model and what each layer defends against
 
 Each layer defends against a different class of attack. No single layer is sufficient. Together, they make sandbox escape require simultaneously defeating all eight.
 
-![8-layer isolation model](../../../assets/isolation-layers.svg)
+<img src="/isolation-layers.svg" alt="8-layer isolation model" style="max-width: 420px; display: block; margin: 1rem auto;" />
 
 | Layer | Kernel primitive | What it prevents |
 |-------|-----------------|-----------------|

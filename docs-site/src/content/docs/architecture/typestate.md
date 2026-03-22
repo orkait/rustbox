@@ -15,7 +15,7 @@ Every other sandbox enforces this through documentation, code review, or runtime
 
 Rust's type system enforces the order at compile time:
 
-![Typestate chain](../../../assets/typestate.svg)
+<img src="/typestate.svg" alt="Typestate chain" style="max-width: 100%; display: block; margin: 1rem auto;" />
 
 Only `Sandbox<ExecReady>` has an `exec_payload()` method. You literally cannot call it on any other state.
 
