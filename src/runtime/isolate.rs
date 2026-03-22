@@ -330,7 +330,7 @@ impl Isolate {
         let src = self.config.workdir.join("solution.go");
         self.compile_and_execute(
             code, src,
-            vec!["/usr/local/go/bin/go".into(), "build".into(), "-trimpath".into(), "-o".into(), "solution".into(), "solution.go".into()],
+            vec!["/usr/local/go/bin/go".into(), "build".into(), "-trimpath".into(), "-ldflags".into(), "-s -w".into(), "-o".into(), "solution".into(), "solution.go".into()],
             vec!["./solution".into()],
             overrides, "Compilation Error", "Compilation failed",
             |c, o, v| {
@@ -382,7 +382,7 @@ impl Isolate {
         let src = self.config.workdir.join(format!("{}.java", class));
         self.compile_and_execute(
             code, src,
-            vec!["javac".into(), "-proc:none".into(), "-cp".into(), ".".into(), format!("{}.java", class)],
+            vec!["javac".into(), "-encoding".into(), "UTF-8".into(), "-proc:none".into(), "-cp".into(), ".".into(), format!("{}.java", class)],
             vec!["java".into(), "-Xmx256m".into(), "-Xms32m".into(), "-Xss64m".into(), "-XX:+UseSerialGC".into(), "-XX:+ExitOnOutOfMemoryError".into(), "-XX:TieredStopAtLevel=1".into(), "-XX:MaxMetaspaceSize=64m".into(), "-Dfile.encoding=UTF-8".into(), "-cp".into(), ".".into(), class],
             overrides, "Java Compilation Error", "Java compilation failed",
             |c, o, v| Self::configure_compile_phase(c, o, v, 512, 1024),
