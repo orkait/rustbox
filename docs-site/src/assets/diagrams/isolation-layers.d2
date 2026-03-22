@@ -1,85 +1,85 @@
 direction: down
 
-title: |md
-  ## 8-Layer Isolation
-| {
-  near: top-center
-  style.font-size: 20
-}
-
 host: {
   label: "Host System"
-  style.fill: "#1e1e2e"
-  style.stroke: "#585b70"
-  style.font-color: "#cdd6f4"
+  style.fill: "#e6e9ef"
+  style.stroke: "#9ca0b0"
+  style.font-color: "#4c4f69"
   style.border-radius: 16
+  style.font-size: 14
 
   l8: {
-    label: "8. NO_NEW_PRIVS"
-    style.fill: "#313244"
-    style.stroke: "#6c7086"
-    style.font-color: "#cdd6f4"
-    style.border-radius: 12
+    label: "8. NO_NEW_PRIVS  -  can't regain privileges"
+    style.fill: "#dce0e8"
+    style.stroke: "#9ca0b0"
+    style.font-color: "#4c4f69"
+    style.border-radius: 14
+    style.font-size: 12
 
     l7: {
-      label: "7. Credential Drop (UID 60000)"
-      style.fill: "#45475a"
-      style.stroke: "#7f849c"
-      style.font-color: "#cdd6f4"
-      style.border-radius: 12
+      label: "7. Credential Drop  -  UID 60000, not root"
+      style.fill: "#ccd0da"
+      style.stroke: "#8c8fa1"
+      style.font-color: "#4c4f69"
+      style.border-radius: 14
+      style.font-size: 12
 
       l6: {
-        label: "6. Capabilities Zeroed"
-        style.fill: "#585b70"
-        style.stroke: "#9399b2"
-        style.font-color: "#cdd6f4"
-        style.border-radius: 12
+        label: "6. Capabilities Zeroed  -  no privilege escalation"
+        style.fill: "#bcc0cc"
+        style.stroke: "#7c7f93"
+        style.font-color: "#4c4f69"
+        style.border-radius: 14
+        style.font-size: 12
 
         l5: {
-          label: "5. Seccomp-BPF (18 syscalls blocked)"
-          style.fill: "#6c7086"
-          style.stroke: "#a6adc8"
-          style.font-color: "#cdd6f4"
-          style.border-radius: 12
+          label: "5. Seccomp-BPF  -  18 dangerous syscalls blocked"
+          style.fill: "#acb0be"
+          style.stroke: "#6c6f85"
+          style.font-color: "#4c4f69"
+          style.border-radius: 14
+          style.font-size: 12
 
           l4: {
-            label: "4. Cgroups (memory + CPU + PIDs)"
-            style.fill: "#7f849c"
-            style.stroke: "#bac2de"
-            style.font-color: "#1e1e2e"
-            style.border-radius: 12
+            label: "4. Cgroups  -  memory + CPU + process limits"
+            style.fill: "#9ca0b0"
+            style.stroke: "#5c5f77"
+            style.font-color: "#ffffff"
+            style.border-radius: 14
+            style.font-size: 12
 
             l3: {
-              label: "3. Network Namespace (no sockets)"
-              style.fill: "#9399b2"
-              style.stroke: "#cba6f7"
-              style.font-color: "#1e1e2e"
-              style.border-radius: 12
+              label: "3. Network Namespace  -  no sockets, no DNS"
+              style.fill: "#8c8fa1"
+              style.stroke: "#4c4f69"
+              style.font-color: "#ffffff"
+              style.border-radius: 14
+              style.font-size: 12
 
               l2: {
-                label: "2. Mount Namespace + Chroot"
-                style.fill: "#b4befe"
-                style.stroke: "#cba6f7"
-                style.font-color: "#1e1e2e"
-                style.border-radius: 12
+                label: "2. Mount Namespace + Chroot  -  isolated filesystem"
+                style.fill: "#7c7f93"
+                style.stroke: "#4c4f69"
+                style.font-color: "#ffffff"
+                style.border-radius: 14
+                style.font-size: 12
 
                 l1: {
-                  label: "1. PID Namespace"
-                  style.fill: "#cba6f7"
-                  style.stroke: "#fab387"
-                  style.font-color: "#1e1e2e"
+                  label: "1. PID Namespace  -  can't see host processes"
+                  style.fill: "#6c6f85"
+                  style.stroke: "#4c4f69"
+                  style.font-color: "#ffffff"
                   style.border-radius: 12
+                  style.font-size: 12
 
                   payload: {
-                    label: |md
-                      **User Code**
-                      _print("hello")_
-                    |
-                    style.fill: "#fab387"
-                    style.stroke: "#f38ba8"
-                    style.font-color: "#1e1e2e"
+                    label: "User Code"
+                    style.fill: "#fe640b"
+                    style.stroke: "#fe640b"
+                    style.font-color: "#ffffff"
                     style.border-radius: 8
                     style.font-size: 14
+                    style.bold: true
                   }
                 }
               }
