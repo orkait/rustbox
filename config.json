@@ -20,8 +20,8 @@
 	"languages": {
 		"python": {
 			"memory": {
-				"limit_mb": 128,
-				"limit_kb": 131072
+				"limit_mb": 256,
+				"limit_kb": 262144
 			},
 			"time": {
 				"cpu_time_seconds": 4,
@@ -84,7 +84,7 @@
 			"environment": {
 				"JAVA_HOME": "/usr/lib/jvm/default-java",
 				"CLASSPATH": ".",
-				"JAVA_TOOL_OPTIONS": "-Xmx256m -Xms64m -XX:+UseSerialGC"
+				"JAVA_TOOL_OPTIONS": "-Xmx256m -Xms32m"
 			},
 			"compilation": {
 				"enabled": true,
@@ -286,6 +286,48 @@
 				],
 				"max_compilation_time": 30,
 				"max_compilation_memory_mb": 512
+			}
+		},
+		"c": {
+			"memory": {
+				"limit_mb": 256,
+				"limit_kb": 262144
+			},
+			"time": {
+				"cpu_time_seconds": 8,
+				"wall_time_seconds": 10
+			},
+			"processes": {
+				"max_processes": 8,
+				"max_forks": 0
+			},
+			"filesystem": {
+				"max_file_size_kb": 1024,
+				"max_open_files": 32,
+				"additional_read_only_paths": [
+					"/usr/include",
+					"/usr/lib/gcc"
+				],
+				"required_binaries": [
+					"/usr/bin/gcc"
+				]
+			},
+			"environment": {},
+			"compilation": {
+				"enabled": true,
+				"compiler": "gcc",
+				"compiler_args": [
+					"-pipe",
+					"-std=c17",
+					"-O2",
+					"-lm",
+					"-DONLINE_JUDGE",
+					"-o",
+					"{output}",
+					"{source}"
+				],
+				"max_compilation_time": 15,
+				"max_compilation_memory_mb": 256
 			}
 		}
 	}

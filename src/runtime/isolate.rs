@@ -318,7 +318,7 @@ impl Isolate {
         let src = self.config.workdir.join("solution.c");
         self.compile_and_execute(
             code, src,
-            vec!["/usr/bin/gcc".into(), "-o".into(), "solution".into(), "solution.c".into(), "-std=c17".into(), "-O2".into(), "-lm".into(), "-DONLINE_JUDGE".into()],
+            vec!["/usr/bin/gcc".into(), "-pipe".into(), "-o".into(), "solution".into(), "solution.c".into(), "-std=c17".into(), "-O2".into(), "-lm".into(), "-DONLINE_JUDGE".into()],
             vec!["./solution".into()],
             overrides, "Compilation Error", "Compilation failed",
             |c, o, v| Self::configure_compile_phase(c, o, v, 256, 120),
@@ -330,7 +330,7 @@ impl Isolate {
         let src = self.config.workdir.join("solution.go");
         self.compile_and_execute(
             code, src,
-            vec!["/usr/local/go/bin/go".into(), "build".into(), "-o".into(), "solution".into(), "solution.go".into()],
+            vec!["/usr/local/go/bin/go".into(), "build".into(), "-trimpath".into(), "-o".into(), "solution".into(), "solution.go".into()],
             vec!["./solution".into()],
             overrides, "Compilation Error", "Compilation failed",
             |c, o, v| {
@@ -342,6 +342,7 @@ impl Isolate {
                 c.environment.push(("GOPATH".into(), "/tmp/gopath".into()));
                 c.environment.push(("GOTMPDIR".into(), "/tmp".into()));
                 c.environment.push(("GONOSUMCHECK".into(), "*".into()));
+                c.environment.push(("GOFLAGS".into(), "-buildvcs=false".into()));
                 c.environment.push(("HOME".into(), "/tmp".into()));
             },
         )
@@ -352,7 +353,7 @@ impl Isolate {
         let src = self.config.workdir.join("solution.rs");
         self.compile_and_execute(
             code, src,
-            vec!["/usr/local/bin/rustc".into(), "-O".into(), "--edition".into(), "2021".into(), "-o".into(), "solution".into(), "solution.rs".into()],
+            vec!["/usr/local/bin/rustc".into(), "-O".into(), "--edition".into(), "2021".into(), "-C".into(), "codegen-units=1".into(), "-o".into(), "solution".into(), "solution.rs".into()],
             vec!["./solution".into()],
             overrides, "Compilation Error", "Compilation failed",
             |c, o, v| {
@@ -368,7 +369,7 @@ impl Isolate {
         let src = self.config.workdir.join("solution.cpp");
         self.compile_and_execute(
             code, src,
-            vec!["/usr/bin/g++".into(), "-o".into(), "solution".into(), "solution.cpp".into(), "-std=c++17".into(), "-O2".into(), "-DONLINE_JUDGE".into()],
+            vec!["/usr/bin/g++".into(), "-pipe".into(), "-o".into(), "solution".into(), "solution.cpp".into(), "-std=c++17".into(), "-O2".into(), "-DONLINE_JUDGE".into()],
             vec!["./solution".into()],
             overrides, "Compilation Error", "Compilation failed",
             |c, o, v| Self::configure_compile_phase(c, o, v, 256, 120),
@@ -382,7 +383,7 @@ impl Isolate {
         self.compile_and_execute(
             code, src,
             vec!["javac".into(), "-proc:none".into(), "-cp".into(), ".".into(), format!("{}.java", class)],
-            vec!["java".into(), "-XX:+UseSerialGC".into(), "-XX:+ExitOnOutOfMemoryError".into(), "-XX:TieredStopAtLevel=1".into(), "-XX:MaxMetaspaceSize=64m".into(), "-Xss512k".into(), "-Dfile.encoding=UTF-8".into(), "-cp".into(), ".".into(), class],
+            vec!["java".into(), "-Xmx256m".into(), "-Xms32m".into(), "-Xss64m".into(), "-XX:+UseSerialGC".into(), "-XX:+ExitOnOutOfMemoryError".into(), "-XX:TieredStopAtLevel=1".into(), "-XX:MaxMetaspaceSize=64m".into(), "-Dfile.encoding=UTF-8".into(), "-cp".into(), ".".into(), class],
             overrides, "Java Compilation Error", "Java compilation failed",
             |c, o, v| Self::configure_compile_phase(c, o, v, 512, 1024),
         )

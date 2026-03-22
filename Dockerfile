@@ -54,7 +54,10 @@ RUN apt-get update \
     #
     # C / C++
     && if [ "$LANG_C_CPP" = "true" ]; then \
-         apt-get install -y --no-install-recommends g++; \
+         apt-get install -y --no-install-recommends g++ \
+         && g++ -std=c++17 -O2 -x c++-header \
+              $(find /usr/include -name 'stdc++.h' -path '*/bits/*' 2>/dev/null | head -1) \
+              2>/dev/null || true; \
        elif [ "$LANG_RUST" = "true" ]; then \
          apt-get install -y --no-install-recommends gcc libc6-dev; \
        fi \
