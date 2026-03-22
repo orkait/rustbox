@@ -5,7 +5,7 @@ description: The journey of a code submission from arrival to verdict
 
 ## Overview
 
-<img src="/lifecycle.svg" alt="Execution lifecycle flow" style="max-width: 320px; display: block; margin: 1rem auto;" />
+<img src="/lifecycle.svg" alt="Execution lifecycle flow" style="max-height: 500px; width: auto; display: block; margin: 1rem auto;" />
 
 ## Phase 1: Setup
 
