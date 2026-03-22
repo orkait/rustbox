@@ -17,7 +17,6 @@ export default defineConfig({
 				{
 					label: 'Getting Started',
 					items: [
-						{ label: 'Installation & Quickstart', slug: 'getting-started' },
 						{ label: 'Configuration', slug: 'getting-started/configuration' },
 					],
 				},
