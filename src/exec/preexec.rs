@@ -141,6 +141,7 @@ pub struct FreshChild;
 pub struct NamespacesReady;
 pub struct MountsPrivate;
 pub struct CgroupAttached;
+pub struct RootTransitioned;
 pub struct CredsDropped;
 pub struct PrivsLocked;
 pub struct ExecReady;
@@ -323,7 +324,7 @@ impl Sandbox<CgroupAttached> {
     pub fn setup_mounts_and_root(
         self,
         profile: &ExecutionProfile,
-    ) -> Result<Sandbox<CgroupAttached>> {
+    ) -> Result<Sandbox<RootTransitioned>> {
         let mut fs_security = crate::kernel::mount::FilesystemSecurity::new(
             profile.chroot_dir.clone(),
             profile.workdir.clone(),
@@ -353,13 +354,21 @@ impl Sandbox<CgroupAttached> {
             fs_warn_parts(&["Root transition failed (permissive mode)"]);
         }
 
-        Ok(self)
+        Ok(Sandbox {
+            pid: self.pid,
+            instance_id: self.instance_id,
+            strict_mode: self.strict_mode,
+            mount_namespace_enabled: self.mount_namespace_enabled,
+            _state: PhantomData,
+        })
     }
+}
 
+impl Sandbox<RootTransitioned> {
     pub fn apply_runtime_hygiene(
         self,
         profile: &ExecutionProfile,
-    ) -> Result<Sandbox<CgroupAttached>> {
+    ) -> Result<Sandbox<RootTransitioned>> {
         #[cfg(unix)]
         {
             let rlimits: &[(&str, libc::__rlimit_resource_t, Option<(u64, u64)>)] = &[
@@ -596,6 +605,37 @@ impl Sandbox<ExecReady> {
 mod typestate_tests {
     use super::*;
 
+    fn test_profile() -> ExecutionProfile {
+        ExecutionProfile {
+            command: vec![],
+            stdin_data: None,
+            environment: vec![],
+            inherit_fds: true,
+            workdir: std::env::temp_dir(),
+            chroot_dir: None,
+            uid: None,
+            gid: None,
+            strict_mode: false,
+            enable_pid_namespace: false,
+            enable_mount_namespace: false,
+            enable_network_namespace: false,
+            enable_user_namespace: false,
+            allow_degraded: true,
+            memory_limit: None,
+            file_size_limit: None,
+            stack_limit: None,
+            core_limit: None,
+            process_limit: None,
+            cpu_time_limit_ms: None,
+            wall_time_limit_ms: None,
+            fd_limit: None,
+            virtual_memory_limit: None,
+            directory_bindings: vec![],
+            enable_seccomp: false,
+            seccomp_policy_file: None,
+        }
+    }
+
     #[test]
     fn test_typestate_chain_happy_path() {
         let sandbox = Sandbox::<FreshChild>::new("test-001".to_string(), false);
@@ -612,6 +652,11 @@ mod typestate_tests {
         let sandbox = sandbox
             .attach_to_cgroup(None)
             .expect("cgroup attach failed");
+
+        let profile = test_profile();
+        let sandbox = sandbox
+            .setup_mounts_and_root(&profile)
+            .expect("mount root transition failed");
 
         let sandbox = sandbox
             .drop_credentials(None, None)
@@ -636,7 +681,9 @@ mod typestate_tests {
             Err(_) => return,
         };
         let cgroup = mounts.attach_to_cgroup(None).expect("cgroup attach");
-        let creds = cgroup.drop_credentials(None, None).expect("drop_credentials");
+        let profile = test_profile();
+        let root = cgroup.setup_mounts_and_root(&profile).expect("mount root");
+        let creds = root.drop_credentials(None, None).expect("drop_credentials");
         let privs = match creds.lock_privileges() {
             Ok(s) => s,
             Err(_) => return,
@@ -707,6 +754,11 @@ mod typestate_tests {
         let sandbox = sandbox
             .attach_to_cgroup(None)
             .expect("cgroup attach failed");
+
+        let profile = test_profile();
+        let sandbox = sandbox
+            .setup_mounts_and_root(&profile)
+            .expect("mount root transition failed");
 
         let sandbox = sandbox
             .drop_credentials(Some(1000), Some(1000))

@@ -42,7 +42,7 @@ const STAGE_RUNTIME_HYGIENE: &str = "runtime_hygiene";
 const STAGE_CREDENTIALS: &str = "credential_transition";
 const STAGE_CAPABILITIES: &str = "capability_lockdown";
 const STAGE_SIGNAL_HANDOFF: &str = "signal_handoff_verification";
-const STAGE_CLEANUP_HANDOFF: &str = "cleanup_handoff_verification";
+const STAGE_SESSION_LEADERSHIP: &str = "session_leadership_verification";
 const STAGE_EVIDENCE: &str = "post_lock_evidence";
 const STAGE_SECCOMP: &str = "seccomp_filter";
 
@@ -81,7 +81,7 @@ fn build_preexec_stage_plan() -> [StaticStage; 11] {
             domain: KernelDomain::Signal,
         },
         StaticStage {
-            name: STAGE_CLEANUP_HANDOFF,
+            name: STAGE_SESSION_LEADERSHIP,
             domain: KernelDomain::Cleanup,
         },
         StaticStage {
@@ -181,7 +181,7 @@ fn verify_parent_death_signal(mode: EnforcementMode) -> Result<()> {
     }
 }
 
-fn verify_cleanup_handoff(mode: EnforcementMode) -> Result<()> {
+fn verify_session_leadership(mode: EnforcementMode) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         // SAFETY: getpid/getsid are thread-safe libc queries for current process.
@@ -361,8 +361,8 @@ pub fn exec_payload(req: &SandboxLaunchRequest) -> Result<()> {
     verify_parent_death_signal(mode)?;
     mark_stage(&mut report, STAGE_SIGNAL_HANDOFF);
 
-    verify_cleanup_handoff(mode)?;
-    mark_stage(&mut report, STAGE_CLEANUP_HANDOFF);
+    verify_session_leadership(mode)?;
+    mark_stage(&mut report, STAGE_SESSION_LEADERSHIP);
 
     verify_full_capability_sets(mode)?;
     mark_stage(&mut report, STAGE_EVIDENCE);
@@ -384,7 +384,7 @@ pub fn exec_payload(req: &SandboxLaunchRequest) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_non_zero_capability_lines, validate_preexec_stage_plan, STAGE_CLEANUP_HANDOFF,
+        parse_non_zero_capability_lines, validate_preexec_stage_plan, STAGE_SESSION_LEADERSHIP,
         STAGE_SECCOMP,
     };
     use crate::kernel::EnforcementMode;
@@ -419,7 +419,7 @@ CapAmb:\t0000000000000000\n";
         let stages = validate_preexec_stage_plan(EnforcementMode::Strict)
             .expect("preexec stage contract should validate");
         assert_eq!(stages.len(), 11);
-        assert!(stages.contains(&STAGE_CLEANUP_HANDOFF));
+        assert!(stages.contains(&STAGE_SESSION_LEADERSHIP));
         assert!(stages.contains(&STAGE_SECCOMP));
     }
 }

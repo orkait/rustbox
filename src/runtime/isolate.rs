@@ -294,20 +294,23 @@ impl Isolate {
 
         let saved = self.config.clone();
         configure(&mut self.config, &saved, overrides);
+        self.update_cgroup_limits();
 
         let compile_result = match self.execute(&compile_cmd, None) {
             Ok(r) => r,
-            Err(e) => { self.config = saved; self.wipe_workdir(); return Err(e); }
+            Err(e) => { self.config = saved; self.update_cgroup_limits(); self.wipe_workdir(); return Err(e); }
         };
 
         if !compile_result.success {
             self.config = saved;
+            self.update_cgroup_limits();
             self.wipe_workdir();
             return Ok(Self::build_compile_failure_result(compile_result, prefix, msg));
         }
 
         let _ = fs::remove_file(&source_file);
         self.config = saved;
+        self.update_cgroup_limits();
         let result = self.execute_with_overrides(&run_cmd, overrides);
         self.wipe_workdir();
         result
@@ -425,6 +428,17 @@ impl Isolate {
         }
         drop(self._uid_guard.take());
         Ok(())
+    }
+
+    fn update_cgroup_limits(&self) {
+        if let Some(ref cg) = self.cgroup {
+            if let Some(mem) = self.config.memory_limit {
+                let _ = cg.set_memory_limit(&self.config.instance_id, mem);
+            }
+            if let Some(procs) = self.config.process_limit {
+                let _ = cg.set_process_limit(&self.config.instance_id, procs);
+            }
+        }
     }
 
     pub fn config(&self) -> &IsolateConfig { &self.config }

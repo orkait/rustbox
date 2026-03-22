@@ -17,6 +17,7 @@ fn typestate_compile_fail_tests() {
     t.compile_fail("tests/typestate_compile_fail/skip_namespace_setup.rs");
     t.compile_fail("tests/typestate_compile_fail/skip_mount_hardening.rs");
     t.compile_fail("tests/typestate_compile_fail/skip_cgroup_attach.rs");
+    t.compile_fail("tests/typestate_compile_fail/skip_root_transition.rs");
 
     // Test that state reuse fails to compile
     t.compile_fail("tests/typestate_compile_fail/reuse_consumed_state.rs");
