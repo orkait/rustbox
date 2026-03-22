@@ -1,0 +1,92 @@
+direction: down
+
+title: |md
+  ## 8-Layer Isolation
+| {
+  near: top-center
+  style.font-size: 20
+}
+
+host: {
+  label: "Host System"
+  style.fill: "#1e1e2e"
+  style.stroke: "#585b70"
+  style.font-color: "#cdd6f4"
+  style.border-radius: 16
+
+  l8: {
+    label: "8. NO_NEW_PRIVS"
+    style.fill: "#313244"
+    style.stroke: "#6c7086"
+    style.font-color: "#cdd6f4"
+    style.border-radius: 12
+
+    l7: {
+      label: "7. Credential Drop (UID 60000)"
+      style.fill: "#45475a"
+      style.stroke: "#7f849c"
+      style.font-color: "#cdd6f4"
+      style.border-radius: 12
+
+      l6: {
+        label: "6. Capabilities Zeroed"
+        style.fill: "#585b70"
+        style.stroke: "#9399b2"
+        style.font-color: "#cdd6f4"
+        style.border-radius: 12
+
+        l5: {
+          label: "5. Seccomp-BPF (18 syscalls blocked)"
+          style.fill: "#6c7086"
+          style.stroke: "#a6adc8"
+          style.font-color: "#cdd6f4"
+          style.border-radius: 12
+
+          l4: {
+            label: "4. Cgroups (memory + CPU + PIDs)"
+            style.fill: "#7f849c"
+            style.stroke: "#bac2de"
+            style.font-color: "#1e1e2e"
+            style.border-radius: 12
+
+            l3: {
+              label: "3. Network Namespace (no sockets)"
+              style.fill: "#9399b2"
+              style.stroke: "#cba6f7"
+              style.font-color: "#1e1e2e"
+              style.border-radius: 12
+
+              l2: {
+                label: "2. Mount Namespace + Chroot"
+                style.fill: "#b4befe"
+                style.stroke: "#cba6f7"
+                style.font-color: "#1e1e2e"
+                style.border-radius: 12
+
+                l1: {
+                  label: "1. PID Namespace"
+                  style.fill: "#cba6f7"
+                  style.stroke: "#fab387"
+                  style.font-color: "#1e1e2e"
+                  style.border-radius: 12
+
+                  payload: {
+                    label: |md
+                      **User Code**
+                      _print("hello")_
+                    |
+                    style.fill: "#fab387"
+                    style.stroke: "#f38ba8"
+                    style.font-color: "#1e1e2e"
+                    style.border-radius: 8
+                    style.font-size: 14
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

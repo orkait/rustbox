@@ -5,25 +5,7 @@ description: The journey of a code submission from arrival to verdict
 
 ## Overview
 
-```
-Isolate::new()          Allocate UID, create cgroup, capture baseline
-       │
-execute_code_string()   Write source, compile if needed, build command
-       │
-  Supervisor            clone() into new namespaces
-       │
-    Proxy               fork() payload through typestate chain
-       │
-  ┌────┴────┐
-  │ Payload │           User code runs here (isolated)
-  └────┬────┘
-       │
-  Evidence collection   Read cgroup stats, wait status, timing
-       │
-  Verdict classification Pure function over evidence bundle
-       │
-  Isolate::cleanup()    Verify baseline, remove cgroup, wipe workdir, release UID
-```
+![Execution lifecycle flow](../../../assets/lifecycle.svg)
 
 ## Phase 1: Setup
 

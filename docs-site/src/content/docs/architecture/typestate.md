@@ -15,10 +15,7 @@ Every other sandbox enforces this through documentation, code review, or runtime
 
 Rust's type system enforces the order at compile time:
 
-```
-FreshChild → NamespacesReady → MountsPrivate → CgroupAttached
-→ CredsDropped → PrivsLocked → ExecReady
-```
+![Typestate chain](../../../assets/typestate.svg)
 
 Only `Sandbox<ExecReady>` has an `exec_payload()` method. You literally cannot call it on any other state.
 

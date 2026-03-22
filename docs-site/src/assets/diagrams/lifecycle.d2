@@ -1,0 +1,108 @@
+direction: down
+
+title: |md
+  ## Execution Lifecycle
+| {
+  near: top-center
+  style.font-size: 20
+}
+
+setup: {
+  label: "Isolate::new()"
+  tooltip: "Allocate UID, create cgroup, capture baseline"
+  style.fill: "#f5e0dc"
+  style.stroke: "#cba6f7"
+  style.border-radius: 8
+  style.font-size: 14
+}
+
+compile: {
+  label: "Compile (if needed)"
+  tooltip: "C++: g++ outside sandbox. Java: javac. Python: skip"
+  style.fill: "#f5e0dc"
+  style.stroke: "#cba6f7"
+  style.border-radius: 8
+  style.font-size: 14
+}
+
+supervisor: {
+  label: "Supervisor"
+  tooltip: "clone() into new namespaces"
+  style.fill: "#cba6f7"
+  style.stroke: "#89b4fa"
+  style.font-color: "#1e1e2e"
+  style.border-radius: 8
+  style.font-size: 14
+}
+
+proxy: {
+  label: "Proxy"
+  tooltip: "fork() payload through typestate chain"
+  style.fill: "#b4befe"
+  style.stroke: "#89b4fa"
+  style.font-color: "#1e1e2e"
+  style.border-radius: 8
+  style.font-size: 14
+}
+
+sandbox: {
+  label: "Sandbox"
+  style.fill: "#1e1e2e"
+  style.stroke: "#fab387"
+  style.border-radius: 12
+  style.font-color: "#cdd6f4"
+
+  payload: {
+    label: "User Code"
+    tooltip: "Runs inside: namespaces + chroot + cgroup + seccomp"
+    style.fill: "#fab387"
+    style.stroke: "#f38ba8"
+    style.font-color: "#1e1e2e"
+    style.border-radius: 8
+    style.font-size: 14
+    style.bold: true
+  }
+}
+
+evidence: {
+  label: "Evidence Collection"
+  tooltip: "cgroup stats, wait status, timing, process lifecycle"
+  style.fill: "#a6e3a1"
+  style.stroke: "#74c7ec"
+  style.font-color: "#1e1e2e"
+  style.border-radius: 8
+  style.font-size: 14
+}
+
+verdict: {
+  label: "Verdict Classification"
+  tooltip: "Pure function: evidence → (AC, TLE, MLE, RE, SIG, IE)"
+  style.fill: "#a6e3a1"
+  style.stroke: "#74c7ec"
+  style.font-color: "#1e1e2e"
+  style.border-radius: 8
+  style.font-size: 14
+}
+
+cleanup: {
+  label: "Isolate::cleanup()"
+  tooltip: "Kill remnants, verify baseline, remove cgroup, wipe workdir, release UID"
+  style.fill: "#f5e0dc"
+  style.stroke: "#cba6f7"
+  style.border-radius: 8
+  style.font-size: 14
+}
+
+setup -> compile: "write source"
+compile -> supervisor: "clone()"
+supervisor -> proxy: "fork()"
+proxy -> sandbox.payload: "typestate chain → exec()"
+sandbox.payload -> evidence: "exit / killed"
+evidence -> verdict: "immutable bundle"
+verdict -> cleanup: ""
+
+supervisor -> sandbox.payload: "monitors wall/CPU time" {
+  style.stroke: "#f38ba8"
+  style.stroke-dash: 5
+  style.font-size: 11
+}
