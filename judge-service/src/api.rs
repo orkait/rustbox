@@ -12,6 +12,19 @@ use crate::database::types::Submission;
 use crate::types::{ErrorResponse, HealthResponse, ResultResponse, SubmitRequest, SubmitResponse};
 use crate::AppState;
 
+/// Constant-time comparison to prevent timing side-channel on API key.
+/// Always compares all bytes regardless of where they differ.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/submit", post(submit))
@@ -25,10 +38,10 @@ async fn submit(
     headers: HeaderMap,
     Json(req): Json<SubmitRequest>,
 ) -> impl IntoResponse {
-    // Check API key if configured
+    // Check API key if configured (constant-time comparison)
     if let Some(ref key) = state.api_key {
-        let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok());
-        if provided != Some(key.as_str()) {
+        let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+        if !constant_time_eq(provided.as_bytes(), key.as_bytes()) {
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!(ErrorResponse {
@@ -39,12 +52,20 @@ async fn submit(
         }
     }
 
-    // Validate code size
+    // Validate input sizes
     const MAX_CODE_SIZE: usize = 64 * 1024; // 64KB
+    const MAX_STDIN_SIZE: usize = 256 * 1024; // 256KB
     if req.code.len() > MAX_CODE_SIZE {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "code exceeds maximum size of 64KB"})),
+        )
+            .into_response();
+    }
+    if req.stdin.len() > MAX_STDIN_SIZE {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "stdin exceeds maximum size of 256KB"})),
         )
             .into_response();
     }
@@ -163,10 +184,10 @@ async fn result(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    // Check API key if configured
+    // Check API key if configured (constant-time comparison)
     if let Some(ref key) = state.api_key {
-        let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok());
-        if provided != Some(key.as_str()) {
+        let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+        if !constant_time_eq(provided.as_bytes(), key.as_bytes()) {
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!(ErrorResponse {

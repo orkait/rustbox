@@ -340,17 +340,17 @@ impl Database for PgDatabase {
         Ok(row.map(Submission::from))
     }
 
-    /// Reap submissions that have been in 'running' state longer than `timeout`.
-    /// Returns the number of rows transitioned back to 'pending'.
+    /// Reap submissions stuck in 'running' longer than `timeout`.
+    /// Marks them as error (not pending) to prevent duplicate execution.
     async fn reap_stale(&self, timeout: Duration) -> anyhow::Result<u64> {
         let timeout_secs = timeout.as_secs_f64();
         let result = sqlx::query(
             r#"
             UPDATE submissions
-               SET status     = 'pending',
-                   node_id    = NULL,
-                   sandbox_id = NULL,
-                   started_at = NULL
+               SET status        = 'error',
+                   verdict       = 'IE',
+                   error_message = 'node crashed or execution timed out',
+                   completed_at  = NOW()
              WHERE status = 'running'
                AND started_at < NOW() - ($1 || ' seconds')::INTERVAL
             "#,

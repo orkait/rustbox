@@ -162,9 +162,11 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str) {
     // Random u32 avoids collision across nodes without changing the core.
     let sandbox_id = fastrand::u32(10000..u32::MAX).to_string();
 
-    // Mark running with our sandbox_id
+    // Mark running - if this fails, abort: the DB doesn't know we claimed it,
+    // so another worker (or reaper) can handle it. Do NOT proceed silently.
     if let Err(e) = db.mark_running(job_id, node_id, &sandbox_id).await {
-        error!(%job_id, error = %e, "failed to mark running");
+        error!(%job_id, error = %e, "failed to mark running, aborting");
+        return;
     }
 
     // Fetch submission to get language/code/stdin
@@ -172,10 +174,12 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str) {
         Ok(Some(s)) => s,
         Ok(None) => {
             warn!(%job_id, "submission not found in database");
+            let _ = db.mark_error(job_id, "submission vanished from database").await;
             return;
         }
         Err(e) => {
             error!(%job_id, error = %e, "database read error");
+            let _ = db.mark_error(job_id, &format!("database read error: {e}")).await;
             return;
         }
     };
@@ -192,19 +196,38 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str) {
     match result {
         Ok(Ok(output)) => {
             if let Err(e) = db.mark_completed(job_id, &output).await {
-                error!(%job_id, error = %e, "failed to mark completed");
+                // Execution succeeded but we can't store the result.
+                // Mark as error so the caller doesn't poll 'running' forever.
+                error!(%job_id, error = %e, "failed to store result, marking error");
+                let _ = db.mark_error(job_id, "execution succeeded but result storage failed").await;
             } else {
                 info!(%job_id, verdict = output.verdict, "submission completed");
             }
         }
         Ok(Err(e)) => {
             error!(%job_id, error = %e, "execution failed");
-            let _ = db.mark_error(job_id, &e).await;
+            let _ = db.mark_error(job_id, &sanitize_error(&e)).await;
         }
         Err(e) => {
             error!(%job_id, error = %e, "worker task panicked");
-            let _ = db.mark_error(job_id, &format!("internal error: {e}")).await;
+            let _ = db.mark_error(job_id, "internal execution error").await;
         }
+    }
+}
+
+/// Strip internal paths and implementation details from error messages
+/// before storing them in the database (returned to API callers).
+fn sanitize_error(raw: &str) -> String {
+    // Remove absolute paths that leak host filesystem info
+    let sanitized = raw
+        .replace("/home/", "/.../<redacted>/")
+        .replace("/tmp/rustbox/", "/sandbox/")
+        .replace("/sys/fs/cgroup/", "/cgroup/");
+    // Cap length to prevent huge error messages
+    if sanitized.len() > 512 {
+        format!("{}... (truncated)", &sanitized[..512])
+    } else {
+        sanitized
     }
 }
 
