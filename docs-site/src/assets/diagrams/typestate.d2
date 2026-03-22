@@ -1,5 +1,5 @@
-grid-rows: 3
-grid-columns: 3
+grid-columns: 4
+grid-rows: 2
 grid-gap: 12
 
 fresh: {
@@ -29,7 +29,25 @@ mnt: {
   style.font-size: 12
 }
 
-# Row 2: right-to-left order (snake reversal)
+cg: {
+  label: "Cgroup\nAttached"
+  style.fill: "#eff1f5"
+  style.stroke: "#1e66f5"
+  style.font-color: "#4c4f69"
+  style.border-radius: 8
+  style.font-size: 12
+}
+
+exec: {
+  label: "Exec\nReady"
+  style.fill: "#40a02b"
+  style.stroke: "#40a02b"
+  style.font-color: "#ffffff"
+  style.border-radius: 8
+  style.font-size: 12
+  style.bold: true
+}
+
 priv: {
   label: "Privs\nLocked"
   style.fill: "#eff1f5"
@@ -48,8 +66,8 @@ cred: {
   style.font-size: 12
 }
 
-cg: {
-  label: "Cgroup\nAttached"
+seccomp: {
+  label: "Seccomp\nInstalled"
   style.fill: "#eff1f5"
   style.stroke: "#1e66f5"
   style.font-color: "#4c4f69"
@@ -57,18 +75,5 @@ cg: {
   style.font-size: 12
 }
 
-# Row 3
-exec: {
-  label: "Exec\nReady"
-  style.fill: "#40a02b"
-  style.stroke: "#40a02b"
-  style.font-color: "#ffffff"
-  style.border-radius: 8
-  style.font-size: 12
-  style.bold: true
-}
-
-fresh -> ns -> mnt
-mnt -> cg
-cg -> cred -> priv
-priv -> exec
+fresh -> ns -> mnt -> cg
+cg -> seccomp -> cred -> priv -> exec

@@ -30,22 +30,7 @@ COPY . .
 RUN cargo build --release -p rustbox && cargo build --release -p judge-service
 
 # ============================================================================
-# Stage 2: Go toolchain
-# ============================================================================
-FROM golang:1.22-alpine AS go-toolchain
-
-# ============================================================================
-# Stage 3: Rust toolchain (stripped: no cargo, no rustdoc, no source)
-# ============================================================================
-FROM rust:slim AS rust-toolchain
-RUN cp -a "$(rustc --print sysroot)" /rust-sysroot \
-    && rm -f /rust-sysroot/bin/rustdoc /rust-sysroot/bin/cargo \
-    && rm -rf /rust-sysroot/bin/rust-gdb* /rust-sysroot/bin/rust-lldb \
-    && rm -rf /rust-sysroot/lib/rustlib/src \
-    && rm -rf /rust-sysroot/share
-
-# ============================================================================
-# Stage 4: Runtime
+# Stage 2: Runtime (single layer for all languages)
 # ============================================================================
 FROM ubuntu:22.04
 
@@ -54,6 +39,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV BUN_INSTALL=/usr/local
+ENV PATH="/usr/local/go/bin:/usr/local/rust/bin:$PATH"
 
 ARG LANG_PYTHON
 ARG LANG_C_CPP
@@ -63,14 +49,18 @@ ARG LANG_TYPESCRIPT
 ARG LANG_GO
 ARG LANG_RUST
 ARG LANG_ZIG
+ARG ZIG_VERSION=0.13.0
 
-# All apt installs in one layer to minimize size
-# JavaScript and TypeScript both use Bun
+# All installs in ONE RUN = one layer = no wasted space from conditional copies
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
+    #
+    # C / C++
     && if [ "$LANG_C_CPP" = "true" ]; then \
          apt-get install -y --no-install-recommends g++; \
        fi \
+    #
+    # Python
     && if [ "$LANG_PYTHON" = "true" ]; then \
          apt-get install -y --no-install-recommends python3.11 \
          && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
@@ -78,6 +68,8 @@ RUN apt-get update \
          && find /usr/lib/python3.11 -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true \
          && rm -rf /usr/lib/python3.11/test /usr/lib/python3.11/unittest; \
        fi \
+    #
+    # Java (install full JDK, jlink to minimal, delete full JDK)
     && if [ "$LANG_JAVA" = "true" ]; then \
          apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
          && jlink --no-header-files --no-man-pages --compress=zip-6 \
@@ -90,37 +82,43 @@ RUN apt-get update \
          && ln -sf /usr/lib/jvm/java-21-openjdk-amd64/bin/java   /usr/bin/java \
          && ln -sf /usr/lib/jvm/java-21-openjdk-amd64/bin/javac  /usr/bin/javac; \
        fi \
+    #
+    # JavaScript / TypeScript (both use Bun)
     && if [ "$LANG_JAVASCRIPT" = "true" ] || [ "$LANG_TYPESCRIPT" = "true" ]; then \
          apt-get install -y --no-install-recommends unzip \
          && curl -fsSL https://bun.sh/install | bash \
          && apt-get purge -y --auto-remove unzip; \
        fi \
+    #
+    # Go (download official tarball)
+    && if [ "$LANG_GO" = "true" ]; then \
+         curl -fsSL "https://go.dev/dl/go1.22.10.linux-amd64.tar.gz" \
+         | tar -xz -C /usr/local; \
+       fi \
+    #
+    # Rust (install rustup, extract sysroot, delete rustup)
+    && if [ "$LANG_RUST" = "true" ]; then \
+         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+         | sh -s -- -y --default-toolchain stable --profile minimal \
+         && SYSROOT=$(/root/.cargo/bin/rustc --print sysroot) \
+         && cp -a "$SYSROOT" /usr/local/rust \
+         && rm -f /usr/local/rust/bin/rustdoc /usr/local/rust/bin/cargo \
+         && rm -rf /usr/local/rust/bin/rust-gdb* /usr/local/rust/bin/rust-lldb \
+         && rm -rf /usr/local/rust/lib/rustlib/src /usr/local/rust/share \
+         && ln -sf /usr/local/rust/bin/rustc /usr/local/bin/rustc \
+         && rm -rf /root/.cargo /root/.rustup; \
+       fi \
+    #
+    # Zig (download official tarball)
+    && if [ "$LANG_ZIG" = "true" ]; then \
+         curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+         | tar -xJ -C /usr/local \
+         && ln -sf /usr/local/zig-linux-x86_64-${ZIG_VERSION}/zig /usr/local/bin/zig; \
+       fi \
+    #
+    # Cleanup
     && rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale \
     && rm -rf /var/lib/apt/lists/*
-
-# Go toolchain (only if enabled, ~253MB)
-COPY --from=go-toolchain /usr/local/go /tmp/go-stage/
-RUN if [ "$LANG_GO" = "true" ] && [ -d /tmp/go-stage/bin ]; then \
-      mv /tmp/go-stage /usr/local/go; \
-    fi \
-    && rm -rf /tmp/go-stage
-ENV PATH="/usr/local/go/bin:$PATH"
-
-# Rust toolchain (only if enabled, ~506MB stripped)
-COPY --from=rust-toolchain /rust-sysroot /tmp/rust-stage/
-RUN if [ "$LANG_RUST" = "true" ] && [ -d /tmp/rust-stage/bin ]; then \
-      mv /tmp/rust-stage /usr/local/rust \
-      && ln -sf /usr/local/rust/bin/rustc /usr/local/bin/rustc; \
-    fi \
-    && rm -rf /tmp/rust-stage
-
-# Zig toolchain (only if enabled, ~340MB)
-ARG ZIG_VERSION=0.13.0
-RUN if [ "$LANG_ZIG" = "true" ]; then \
-      curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
-      | tar -xJ -C /usr/local \
-      && ln -sf /usr/local/zig-linux-x86_64-${ZIG_VERSION}/zig /usr/local/bin/zig; \
-    fi
 
 # Sandbox user
 RUN groupadd -r -g 65534 sandbox 2>/dev/null || true \

@@ -1,6 +1,8 @@
-direction: down
+grid-columns: 6
+grid-rows: 1
+grid-gap: 0
 
-cli: {
+entry: {
   label: "CLI / API"
   style.fill: "#eff1f5"
   style.stroke: "#8839ef"
@@ -10,7 +12,7 @@ cli: {
 }
 
 runtime: {
-  label: "runtime/isolate.rs"
+  label: "runtime/\nisolate.rs"
   style.fill: "#eff1f5"
   style.stroke: "#8839ef"
   style.font-color: "#4c4f69"
@@ -18,44 +20,17 @@ runtime: {
   style.font-size: 12
 }
 
-verdict: {
-  label: "verdict/"
+logic: {
+  label: "verdict  config  observability"
   style.fill: "#eff1f5"
   style.stroke: "#40a02b"
-  style.font-color: "#4c4f69"
-  style.border-radius: 6
-  style.font-size: 11
-}
-
-config: {
-  label: "config/"
-  style.fill: "#eff1f5"
-  style.stroke: "#40a02b"
-  style.font-color: "#4c4f69"
-  style.border-radius: 6
-  style.font-size: 11
-}
-
-obs: {
-  label: "observability/"
-  style.fill: "#eff1f5"
-  style.stroke: "#40a02b"
-  style.font-color: "#4c4f69"
-  style.border-radius: 6
-  style.font-size: 11
-}
-
-core: {
-  label: "core/ supervisor + proxy"
-  style.fill: "#e6e9ef"
-  style.stroke: "#1e66f5"
   style.font-color: "#4c4f69"
   style.border-radius: 8
   style.font-size: 12
 }
 
-exec: {
-  label: "exec/preexec (typestate)"
+process: {
+  label: "core/supervisor\nexec/typestate"
   style.fill: "#e6e9ef"
   style.stroke: "#1e66f5"
   style.font-color: "#4c4f69"
@@ -64,16 +39,16 @@ exec: {
 }
 
 kernel: {
-  label: "kernel/"
+  label: "kernel/\nunsafe wrappers"
   style.fill: "#4c4f69"
   style.stroke: "#fe640b"
   style.font-color: "#eff1f5"
   style.border-radius: 8
-  style.font-size: 13
+  style.font-size: 12
 }
 
 safety: {
-  label: "safety/ + utils/"
+  label: "safety/\nutils/"
   style.fill: "#eff1f5"
   style.stroke: "#8839ef"
   style.font-color: "#4c4f69"
@@ -81,12 +56,4 @@ safety: {
   style.font-size: 12
 }
 
-cli -> runtime
-runtime -> verdict
-runtime -> config
-runtime -> obs
-verdict -> core
-config -> core
-core -> exec
-exec -> kernel
-kernel -> safety
+entry -> runtime -> logic -> process -> kernel -> safety

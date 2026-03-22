@@ -81,7 +81,7 @@
 		},
 		"javascript": {
 			"memory": {
-				"limit_mb": 256,
+				"limit_mb": 512,
 				"limit_kb": 262144
 			},
 			"time": {
@@ -89,7 +89,7 @@
 				"wall_time_seconds": 12
 			},
 			"processes": {
-				"max_processes": 4,
+				"max_processes": 16,
 				"max_forks": 0
 			},
 			"filesystem": {
@@ -137,7 +137,7 @@
 		},
 		"cpp": {
 			"memory": {
-				"limit_mb": 256,
+				"limit_mb": 512,
 				"limit_kb": 262144
 			},
 			"time": {
