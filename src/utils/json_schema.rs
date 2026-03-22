@@ -1,67 +1,45 @@
-/// Stable JSON result schema for judge integration
-/// Implements P0-JSON-001: Stable Judge JSON Result Schema
-/// Per plan.md Section 14: Judge-v1 output contract
 use crate::config::types::*;
 use serde::{Deserialize, Serialize};
 
-/// Stable JSON result schema for judge consumers (v1)
-/// This schema is frozen and backward compatible
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JudgeResultV1 {
-    /// Schema version (always "1.0" for v1)
     pub schema_version: String,
 
-    /// Execution status (stable taxonomy)
     pub status: ExecutionStatus,
 
-    /// Exit code (if normal exit)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
 
-    /// Standard output
     pub stdout: String,
 
-    /// Standard error
     pub stderr: String,
 
-    /// Output integrity classification
     pub output_integrity: OutputIntegrity,
 
-    /// CPU time used (seconds)
     pub cpu_time: f64,
 
-    /// Wall time used (seconds)
     pub wall_time: f64,
 
-    /// Peak memory usage (bytes)
     pub memory_peak: u64,
 
-    /// Verdict provenance (for non-OK verdicts)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict_provenance: Option<VerdictProvenance>,
 
-    /// Capability report
     pub capability_report: CapabilityReport,
 
-    /// Execution envelope ID (SHA256 hash)
     pub execution_envelope_id: String,
 
-    /// Evidence bundle (immutable)
     pub evidence_bundle: EvidenceBundle,
 
-    /// Language runtime envelope (if applicable)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language_runtime_envelope: Option<String>,
 
-    /// Timestamp of execution start
     pub execution_start: String,
 
-    /// Timestamp of execution end
     pub execution_end: String,
 }
 
 impl JudgeResultV1 {
-    /// Create new judge result
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         status: ExecutionStatus,
@@ -100,27 +78,23 @@ impl JudgeResultV1 {
         }
     }
 
-    /// Serialize to JSON string
     pub fn to_json(&self) -> Result<String> {
         serde_json::to_string_pretty(self)
             .map_err(|e| IsolateError::Config(format!("Failed to serialize result to JSON: {}", e)))
     }
 
-    /// Serialize to JSON bytes
     pub fn to_json_bytes(&self) -> Result<Vec<u8>> {
         serde_json::to_vec_pretty(self).map_err(|e| {
             IsolateError::Config(format!("Failed to serialize result to JSON bytes: {}", e))
         })
     }
 
-    /// Deserialize from JSON string
     pub fn from_json(json: &str) -> Result<Self> {
         serde_json::from_str(json).map_err(|e| {
             IsolateError::Config(format!("Failed to deserialize result from JSON: {}", e))
         })
     }
 
-    /// Validate schema version
     pub fn validate_schema_version(&self) -> Result<()> {
         if self.schema_version != "1.0" {
             return Err(IsolateError::Config(format!(
@@ -132,9 +106,7 @@ impl JudgeResultV1 {
     }
 }
 
-/// Convert ExecutionResult to JudgeResultV1 with full provenance
 impl JudgeResultV1 {
-    /// Create from ExecutionResult with capability report and envelope
     pub fn from_execution_result(
         result: &ExecutionResult,
         config: &IsolateConfig,
@@ -146,7 +118,6 @@ impl JudgeResultV1 {
         let now = chrono::Utc::now().to_rfc3339();
         let output_integrity = result.output_integrity.clone();
 
-        // Build immutable evidence bundle from runtime artifacts.
         let wait_outcome = WaitOutcome {
             exit_code: result.exit_code,
             terminating_signal: result.signal,
@@ -223,7 +194,7 @@ impl JudgeResultV1 {
             execution_envelope_id,
             evidence_bundle,
             language_runtime_envelope,
-            now.clone(), // execution_start == execution_end (same instant)
+            now.clone(),
             now,
         )
     }
@@ -302,7 +273,6 @@ mod tests {
         let result = create_test_result();
         let json = result.to_json().unwrap();
 
-        // Verify it's valid JSON
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"1.0\""));
         assert!(json.contains("\"status\""));
@@ -328,11 +298,9 @@ mod tests {
 
     #[test]
     fn test_json_schema_stability() {
-        // This test ensures the JSON schema remains stable
         let result = create_test_result();
         let json = result.to_json().unwrap();
 
-        // Required fields must be present
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"status\""));
         assert!(json.contains("\"stdout\""));

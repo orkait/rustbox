@@ -1,217 +1,353 @@
-use sqlx::PgPool;
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::{db, queue};
+use crate::database::types::{
+    ExecutionOutput, VERDICT_ACCEPTED, VERDICT_INTERNAL_ERROR, VERDICT_MEMORY_LIMIT,
+    VERDICT_RUNTIME_ERROR, VERDICT_SIGNALED, VERDICT_TIME_LIMIT,
+};
+use crate::database::Database;
+use crate::job_queue::JobQueue;
 
-/// Structured output from a single rustbox execution.
-struct ExecutionOutput {
-    verdict: String,
-    stdout: String,
-    stderr: String,
-    exit_code: Option<i32>,
-    cpu_time_ms: f64,
-    wall_time_ms: f64,
-    memory_kb: i64,
-    signal: Option<i32>,
-    error_message: Option<String>,
-    /// Compressed base64 of full execution metadata (JudgeResultV1-like JSON).
-    /// Only populated when store_meta=true.
-    meta: Option<String>,
-}
-
-/// Spawn N worker tasks that dequeue jobs from Redis and execute via rustbox.
-pub fn spawn_workers(
+pub fn spawn_channel_workers(
     count: usize,
-    pool: PgPool,
-    redis_client: redis::Client,
-    store_meta: bool,
+    db: Arc<dyn Database>,
+    queue: Arc<JobQueue>,
+    node_id: String,
+    webhook_timeout_secs: u64,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     (0..count)
-        .map(|worker_id| {
-            let pool = pool.clone();
-            let client = redis_client.clone();
+        .map(|idx| {
+            let db = db.clone();
+            let queue = queue.clone();
+            let node_id = node_id.clone();
             tokio::spawn(async move {
-                worker_loop(worker_id, pool, client, store_meta).await;
+                info!(worker = idx, "channel worker started");
+                loop {
+                    let job_id = match queue.dequeue().await {
+                        Some(id) => id,
+                        None => {
+                            info!(worker = idx, "channel closed, worker exiting");
+                            return;
+                        }
+                    };
+                    info!(worker = idx, %job_id, "processing submission");
+                    process_job(db.as_ref(), job_id, &node_id, webhook_timeout_secs).await;
+                }
             })
         })
         .collect()
 }
 
-async fn worker_loop(worker_id: usize, pool: PgPool, redis_client: redis::Client, store_meta: bool) {
-    info!(worker_id, "worker started");
+pub fn spawn_pg_workers(
+    count: usize,
+    db: Arc<dyn Database>,
+    pg_db: Arc<crate::database::postgres::PgDatabase>,
+    node_id: String,
+    webhook_timeout_secs: u64,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    let semaphore = Arc::new(Semaphore::new(count));
 
-    let mut con = match redis_client.get_multiplexed_async_connection().await {
-        Ok(c) => c,
-        Err(e) => {
-            error!(worker_id, error = %e, "worker failed to connect to redis");
-            return;
-        }
+    let drain_handle = {
+        let db = db.clone();
+        let node_id = node_id.clone();
+        let sem = semaphore.clone();
+        tokio::spawn(async move {
+            drain_pending(db, sem, node_id, webhook_timeout_secs).await;
+        })
     };
 
-    loop {
-        // Block-pop from Redis queue (5 second timeout, then retry)
-        let job_id = match queue::dequeue(&mut con, 5.0).await {
-            Ok(Some(id)) => id,
-            Ok(None) => continue, // timeout, retry
-            Err(e) => {
-                warn!(worker_id, error = %e, "redis dequeue error, retrying in 1s");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                continue;
+    let listener_handle = {
+        let db = db.clone();
+        let node_id = node_id.clone();
+        let sem = semaphore.clone();
+        tokio::spawn(async move {
+            let _ = drain_handle.await;
+
+            let mut listener = match pg_db.listener().await {
+                Ok(l) => l,
+                Err(e) => {
+                    error!(error = %e, "failed to create PG listener");
+                    return;
+                }
+            };
+
+            info!(concurrency = count, "pg listener started");
+
+            loop {
+                match listener.recv().await {
+                    Ok(_notification) => {
+                        let permit = sem.clone().acquire_owned().await;
+                        match permit {
+                            Ok(permit) => {
+                                let db = db.clone();
+                                let node_id = node_id.clone();
+                                tokio::spawn(async move {
+                                    if let Ok(Some(sub)) = db.claim_pending(&node_id).await {
+                                        process_job(db.as_ref(), sub.id, &node_id, webhook_timeout_secs).await;
+                                    }
+                                    drop(permit);
+                                });
+                            }
+                            Err(_) => {
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "pg listener error, reconnecting in 1s");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
             }
+        })
+    };
+
+    vec![listener_handle]
+}
+
+async fn drain_pending(db: Arc<dyn Database>, sem: Arc<Semaphore>, node_id: String, webhook_timeout_secs: u64) {
+    loop {
+        let permit = match sem.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => return,
         };
 
-        info!(worker_id, %job_id, "processing submission");
-        process_job(worker_id, &pool, job_id, store_meta).await;
+        match db.claim_pending(&node_id).await {
+            Ok(Some(sub)) => {
+                let db = db.clone();
+                let node_id = node_id.clone();
+                tokio::spawn(async move {
+                    process_job(db.as_ref(), sub.id, &node_id, webhook_timeout_secs).await;
+                    drop(permit);
+                });
+            }
+            Ok(None) => {
+                drop(permit);
+                return;
+            }
+            Err(e) => {
+                warn!(error = %e, "drain_pending error");
+                drop(permit);
+                return;
+            }
+        }
     }
 }
 
-async fn process_job(worker_id: usize, pool: &PgPool, job_id: Uuid, store_meta: bool) {
-    // Fetch submission from Postgres
-    let submission = match db::get_submission(pool, job_id).await {
+async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_timeout_secs: u64) {
+    if let Err(e) = db.mark_running(job_id, node_id, "allocating").await {
+        error!(%job_id, error = %e, "failed to mark running, aborting");
+        return;
+    }
+
+    let submission = match db.get_submission(job_id).await {
         Ok(Some(s)) => s,
         Ok(None) => {
-            warn!(worker_id, %job_id, "submission not found in database");
+            warn!(%job_id, "submission not found in database");
+            let _ = db.mark_error(job_id, "submission vanished from database").await;
             return;
         }
         Err(e) => {
-            error!(worker_id, %job_id, error = %e, "database read error");
+            error!(%job_id, error = %e, "database read error");
+            let _ = db.mark_error(job_id, &format!("database read error: {e}")).await;
             return;
         }
     };
 
-    // Mark as running
-    if let Err(e) = db::mark_running(pool, job_id).await {
-        error!(worker_id, %job_id, error = %e, "failed to mark running");
-    }
-
-    // Execute via rustbox (blocking — run on a dedicated thread)
     let language = submission.language.clone();
     let code = submission.code.clone();
     let stdin = submission.stdin.clone();
-    let box_id = worker_id as u32;
+    let webhook_url = submission.webhook_url.clone();
+    let webhook_secret = submission.webhook_secret.clone();
 
-    let result = tokio::task::spawn_blocking(move || execute_submission(&language, &code, &stdin, box_id, store_meta))
-        .await;
+    let result =
+        tokio::task::spawn_blocking(move || execute_in_sandbox(&language, &code, &stdin))
+            .await;
 
     match result {
-        Ok(Ok(out)) => {
-            if let Err(e) = db::update_result(
-                pool,
-                job_id,
-                &out.verdict,
-                &out.stdout,
-                &out.stderr,
-                out.exit_code,
-                out.wall_time_ms,
-                out.memory_kb,
-                out.cpu_time_ms,
-                out.wall_time_ms,
-                out.signal,
-                out.error_message.as_deref(),
-                out.meta.as_deref(),
-            )
-            .await
-            {
-                error!(worker_id, %job_id, error = %e, "failed to update result");
+        Ok(Ok(output)) => {
+            if let Err(e) = db.mark_completed(job_id, &output).await {
+                error!(%job_id, error = %e, "failed to store result, marking error");
+                let _ = db.mark_error(job_id, "execution succeeded but result storage failed").await;
             } else {
-                info!(worker_id, %job_id, verdict = out.verdict, "submission completed");
+                info!(%job_id, verdict = output.verdict, "submission completed");
             }
         }
         Ok(Err(e)) => {
-            error!(worker_id, %job_id, error = %e, "execution failed");
-            let _ = db::mark_error(pool, job_id, &e).await;
+            error!(%job_id, error = %e, "execution failed");
+            let _ = db.mark_error(job_id, &sanitize_error(&e)).await;
         }
         Err(e) => {
-            error!(worker_id, %job_id, error = %e, "worker task panicked");
-            let _ = db::mark_error(pool, job_id, &format!("internal error: {e}")).await;
+            error!(%job_id, error = %e, "worker task panicked");
+            let _ = db.mark_error(job_id, "internal execution error").await;
+        }
+    }
+
+    if let Some(url) = webhook_url {
+        let secret = webhook_secret.unwrap_or_default();
+        let payload = match db.get_submission(job_id).await {
+            Ok(Some(s)) => Some(crate::types::ResultResponse::from(s)),
+            _ => {
+                warn!(%job_id, "webhook: could not fetch result for delivery");
+                None
+            }
+        };
+        if let Some(payload) = payload {
+            tokio::spawn(deliver_webhook(job_id, url, secret, payload, webhook_timeout_secs));
         }
     }
 }
 
-/// Run a submission through rustbox and return structured execution output.
-fn execute_submission(
+async fn deliver_webhook(
+    job_id: Uuid, url: String, secret: String,
+    payload: crate::types::ResultResponse, timeout_secs: u64,
+) {
+    use base64::Engine;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let body = match serde_json::to_string(&payload) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(%job_id, error = %e, "webhook: failed to serialize payload");
+            return;
+        }
+    };
+
+    let timestamp = chrono::Utc::now().timestamp();
+    let msg_id = job_id.to_string();
+
+    // Standard Webhooks: sign "{msg_id}.{timestamp}.{body}"
+    let signed_content = format!("{}.{}.{}", msg_id, timestamp, body);
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts any key length");
+    mac.update(signed_content.as_bytes());
+    let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .unwrap_or_default();
+
+    let result = client.post(&url)
+        .header("webhook-id", &msg_id)
+        .header("webhook-timestamp", timestamp.to_string())
+        .header("webhook-signature", format!("v1,{}", signature))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await;
+
+    match result {
+        Ok(resp) => {
+            info!(%job_id, status = %resp.status(), "webhook delivered");
+        }
+        Err(e) => {
+            warn!(%job_id, url, error = %e, "webhook delivery failed");
+        }
+    }
+}
+
+fn sanitize_error(raw: &str) -> String {
+    let sanitized = raw
+        .replace("/home/", "/.../<redacted>/")
+        .replace("/tmp/rustbox/", "/sandbox/")
+        .replace("/sys/fs/cgroup/", "/cgroup/");
+    if sanitized.len() > 512 {
+        let end = sanitized
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= 512)
+            .last()
+            .unwrap_or(0);
+        format!("{}... (truncated)", &sanitized[..end])
+    } else {
+        sanitized
+    }
+}
+
+fn execute_in_sandbox(
     language: &str,
     code: &str,
     stdin: &str,
-    box_id: u32,
-    store_meta: bool,
 ) -> Result<ExecutionOutput, String> {
     use rustbox::config::types::IsolateConfig;
     use rustbox::runtime::isolate::{ExecutionOverrides, Isolate};
 
-    // Initialize subsystems (lock manager, security logger) — idempotent
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
         let _ = rustbox::observability::audit::init_security_logger(None);
-        if let Err(e) = rustbox::safety::lock_manager::init_lock_manager() {
-            eprintln!("lock manager init failed: {e}");
-        }
     });
 
-    let config = IsolateConfig::with_language_defaults(language, format!("rustbox/{box_id}"))
+    let config = IsolateConfig::with_language_defaults(language, "rustbox/0".to_string())
         .map_err(|e| format!("config error: {e}"))?;
 
     let mut isolate =
         Isolate::new(config).map_err(|e| format!("isolate creation error: {e}"))?;
 
     let overrides = ExecutionOverrides {
-        stdin_data: if stdin.is_empty() { None } else { Some(stdin.to_string()) },
+        stdin_data: if stdin.is_empty() {
+            None
+        } else {
+            Some(stdin.to_string())
+        },
         ..ExecutionOverrides::default()
     };
+
     let result = isolate
         .execute_code_string(language, code, &overrides)
         .map_err(|e| format!("execution error: {e}"))?;
 
     let verdict = match result.status {
-        rustbox::config::types::ExecutionStatus::Ok => "AC",
-        rustbox::config::types::ExecutionStatus::RuntimeError => "RE",
-        rustbox::config::types::ExecutionStatus::TimeLimit => "TLE",
-        rustbox::config::types::ExecutionStatus::MemoryLimit => "MLE",
-        rustbox::config::types::ExecutionStatus::Signaled => "SIG",
-        rustbox::config::types::ExecutionStatus::InternalError => "IE",
-        _ => "RE",
+        rustbox::config::types::ExecutionStatus::Ok => VERDICT_ACCEPTED,
+        rustbox::config::types::ExecutionStatus::RuntimeError => VERDICT_RUNTIME_ERROR,
+        rustbox::config::types::ExecutionStatus::TimeLimit => VERDICT_TIME_LIMIT,
+        rustbox::config::types::ExecutionStatus::MemoryLimit => VERDICT_MEMORY_LIMIT,
+        rustbox::config::types::ExecutionStatus::Signaled => VERDICT_SIGNALED,
+        rustbox::config::types::ExecutionStatus::InternalError => VERDICT_INTERNAL_ERROR,
+        _ => VERDICT_RUNTIME_ERROR,
     }
     .to_string();
-    let cpu_time_ms = result.cpu_time * 1000.0;
-    let wall_time_ms = result.wall_time * 1000.0;
-    let memory_kb = (result.memory_peak / 1024) as i64;
-
-    // Build compressed meta from the full ExecutionResult if requested
-    let meta = if store_meta {
-        let meta_json = serde_json::json!({
-            "exit_code": result.exit_code,
-            "status": result.status,
-            "output_integrity": result.output_integrity,
-            "cpu_time": result.cpu_time,
-            "wall_time": result.wall_time,
-            "memory_peak_bytes": result.memory_peak,
-            "signal": result.signal,
-            "success": result.success,
-            "error_message": result.error_message,
-            "language": language,
-            "box_id": box_id,
-        });
-        Some(crate::types::compress_meta(&meta_json.to_string()))
-    } else {
-        None
-    };
 
     let output = ExecutionOutput {
         verdict,
+        exit_code: result.exit_code,
         stdout: result.stdout,
         stderr: result.stderr,
-        exit_code: result.exit_code,
-        cpu_time_ms,
-        wall_time_ms,
-        memory_kb,
         signal: result.signal,
         error_message: result.error_message,
-        meta,
+        cpu_time: result.cpu_time,
+        wall_time: result.wall_time,
+        memory_peak: (result.memory_peak / 1024) as i64,
     };
 
-    // Explicit cleanup to avoid cgroup/dir accumulation
     let _ = isolate.cleanup();
 
     Ok(output)
+}
+
+pub fn spawn_reaper(
+    db: Arc<dyn Database>,
+    interval: Duration,
+    timeout: Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        info!(
+            interval_secs = interval.as_secs(),
+            timeout_secs = timeout.as_secs(),
+            "reaper started"
+        );
+        loop {
+            tokio::time::sleep(interval).await;
+            match db.reap_stale(timeout).await {
+                Ok(0) => {}
+                Ok(n) => info!(count = n, "reaped stale submissions"),
+                Err(e) => warn!(error = %e, "reaper error"),
+            }
+        }
+    })
 }

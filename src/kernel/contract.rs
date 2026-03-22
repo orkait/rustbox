@@ -1,8 +1,3 @@
-//! Kernel v2 enforcement contract.
-//!
-//! These requirements define what the kernel layer must guarantee before the
-//! kernel is considered production-ready.
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnforcementMode {
     Strict,
@@ -19,6 +14,7 @@ pub enum KernelDomain {
     Signal,
     Cleanup,
     Evidence,
+    Seccomp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +40,7 @@ pub const REQUIRED_STAGE_ORDER: &[KernelDomain] = &[
     KernelDomain::Signal,
     KernelDomain::Cleanup,
     KernelDomain::Evidence,
+    KernelDomain::Seccomp,
 ];
 
 pub const KERNEL_REQUIREMENTS: &[KernelRequirement] = &[

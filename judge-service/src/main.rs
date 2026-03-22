@@ -1,77 +1,84 @@
-mod api;
-mod config;
-mod db;
-mod queue;
-mod types;
-mod worker;
+use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderValue, Method};
-use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
-#[derive(Clone)]
-pub struct AppState {
-    pub db: sqlx::PgPool,
-    pub redis: redis::aio::MultiplexedConnection,
-    pub worker_count: usize,
-    pub max_queue_size: usize,
-    pub api_key: Option<String>,
-}
+use judge_service::database::Database;
+use judge_service::job_queue::JobQueue;
+use judge_service::AppState;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let cfg = config::ServiceConfig::from_env();
+    let cfg = judge_service::config::ServiceConfig::from_env();
     info!(
         port = cfg.port,
         workers = cfg.workers,
+        node_id = %cfg.node_id,
+        database_url = %cfg.database_url,
         "starting judge-service"
     );
 
-    // Connect to Postgres
-    let pool = PgPoolOptions::new()
-        .max_connections(cfg.workers as u32 + 5)
-        .connect(&cfg.database_url)
-        .await
-        .expect("failed to connect to postgres");
-
-    // Run migrations
-    db::run_migrations(&pool)
-        .await
-        .expect("failed to run migrations");
+    let db: Arc<dyn Database> = Arc::from(judge_service::database::connect(&cfg.database_url).await?);
     info!("database ready");
 
-    // Connect to Redis
-    let redis_client =
-        redis::Client::open(cfg.redis_url.as_str()).expect("failed to create redis client");
+    let is_postgres = cfg.database_url.starts_with("postgres://")
+        || cfg.database_url.starts_with("postgresql://");
 
-    let redis_con = redis_client
-        .get_multiplexed_async_connection()
-        .await
-        .expect("failed to connect to redis");
-    info!("redis ready");
+    let (queue, _worker_handles) = if is_postgres {
+        let pg_db = Arc::new(
+            judge_service::database::postgres::PgDatabase::connect(&cfg.database_url).await?,
+        );
+        let queue = Arc::new(JobQueue::postgres());
+        let handles = judge_service::worker::spawn_pg_workers(
+            cfg.workers,
+            db.clone(),
+            pg_db,
+            cfg.node_id.clone(),
+            cfg.webhook_timeout_secs,
+        );
+        info!(count = cfg.workers, mode = "postgres", "worker pool started");
+        (queue, handles)
+    } else {
+        let queue = Arc::new(JobQueue::channel(cfg.queue_size));
+        let handles = judge_service::worker::spawn_channel_workers(
+            cfg.workers,
+            db.clone(),
+            queue.clone(),
+            cfg.node_id.clone(),
+            cfg.webhook_timeout_secs,
+        );
+        info!(count = cfg.workers, mode = "channel", "worker pool started");
+        (queue, handles)
+    };
 
-    // Spawn worker pool
-    let store_meta = cfg.store_meta;
-    let _workers = worker::spawn_workers(cfg.workers, pool.clone(), redis_client, store_meta);
-    info!(count = cfg.workers, store_meta, "worker pool started");
-
-    // Build HTTP server
-    let api_key = std::env::var("RUSTBOX_API_KEY").ok().filter(|k| !k.is_empty());
-    if api_key.is_some() {
-        info!("API key authentication enabled");
-    }
+    let _reaper = judge_service::worker::spawn_reaper(
+        db.clone(),
+        Duration::from_secs(cfg.reaper_interval_secs),
+        Duration::from_secs(cfg.stale_timeout_secs),
+    );
 
     let state = AppState {
-        db: pool,
-        redis: redis_con,
+        db,
+        queue,
         worker_count: cfg.workers,
-        max_queue_size: cfg.queue_size,
-        api_key,
+        api_key: cfg.api_key,
+        node_id: cfg.node_id,
+        allow_localhost_webhooks: cfg.allow_localhost_webhooks,
+        max_code_bytes: cfg.max_code_bytes,
+        max_stdin_bytes: cfg.max_stdin_bytes,
+        sync_wait_timeout_secs: cfg.sync_wait_timeout_secs,
+        sync_poll_interval_ms: cfg.sync_poll_interval_ms,
+        webhook_timeout_secs: cfg.webhook_timeout_secs,
     };
+
+    if state.api_key.is_some() {
+        info!("API key authentication enabled");
+    }
 
     let cors_origin = std::env::var("RUSTBOX_CORS_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
@@ -81,17 +88,16 @@ async fn main() {
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE]);
 
-    let app = api::router()
+    let app = judge_service::api::router()
         .layer(cors)
-        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB max request body
+        .layer(DefaultBodyLimit::max(1024 * 1024))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", cfg.port);
     info!(%addr, "listening");
 
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .expect("failed to bind");
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app).await?;
 
-    axum::serve(listener, app).await.expect("server error");
+    Ok(())
 }

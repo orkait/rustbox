@@ -1,10 +1,3 @@
-/// File Descriptor Closure Hardening
-/// Implements P1-FD-001: FD Closure Hardening (close_range + fallback)
-///
-/// Per plan.md Section 12: Output, FD, and Environment Hygiene
-/// - Prefer close_range
-/// - Fallback to iterating /proc/self/fd
-/// - No inherited unexpected FDs in strict mode
 use crate::config::types::{IsolateError, Result};
 use crate::utils::fork_safe_log::{fs_info, fs_info_parts, fs_warn_parts, itoa_buf, itoa_i32};
 use std::fs;
@@ -12,23 +5,18 @@ use std::fs;
 #[cfg(unix)]
 use nix::unistd::close;
 
-/// Close all file descriptors except stdin, stdout, stderr
-/// Per plan.md: Use close_range when available, fallback to /proc/self/fd iteration
 pub fn close_inherited_fds(strict_mode: bool) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
-        // Try close_range first (Linux 5.9+)
         if try_close_range() {
             fs_info("Closed inherited FDs using close_range");
             return Ok(());
         }
     }
 
-    // Fallback to /proc/self/fd iteration
     close_fds_via_proc(strict_mode)
 }
 
-/// Try to use close_range syscall
 #[cfg(target_os = "linux")]
 fn try_close_range() -> bool {
     use std::os::raw::c_int;
@@ -41,12 +29,11 @@ fn try_close_range() -> bool {
     compile_error!("SYS_CLOSE_RANGE not defined for this architecture");
     const CLOSE_RANGE_UNSHARE: c_int = 1 << 1;
 
-    // Close all FDs from 3 onwards (keep 0, 1, 2)
     let result = unsafe {
         libc::syscall(
             SYS_CLOSE_RANGE,
             3 as c_int,
-            !0 as c_int, // Max FD
+            !0 as c_int,
             CLOSE_RANGE_UNSHARE,
         )
     };
@@ -54,7 +41,6 @@ fn try_close_range() -> bool {
     result == 0
 }
 
-/// Close FDs by iterating /proc/self/fd
 fn close_fds_via_proc(strict_mode: bool) -> Result<()> {
     let fd_dir = "/proc/self/fd";
 
@@ -75,13 +61,10 @@ fn close_fds_via_proc(strict_mode: bool) -> Result<()> {
     for entry in entries.flatten() {
         if let Ok(file_name) = entry.file_name().into_string() {
             if let Ok(fd) = file_name.parse::<i32>() {
-                // Keep stdin (0), stdout (1), stderr (2)
-                // Also keep the FD we're using to read /proc/self/fd
                 if fd > 2 {
                     #[cfg(unix)]
                     {
                         if let Err(e) = close(fd) {
-                            // Ignore EBADF (already closed)
                             if e != nix::errno::Errno::EBADF {
                                 failed_closes.push((fd, e));
                             }
@@ -114,7 +97,6 @@ fn close_fds_via_proc(strict_mode: bool) -> Result<()> {
     Ok(())
 }
 
-/// Get list of open file descriptors
 pub fn get_open_fds() -> Result<Vec<i32>> {
     let fd_dir = "/proc/self/fd";
 
@@ -145,16 +127,14 @@ mod tests {
         assert!(fds.is_ok());
 
         let fds = fds.unwrap();
-        // Should at least have stdin, stdout, stderr
         assert!(fds.len() >= 3);
-        assert!(fds.contains(&0)); // stdin
-        assert!(fds.contains(&1)); // stdout
-        assert!(fds.contains(&2)); // stderr
+        assert!(fds.contains(&0));
+        assert!(fds.contains(&1));
+        assert!(fds.contains(&2));
     }
 
     #[test]
     fn test_close_inherited_fds_permissive() {
-        // In permissive mode, should not fail
         let result = close_inherited_fds(false);
         assert!(result.is_ok());
     }

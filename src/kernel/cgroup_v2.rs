@@ -1,5 +1,3 @@
-//! cgroup v2 (unified hierarchy) backend implementation.
-
 use crate::config::types::{CgroupEvidence, IsolateError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,7 +19,76 @@ pub struct CgroupV2 {
 
 impl CgroupV2 {
     pub fn new(instance_id: &str, strict_mode: bool) -> Result<Self> {
-        Self::with_base_path("/sys/fs/cgroup/rustbox", instance_id, strict_mode)
+        let base = Self::detect_cgroup_base()?;
+        Self::with_base_path(&base, instance_id, strict_mode)
+    }
+
+    fn detect_cgroup_base() -> Result<String> {
+
+        let candidates = Self::cgroup_base_candidates();
+
+        for (base, parent_subtree_control) in &candidates {
+            if fs::create_dir_all(base).is_err() {
+                continue;
+            }
+
+            if let Err(e) = fs::write(parent_subtree_control, "+memory +pids +cpu") {
+                log::debug!(
+                    "could not enable controllers at {}: {} (may already be enabled)",
+                    parent_subtree_control, e
+                );
+            }
+
+            let rustbox_subtree = format!("{}/cgroup.subtree_control", base);
+            if Path::new(&rustbox_subtree).exists() {
+                if let Err(e) = fs::write(&rustbox_subtree, "+memory +pids +cpu") {
+                    log::debug!("could not enable controllers at {}: {}", rustbox_subtree, e);
+                }
+            }
+
+            let probe = format!("{}/probe_{}", base, std::process::id());
+            if fs::create_dir(&probe).is_ok() {
+                let has_memory = Path::new(&probe).join("memory.max").exists();
+                let _ = fs::remove_dir(&probe);
+                if has_memory {
+                    log::info!("cgroup v2 base: {}", base);
+                    return Ok(base.clone());
+                }
+                log::debug!("probe at {} has no memory.max - controllers not delegated", base);
+            }
+        }
+
+        Err(IsolateError::Cgroup(
+            "cannot find writable cgroup v2 mount with memory+pids controllers".to_string(),
+        ))
+    }
+
+    fn cgroup_base_candidates() -> Vec<(String, String)> {
+        let mut candidates = vec![
+            (
+                "/sys/fs/cgroup/rustbox".to_string(),
+                "/sys/fs/cgroup/cgroup.subtree_control".to_string(),
+            ),
+        ];
+
+        if let Ok(content) = fs::read_to_string("/proc/self/cgroup") {
+            let self_path = content
+                .lines()
+                .find(|l| l.starts_with("0::"))
+                .and_then(|l| l.strip_prefix("0::"))
+                .unwrap_or("/")
+                .trim()
+                .to_string();
+
+            if self_path != "/" {
+                candidates.push((
+                    format!("/sys/fs/cgroup{}/rustbox", self_path),
+                    format!("/sys/fs/cgroup{}/cgroup.subtree_control", self_path),
+                ));
+            }
+        }
+
+        candidates
     }
 
     pub fn with_base_path(base_path: &str, instance_id: &str, strict_mode: bool) -> Result<Self> {
@@ -89,17 +156,53 @@ impl CgroupV2 {
     }
 
     fn collect_optional_metric<T>(&self, name: &str, result: Result<T>) -> Result<Option<T>> {
+        self.try_permissive(name, result.map(Some), None)
+    }
+
+    fn try_permissive<T>(&self, name: &str, result: Result<T>, fallback: T) -> Result<T> {
         match result {
-            Ok(value) => Ok(Some(value)),
+            Ok(value) => Ok(value),
             Err(err) if self.strict_mode => Err(IsolateError::Cgroup(format!(
                 "failed collecting {} in strict mode: {}",
                 name, err
             ))),
             Err(err) => {
                 log::warn!("failed collecting {} in permissive mode: {}", name, err);
-                Ok(None)
+                Ok(fallback)
             }
         }
+    }
+
+    fn write_permissive(&self, path: &Path, value: &str, name: &str) -> Result<()> {
+        if let Err(err) = fs::write(path, value) {
+            if self.strict_mode {
+                return Err(IsolateError::Cgroup(format!("failed to set {}: {}", name, err)));
+            }
+            log::warn!("failed to set {} in permissive mode: {}", name, err);
+        }
+        Ok(())
+    }
+
+    fn read_cgroup_field(path: &Path, file_name: &str, field: &str) -> Result<u64> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| IsolateError::Cgroup(format!("failed to read {}: {}", file_name, e)))?;
+        for line in content.lines() {
+            let mut parts = line.split_whitespace();
+            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                if key == field {
+                    return value.parse::<u64>().map_err(|e| {
+                        IsolateError::Cgroup(format!(
+                            "failed to parse {} {} value: {}",
+                            file_name, field, e
+                        ))
+                    });
+                }
+            }
+        }
+        Err(IsolateError::Cgroup(format!(
+            "{} missing {}",
+            file_name, field
+        )))
     }
 
     fn convert_optional_u32_limit(&self, name: &str, value: Option<u64>) -> Result<Option<u32>> {
@@ -120,23 +223,7 @@ impl CgroupV2 {
 
     fn read_cpu_usage_internal(&self, instance_id: &str) -> Result<u64> {
         let path = self.instance_path(instance_id).join("cpu.stat");
-        let content = fs::read_to_string(&path)
-            .map_err(|e| IsolateError::Cgroup(format!("failed to read cpu.stat: {}", e)))?;
-
-        for line in content.lines() {
-            let mut parts = line.split_whitespace();
-            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                if key == "usage_usec" {
-                    return value.parse::<u64>().map_err(|e| {
-                        IsolateError::Cgroup(format!("failed to parse cpu.stat usage_usec: {}", e))
-                    });
-                }
-            }
-        }
-
-        Err(IsolateError::Cgroup(
-            "cpu.stat missing usage_usec".to_string(),
-        ))
+        Self::read_cgroup_field(&path, "cpu.stat", "usage_usec")
     }
 
     fn read_process_count_internal(&self, instance_id: &str) -> Result<u32> {
@@ -175,39 +262,9 @@ impl CgroupV2 {
         if !events_path.exists() {
             return Ok((0, 0));
         }
-
-        let content = fs::read_to_string(&events_path)
-            .map_err(|e| IsolateError::Cgroup(format!("failed to read memory.events: {}", e)))?;
-
-        let mut oom_count = 0;
-        let mut oom_kill_count = 0;
-
-        for line in content.lines() {
-            let mut parts = line.split_whitespace();
-            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                match key {
-                    "oom" => {
-                        oom_count = value.parse::<u64>().map_err(|e| {
-                            IsolateError::Cgroup(format!(
-                                "failed to parse memory.events oom value: {}",
-                                e
-                            ))
-                        })?;
-                    }
-                    "oom_kill" => {
-                        oom_kill_count = value.parse::<u64>().map_err(|e| {
-                            IsolateError::Cgroup(format!(
-                                "failed to parse memory.events oom_kill value: {}",
-                                e
-                            ))
-                        })?;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        Ok((oom_count, oom_kill_count))
+        let oom = Self::read_cgroup_field(&events_path, "memory.events", "oom")?;
+        let oom_kill = Self::read_cgroup_field(&events_path, "memory.events", "oom_kill")?;
+        Ok((oom, oom_kill))
     }
 }
 
@@ -224,15 +281,7 @@ impl CgroupBackend for CgroupV2 {
 
         let oom_group_path = path.join("memory.oom.group");
         if oom_group_path.exists() {
-            if let Err(err) = fs::write(&oom_group_path, "1") {
-                if self.strict_mode {
-                    return Err(IsolateError::Cgroup(format!(
-                        "failed to set memory.oom.group: {}",
-                        err
-                    )));
-                }
-                log::warn!("failed to set memory.oom.group in permissive mode: {}", err);
-            }
+            self.write_permissive(&oom_group_path, "1", "memory.oom.group")?;
         }
 
         Ok(())
@@ -241,15 +290,45 @@ impl CgroupBackend for CgroupV2 {
     fn remove(&self, instance_id: &str) -> Result<()> {
         let path = self.instance_path(instance_id);
 
-        if path.exists() {
-            let kill_path = path.join("cgroup.kill");
-            if kill_path.exists() {
-                let _ = fs::write(&kill_path, "1");
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
+        if !path.exists() {
+            return Ok(());
+        }
 
-            fs::remove_dir(&path)
-                .map_err(|e| IsolateError::Cgroup(format!("failed to remove cgroup: {}", e)))?;
+        let kill_path = path.join("cgroup.kill");
+        if kill_path.exists() {
+            let _ = fs::write(&kill_path, "1");
+        }
+
+        for attempt in 0..20 {
+            match fs::remove_dir(&path) {
+                Ok(()) => return Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                    if attempt == 5 && kill_path.exists() {
+                        let _ = fs::write(&kill_path, "1");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(e) => {
+                    return Err(IsolateError::Cgroup(format!(
+                        "failed to remove cgroup v2 instance '{}': {}",
+                        instance_id, e
+                    )));
+                }
+            }
+        }
+
+        if path.exists() {
+            if self.strict_mode {
+                return Err(IsolateError::Cgroup(format!(
+                    "timed out removing cgroup v2 instance '{}': directory still not empty after 500ms",
+                    instance_id
+                )));
+            }
+            log::warn!(
+                "cgroup v2 remove timed out for '{}', continuing in permissive mode",
+                instance_id
+            );
         }
 
         Ok(())
@@ -276,18 +355,7 @@ impl CgroupBackend for CgroupV2 {
         fs::write(path.join("memory.max"), limit_bytes.to_string())
             .map_err(|e| IsolateError::Cgroup(format!("failed to set memory.max: {}", e)))?;
 
-        if let Err(err) = fs::write(path.join("memory.swap.max"), "0") {
-            if self.strict_mode {
-                return Err(IsolateError::Cgroup(format!(
-                    "failed to set memory.swap.max=0: {}",
-                    err
-                )));
-            }
-            log::warn!(
-                "failed to set memory.swap.max=0 in permissive mode: {}",
-                err
-            );
-        }
+        self.write_permissive(&path.join("memory.swap.max"), "0", "memory.swap.max=0")?;
 
         Ok(())
     }
@@ -309,15 +377,7 @@ impl CgroupBackend for CgroupV2 {
             .map_err(|e| IsolateError::Cgroup(format!("failed to set cpu.max: {}", e)))?;
 
         let weight = Self::cpu_weight_from_shares(limit_usec).to_string();
-        if let Err(err) = fs::write(path.join("cpu.weight"), weight) {
-            if self.strict_mode {
-                return Err(IsolateError::Cgroup(format!(
-                    "failed to set cpu.weight: {}",
-                    err
-                )));
-            }
-            log::warn!("failed to set cpu.weight in permissive mode: {}", err);
-        }
+        self.write_permissive(&path.join("cpu.weight"), &weight, "cpu.weight")?;
 
         Ok(())
     }
@@ -352,42 +412,23 @@ impl CgroupBackend for CgroupV2 {
     fn collect_evidence(&self, instance_id: &str) -> Result<CgroupEvidence> {
         let path = self.instance_path(instance_id);
 
-        let memory_limit = match Self::read_optional_limit(&path.join("memory.max"), "memory.max") {
-            Ok(value) => value,
-            Err(err) if self.strict_mode => return Err(err),
-            Err(err) => {
-                log::warn!(
-                    "failed collecting memory.max limit in permissive mode: {}",
-                    err
-                );
-                None
-            }
-        };
-        let process_limit_raw = match Self::read_optional_limit(&path.join("pids.max"), "pids.max")
-        {
-            Ok(value) => value,
-            Err(err) if self.strict_mode => return Err(err),
-            Err(err) => {
-                log::warn!(
-                    "failed collecting pids.max limit in permissive mode: {}",
-                    err
-                );
-                None
-            }
-        };
+        let memory_limit = self.try_permissive(
+            "memory.max",
+            Self::read_optional_limit(&path.join("memory.max"), "memory.max"),
+            None,
+        )?;
+        let process_limit_raw = self.try_permissive(
+            "pids.max",
+            Self::read_optional_limit(&path.join("pids.max"), "pids.max"),
+            None,
+        )?;
         let process_limit = self.convert_optional_u32_limit("pids.max", process_limit_raw)?;
 
-        let (oom_events, oom_kill_events) = match self.check_oom_events_internal(instance_id) {
-            Ok(values) => values,
-            Err(err) if self.strict_mode => return Err(err),
-            Err(err) => {
-                log::warn!(
-                    "failed collecting memory.events in permissive mode: {}",
-                    err
-                );
-                (0, 0)
-            }
-        };
+        let (oom_events, oom_kill_events) = self.try_permissive(
+            "memory.events",
+            self.check_oom_events_internal(instance_id),
+            (0, 0),
+        )?;
         let memory_peak = self.collect_optional_metric(
             "memory.peak/memory.current",
             self.get_peak_memory_internal(instance_id),

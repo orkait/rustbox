@@ -1,11 +1,9 @@
 use crate::config::types::{IsolateConfig, IsolateError, Result};
-/// Configuration loading from config.json
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
-/// Language-specific configuration from config.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanguageConfig {
     pub memory: MemoryConfig,
@@ -52,7 +50,6 @@ pub struct CompilationConfig {
     pub max_compilation_memory_mb: Option<u64>,
 }
 
-/// Full config.json structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RustBoxConfig {
     pub isolate: IsolateGlobalConfig,
@@ -79,7 +76,6 @@ pub struct SecurityConfig {
 }
 
 impl RustBoxConfig {
-    /// Load configuration from config.json file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let config_content = std::fs::read_to_string(path)
             .map_err(|e| IsolateError::Config(format!("Failed to read config file: {}", e)))?;
@@ -90,15 +86,10 @@ impl RustBoxConfig {
         Ok(config)
     }
 
-    /// Load configuration from the project root.
-    /// Binaries:     `<root>/target/{debug,release}/<name>`      → 3 levels up
-    /// Test binaries: `<root>/target/{debug,release}/deps/<name>` → 4 levels up
-    /// Fallback: /etc/rustbox/config.json (Docker/production).
     pub fn load_default() -> Result<Self> {
         let exe = std::env::current_exe().ok();
         let mut candidates = Vec::new();
 
-        // Walk up from exe directory, checking each level for config.json
         if let Some(ref exe_path) = exe {
             let mut dir = exe_path.parent();
             for _ in 0..5 {
@@ -109,8 +100,6 @@ impl RustBoxConfig {
                         {
                             use std::os::unix::fs::MetadataExt;
                             if let Ok(meta) = std::fs::metadata(&candidate) {
-                                // In strict/root context, reject world-writable config
-                                // Skip check on WSL mounts (/mnt/) where everything is 0777
                                 let is_wsl_mount = candidate.to_string_lossy().starts_with("/mnt/");
                                 if unsafe { libc::geteuid() } == 0
                                     && (meta.mode() & 0o002) != 0
@@ -146,60 +135,41 @@ impl RustBoxConfig {
         ))
     }
 
-    /// Get language-specific configuration
     pub fn get_language_config(&self, language: &str) -> Option<&LanguageConfig> {
         self.languages.get(&language.to_lowercase())
     }
 }
 
 impl IsolateConfig {
-    /// Create IsolateConfig with language-specific defaults from config.json
     pub fn with_language_defaults(language: &str, instance_id: String) -> Result<Self> {
         let mut config = Self {
             instance_id,
             ..Self::default()
         };
 
-        // Derive per-box UID/GID from instance_id (IOI Isolate convention: 60000 + box_id).
-        if let Some(box_id_str) = config.instance_id.strip_prefix("rustbox/") {
-            if let Ok(box_id) = box_id_str.parse::<u32>() {
-                let uid = Self::uid_for_box(box_id);
-                config.uid = Some(uid);
-                config.gid = Some(uid);
-            }
-        }
 
-        // Try to load config.json and apply language-specific settings
         if let Ok(rustbox_config) = RustBoxConfig::load_default() {
             if let Some(lang_config) = rustbox_config.get_language_config(language) {
-                // Apply memory limits
                 config.memory_limit = Some(lang_config.memory.limit_mb * 1024 * 1024);
 
-                // Apply time limits - this is the key fix!
                 config.cpu_time_limit =
                     Some(Duration::from_secs(lang_config.time.cpu_time_seconds));
                 config.wall_time_limit =
                     Some(Duration::from_secs(lang_config.time.wall_time_seconds));
                 config.time_limit = Some(Duration::from_secs(lang_config.time.cpu_time_seconds));
 
-                // Apply process limits
                 config.process_limit = Some(lang_config.processes.max_processes);
 
-                // Apply file system limits
                 config.file_size_limit = Some(lang_config.filesystem.max_file_size_kb * 1024);
                 config.fd_limit = Some(lang_config.filesystem.max_open_files as u64);
 
-                // Per-language virtual address space limit (RLIMIT_AS).
-                // Java 17+ needs >=4GB for compressed class pointers.
-                // Bun/JavaScriptCore JIT needs >=2GB for code memory.
                 config.virtual_memory_limit = Some(match language.to_lowercase().as_str() {
-                    "java" => 4 * 1024 * 1024 * 1024_u64,         // 4 GB (compressed class ptrs)
-                    "typescript" => 2 * 1024 * 1024 * 1024_u64,  // 2 GB (Bun/JSC JIT)
-                    "javascript" => 512 * 1024 * 1024_u64,        // 512 MB (QuickJS is tiny)
-                    _ => 1024 * 1024 * 1024_u64,                  // 1 GB for python, cpp
+                    "java" => 4 * 1024 * 1024 * 1024_u64,
+                    "typescript" => 2 * 1024 * 1024 * 1024_u64,
+                    "javascript" => 512 * 1024 * 1024_u64,
+                    _ => 1024 * 1024 * 1024_u64,
                 });
 
-                // Apply language-specific environment variables
                 for (key, value) in &lang_config.environment {
                     config.environment.push((key.clone(), value.clone()));
                 }
@@ -230,110 +200,37 @@ impl IsolateConfig {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_with_language_defaults_loads_java_environment() {
-        // This test requires config.json to be present in the working directory.
-        // When run from the repo root via `cargo test`, config.json is found at ./config.json.
-        let config = IsolateConfig::with_language_defaults("java", "test-java-env".to_string())
-            .expect("with_language_defaults should succeed when config.json is present");
+    fn load(lang: &str) -> IsolateConfig {
+        IsolateConfig::with_language_defaults(lang, format!("test-{}", lang)).unwrap()
+    }
 
-        let env_map: std::collections::HashMap<&str, &str> = config
-            .environment
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-
-        assert!(
-            env_map.contains_key("JAVA_TOOL_OPTIONS"),
-            "JAVA_TOOL_OPTIONS must be loaded from config.json; got env keys: {:?}",
-            env_map.keys().collect::<Vec<_>>()
-        );
-        assert!(
-            env_map.contains_key("JAVA_HOME"),
-            "JAVA_HOME must be loaded from config.json"
-        );
-        assert!(
-            env_map.contains_key("CLASSPATH"),
-            "CLASSPATH must be loaded from config.json"
-        );
+    fn env_keys(config: &IsolateConfig) -> std::collections::HashSet<String> {
+        config.environment.iter().map(|(k, _)| k.clone()).collect()
     }
 
     #[test]
-    fn test_with_language_defaults_loads_python_environment() {
-        let config = IsolateConfig::with_language_defaults("python", "test-py-env".to_string())
-            .expect("with_language_defaults should succeed");
+    fn language_environments_loaded() {
+        let java_env = env_keys(&load("java"));
+        assert!(java_env.contains("JAVA_TOOL_OPTIONS"));
+        assert!(java_env.contains("JAVA_HOME"));
+        assert!(java_env.contains("CLASSPATH"));
 
-        let env_map: std::collections::HashMap<&str, &str> = config
-            .environment
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-
-        assert!(
-            env_map.contains_key("PYTHONDONTWRITEBYTECODE"),
-            "PYTHONDONTWRITEBYTECODE must be loaded from config.json; got env keys: {:?}",
-            env_map.keys().collect::<Vec<_>>()
-        );
-        assert!(
-            env_map.contains_key("PYTHONUNBUFFERED"),
-            "PYTHONUNBUFFERED must be loaded from config.json"
-        );
+        let py_env = env_keys(&load("python"));
+        assert!(py_env.contains("PYTHONDONTWRITEBYTECODE"));
+        assert!(py_env.contains("PYTHONUNBUFFERED"));
     }
 
     #[test]
-    fn test_uid_for_box_zero() {
-        assert_eq!(IsolateConfig::uid_for_box(0), 60000);
+    fn virtual_memory_limits_per_language() {
+        assert_eq!(load("java").virtual_memory_limit, Some(4 * 1024 * 1024 * 1024));
+        assert_eq!(load("python").virtual_memory_limit, Some(1024 * 1024 * 1024));
+        assert_eq!(load("cpp").virtual_memory_limit, Some(1024 * 1024 * 1024));
     }
 
     #[test]
-    fn test_uid_for_box_max() {
-        assert_eq!(IsolateConfig::uid_for_box(999), 60999);
-    }
-
-    #[test]
-    fn test_uid_for_box_overflow_fallback() {
-        assert_eq!(IsolateConfig::uid_for_box(1000), 65534);
-    }
-
-    #[test]
-    fn test_java_gets_4gb_virtual_memory_limit() {
-        let config = IsolateConfig::with_language_defaults("java", "test-java-vml".to_string())
-            .expect("with_language_defaults should succeed");
-        assert_eq!(
-            config.virtual_memory_limit,
-            Some(4 * 1024 * 1024 * 1024_u64),
-            "Java must get 4 GB RLIMIT_AS for compressed class pointers"
-        );
-    }
-
-    #[test]
-    fn test_python_gets_1gb_virtual_memory_limit() {
-        let config = IsolateConfig::with_language_defaults("python", "test-py-vml".to_string())
-            .expect("with_language_defaults should succeed");
-        assert_eq!(
-            config.virtual_memory_limit,
-            Some(1024 * 1024 * 1024_u64),
-            "Python must get 1 GB RLIMIT_AS"
-        );
-    }
-
-    #[test]
-    fn test_cpp_gets_1gb_virtual_memory_limit() {
-        let config = IsolateConfig::with_language_defaults("cpp", "test-cpp-vml".to_string())
-            .expect("with_language_defaults should succeed");
-        assert_eq!(
-            config.virtual_memory_limit,
-            Some(1024 * 1024 * 1024_u64),
-            "C++ must get 1 GB RLIMIT_AS"
-        );
-    }
-
-    #[test]
-    fn test_with_language_defaults_derives_per_box_uid() {
-        let config =
-            IsolateConfig::with_language_defaults("python", "rustbox/5".to_string())
-                .expect("with_language_defaults should succeed");
-        assert_eq!(config.uid, Some(60005), "UID should be 60000 + box_id (5)");
-        assert_eq!(config.gid, Some(60005), "GID should match UID");
+    fn uid_gid_deferred_to_isolate() {
+        let c = load("python");
+        assert_eq!(c.uid, Some(65534));
+        assert_eq!(c.gid, Some(65534));
     }
 }

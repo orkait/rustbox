@@ -15,17 +15,6 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=$REDIS_PASSWORD redis-cli ping"]
-      interval: 2s
-      timeout: 5s
-      retries: 5
-
   judge-service:
     build:
       context: .
@@ -43,12 +32,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     environment:
       RUSTBOX_WORKERS: 2
       RUSTBOX_DATABASE_URL: postgres://${POSTGRES_USER:-rustbox}:${POSTGRES_PASSWORD:?}@postgres/${POSTGRES_DB:-rustbox}
-      RUSTBOX_REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379
+      RUSTBOX_NODE_ID: ${HOSTNAME:-node-1}
       RUSTBOX_PORT: 8080
       RUST_LOG: info
     deploy:

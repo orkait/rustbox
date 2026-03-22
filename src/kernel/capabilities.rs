@@ -12,7 +12,6 @@ const LINUX_CAPABILITY_VERSION_3: u32 = 0x20080522;
 const CAP_ZERO_HEX: &str = "0000000000000000";
 const REQUIRED_CAP_LINES: [&str; 5] = ["CapInh:", "CapPrm:", "CapEff:", "CapBnd:", "CapAmb:"];
 
-/// Capability number newtype for type-safe range checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CapabilityNumber(u32);
 
@@ -32,7 +31,6 @@ impl CapabilityNumber {
     }
 }
 
-/// Drop capabilities from bounding, ambient, and process sets.
 pub fn drop_all_capabilities() -> Result<()> {
     drop_bounding_capabilities()?;
     drop_ambient_capabilities()?;
@@ -40,23 +38,17 @@ pub fn drop_all_capabilities() -> Result<()> {
     Ok(())
 }
 
-/// Drop only bounding and ambient sets.
-/// Must be called while still effective root (before setresuid).
-/// PR_CAPBSET_DROP requires CAP_SETPCAP in the effective set.
 pub fn drop_bounding_and_ambient() -> Result<()> {
     drop_bounding_capabilities()?;
     drop_ambient_capabilities()?;
     Ok(())
 }
 
-/// Strict-aware capability drop for the lock_privileges step.
-/// Bounding/ambient are already cleared; only zero the process sets and verify.
 pub fn drop_process_caps_and_verify(strict_mode: bool) -> Result<()> {
     drop_process_capabilities()?;
     verify_capabilities_zeroed(strict_mode)
 }
 
-/// Strict-aware capability drop used by the pre-exec type-state chain.
 pub fn drop_all_capabilities_strict(strict_mode: bool) -> Result<()> {
     drop_all_capabilities()?;
     verify_capabilities_zeroed(strict_mode)
@@ -69,7 +61,6 @@ fn drop_bounding_capabilities() -> Result<()> {
         let rc = unsafe { libc::prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) };
         if rc != 0 {
             let err = std::io::Error::last_os_error();
-            // EINVAL means the capability doesn't exist on this kernel — not a failure.
             if err.raw_os_error() != Some(libc::EINVAL) {
                 failures.push((cap, err));
             }
@@ -93,7 +84,6 @@ fn drop_ambient_capabilities() -> Result<()> {
     let rc = unsafe { libc::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        // EINVAL means ambient capabilities are not supported by this kernel — not a failure.
         if err.raw_os_error() == Some(libc::EINVAL) {
             let mut ebuf = [0u8; 20];
             let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
@@ -203,10 +193,6 @@ fn verify_capabilities_zeroed(strict_mode: bool) -> Result<()> {
         non_zero.join(", ")
     );
 
-    // When running as root (euid 0), capability verification is fatal in ALL modes.
-    // Retained capabilities allow privilege escalation regardless of mode.
-    // When running as non-root, capset EPERM is expected (CAP_SETPCAP required),
-    // so we only enforce in strict mode where root is a prerequisite.
     let is_root = unsafe { libc::geteuid() } == 0;
     if strict_mode || is_root {
         Err(IsolateError::Privilege(message))
@@ -218,7 +204,6 @@ fn verify_capabilities_zeroed(strict_mode: bool) -> Result<()> {
     }
 }
 
-/// Set PR_SET_NO_NEW_PRIVS=1; idempotent and irreversible.
 pub fn set_no_new_privs() -> Result<()> {
     // SAFETY: PR_SET_NO_NEW_PRIVS is a process attribute setter.
     let rc = unsafe { libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };

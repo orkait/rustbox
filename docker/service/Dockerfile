@@ -1,4 +1,4 @@
-FROM rust:1.83-bookworm AS builder
+FROM rust:1.88-bookworm AS builder
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p /var/run/rustbox /tmp/rustbox /etc/rustbox
 
 COPY --from=builder /build/target/release/judge-service /usr/local/bin/judge-service
+COPY config.json /etc/rustbox/config.json
 
 EXPOSE 8080
 

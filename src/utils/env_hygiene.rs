@@ -1,6 +1,3 @@
-/// Environment and Permission Hygiene
-/// Implements P1-HYGIENE-001: Environment and Permission Hygiene
-/// Per plan.md Section 12: Output, FD, and Environment Hygiene
 use crate::config::types::{IsolateError, Result};
 use crate::utils::fork_safe_log::{fs_info_parts, fs_warn_parts, itoa_i32};
 use std::collections::HashMap;
@@ -9,7 +6,6 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-/// Format a `u32` as octal into a stack-allocated buffer without heap allocation.
 #[inline]
 fn octal_buf(value: u32, buf: &mut [u8; 12]) -> &str {
     if value == 0 {
@@ -26,20 +22,13 @@ fn octal_buf(value: u32, buf: &mut [u8; 12]) -> &str {
     unsafe { core::str::from_utf8_unchecked(&buf[i..]) }
 }
 
-/// Environment sanitization policy
 #[derive(Debug, Clone)]
 pub struct EnvPolicy {
-    /// Sanitize dangerous LD_* variables
     pub sanitize_ld_vars: bool,
-    /// Set deterministic PATH
     pub set_deterministic_path: bool,
-    /// Set deterministic HOME
     pub set_deterministic_home: bool,
-    /// Set deterministic locale
     pub set_deterministic_locale: bool,
-    /// Set deterministic temp vars
     pub set_deterministic_temp: bool,
-    /// Strict mode (fail on errors)
     pub strict_mode: bool,
 }
 
@@ -56,38 +45,31 @@ impl Default for EnvPolicy {
     }
 }
 
-/// Permission policy for filesystem artifacts
 #[derive(Debug, Clone)]
 pub struct PermissionPolicy {
-    /// Umask for new files
     pub umask: u32,
-    /// Temp directory permissions (octal)
     pub temp_dir_perms: u32,
-    /// Work directory permissions (octal)
     pub work_dir_perms: u32,
-    /// Strict mode (fail on errors)
     pub strict_mode: bool,
 }
 
 impl Default for PermissionPolicy {
     fn default() -> Self {
         PermissionPolicy {
-            umask: 0o077,          // Owner only by default
-            temp_dir_perms: 0o700, // Owner rwx only
-            work_dir_perms: 0o755, // Owner rwx, others rx
+            umask: 0o077,
+            temp_dir_perms: 0o700,
+            work_dir_perms: 0o755,
             strict_mode: true,
         }
     }
 }
 
-/// Environment hygiene manager
 pub struct EnvHygiene {
     env_policy: EnvPolicy,
     perm_policy: PermissionPolicy,
 }
 
 impl EnvHygiene {
-    /// Create new environment hygiene manager
     pub fn new(env_policy: EnvPolicy, perm_policy: PermissionPolicy) -> Self {
         EnvHygiene {
             env_policy,
@@ -95,17 +77,13 @@ impl EnvHygiene {
         }
     }
 
-    /// Sanitize environment variables
-    /// Returns sanitized environment map
     pub fn sanitize_environment(&self) -> Result<HashMap<String, String>> {
         let mut env_map = HashMap::new();
 
-        // Collect current environment
         for (key, value) in env::vars() {
             env_map.insert(key, value);
         }
 
-        // Sanitize LD_* variables (dangerous for loader abuse)
         if self.env_policy.sanitize_ld_vars {
             let ld_vars: &[&str] = &[
                 "LD_PRELOAD",
@@ -125,7 +103,6 @@ impl EnvHygiene {
             }
         }
 
-        // Set deterministic PATH
         if self.env_policy.set_deterministic_path {
             env_map.insert(
                 "PATH".to_string(),
@@ -133,18 +110,15 @@ impl EnvHygiene {
             );
         }
 
-        // Set deterministic HOME
         if self.env_policy.set_deterministic_home {
             env_map.insert("HOME".to_string(), "/tmp/sandbox".to_string());
         }
 
-        // Set deterministic locale
         if self.env_policy.set_deterministic_locale {
             env_map.insert("LANG".to_string(), "C.UTF-8".to_string());
             env_map.insert("LC_ALL".to_string(), "C.UTF-8".to_string());
         }
 
-        // Set deterministic temp vars
         if self.env_policy.set_deterministic_temp {
             env_map.insert("TMPDIR".to_string(), "/tmp".to_string());
             env_map.insert("TEMP".to_string(), "/tmp".to_string());
@@ -154,7 +128,6 @@ impl EnvHygiene {
         Ok(env_map)
     }
 
-    /// Apply umask
     pub fn apply_umask(&self) -> Result<()> {
         #[cfg(unix)]
         {
@@ -173,7 +146,6 @@ impl EnvHygiene {
         Ok(())
     }
 
-    /// Set directory permissions
     pub fn set_directory_permissions(&self, path: &Path, is_temp: bool) -> Result<()> {
         if !path.exists() {
             if self.perm_policy.strict_mode {
@@ -224,7 +196,6 @@ impl EnvHygiene {
         Ok(())
     }
 
-    /// Get sanitized environment as Vec for exec
     pub fn get_exec_env(&self) -> Result<Vec<String>> {
         let env_map = self.sanitize_environment()?;
 
@@ -233,7 +204,7 @@ impl EnvHygiene {
             .map(|(k, v)| format!("{}={}", k, v))
             .collect();
 
-        env_vec.sort(); // Deterministic ordering
+        env_vec.sort();
         Ok(env_vec)
     }
 }
@@ -282,7 +253,6 @@ mod tests {
             .sanitize_environment()
             .expect("Failed to sanitize environment");
 
-        // Should have deterministic values
         assert_eq!(
             env_map.get("PATH"),
             Some(&"/usr/local/bin:/usr/bin:/bin".to_string())
@@ -291,7 +261,6 @@ mod tests {
         assert_eq!(env_map.get("LANG"), Some(&"C.UTF-8".to_string()));
         assert_eq!(env_map.get("TMPDIR"), Some(&"/tmp".to_string()));
 
-        // Should not have dangerous LD_* variables
         assert!(!env_map.contains_key("LD_PRELOAD"));
         assert!(!env_map.contains_key("LD_LIBRARY_PATH"));
     }
@@ -304,12 +273,10 @@ mod tests {
 
         let exec_env = hygiene.get_exec_env().expect("Failed to get exec env");
 
-        // Should be sorted
         let mut sorted = exec_env.clone();
         sorted.sort();
         assert_eq!(exec_env, sorted);
 
-        // Should contain deterministic values
         assert!(exec_env.iter().any(|s| s.starts_with("PATH=")));
         assert!(exec_env.iter().any(|s| s.starts_with("HOME=")));
     }

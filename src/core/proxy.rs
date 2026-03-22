@@ -226,9 +226,7 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
     })
 }
 
-/// Child entrypoint executed by clone()-created proxy process.
 pub fn run_proxy_main_from_fds(launch_fd: RawFd, status_fd: RawFd) -> ! {
-    // Set CLOEXEC on status_write to prevent leak into payload child
     let _ = fcntl(status_fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC));
 
     let outcome = match read_json_from_fd::<SandboxLaunchRequest>(launch_fd).and_then(|req| run_proxy(&req)) {
@@ -253,12 +251,10 @@ pub fn run_proxy_main_from_fds(launch_fd: RawFd, status_fd: RawFd) -> ! {
     std::process::exit(code);
 }
 
-/// Optional CLI path: run proxy role by explicit fds.
 pub fn run_proxy_role(launch_fd: i32, status_fd: i32) -> Result<()> {
     run_proxy_main_from_fds(launch_fd, status_fd)
 }
 
-/// Execute a command using execvp from an argv vector.
 pub fn exec_argv(argv: &[String]) -> Result<()> {
     if argv.is_empty() {
         return Err(IsolateError::Config("empty argv for exec".to_string()));

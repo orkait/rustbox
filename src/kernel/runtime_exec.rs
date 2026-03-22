@@ -44,8 +44,9 @@ const STAGE_CAPABILITIES: &str = "capability_lockdown";
 const STAGE_SIGNAL_HANDOFF: &str = "signal_handoff_verification";
 const STAGE_CLEANUP_HANDOFF: &str = "cleanup_handoff_verification";
 const STAGE_EVIDENCE: &str = "post_lock_evidence";
+const STAGE_SECCOMP: &str = "seccomp_filter";
 
-fn build_preexec_stage_plan() -> [StaticStage; 10] {
+fn build_preexec_stage_plan() -> [StaticStage; 11] {
     [
         StaticStage {
             name: STAGE_NAMESPACE_SETUP,
@@ -61,7 +62,6 @@ fn build_preexec_stage_plan() -> [StaticStage; 10] {
         },
         StaticStage {
             name: STAGE_MOUNT_ROOT_TRANSITION,
-            // Root transition runs after cgroup attach so attach happens on host-visible paths.
             domain: KernelDomain::Cgroup,
         },
         StaticStage {
@@ -87,6 +87,10 @@ fn build_preexec_stage_plan() -> [StaticStage; 10] {
         StaticStage {
             name: STAGE_EVIDENCE,
             domain: KernelDomain::Evidence,
+        },
+        StaticStage {
+            name: STAGE_SECCOMP,
+            domain: KernelDomain::Seccomp,
         },
     ]
 }
@@ -299,7 +303,6 @@ fn verify_full_capability_sets(mode: EnforcementMode) -> Result<()> {
             Err(IsolateError::Privilege(message))
         }
         EnforcementMode::Permissive => {
-            // Fork-safe: no format!(), no heap allocation for the log line.
             raw_write(b"[WARN] Kernel v2 post-lock capability verification failed: ");
             for (i, entry) in non_zero.iter().enumerate() {
                 if i > 0 {
@@ -335,7 +338,7 @@ pub fn exec_payload(req: &SandboxLaunchRequest) -> Result<()> {
 
     let sandbox = Sandbox::<FreshChild>::new(req.instance_id.clone(), req.profile.strict_mode);
     let sandbox = sandbox.setup_namespaces(
-        false, // proxy is already PID 1 in sandbox pid namespace
+        false,
         req.profile.enable_mount_namespace,
         req.profile.enable_network_namespace,
         req.profile.enable_user_namespace,
@@ -363,6 +366,17 @@ pub fn exec_payload(req: &SandboxLaunchRequest) -> Result<()> {
 
     verify_full_capability_sets(mode)?;
     mark_stage(&mut report, STAGE_EVIDENCE);
+
+    let seccomp_policy = if !req.profile.enable_seccomp {
+        crate::kernel::seccomp::SeccompPolicy::Disabled
+    } else if let Some(ref path) = req.profile.seccomp_policy_file {
+        crate::kernel::seccomp::SeccompPolicy::CustomFile(path.clone())
+    } else {
+        crate::kernel::seccomp::SeccompPolicy::BuiltinDenyList
+    };
+    crate::kernel::seccomp::install_filter(&seccomp_policy)?;
+    mark_stage(&mut report, STAGE_SECCOMP);
+
     let sandbox = sandbox.ready_for_exec();
     sandbox.exec_payload(&req.profile.command)
 }
@@ -371,6 +385,7 @@ pub fn exec_payload(req: &SandboxLaunchRequest) -> Result<()> {
 mod tests {
     use super::{
         parse_non_zero_capability_lines, validate_preexec_stage_plan, STAGE_CLEANUP_HANDOFF,
+        STAGE_SECCOMP,
     };
     use crate::kernel::EnforcementMode;
 
@@ -403,7 +418,8 @@ CapAmb:\t0000000000000000\n";
     fn preexec_contract_pipeline_is_valid() {
         let stages = validate_preexec_stage_plan(EnforcementMode::Strict)
             .expect("preexec stage contract should validate");
-        assert_eq!(stages.len(), 10);
+        assert_eq!(stages.len(), 11);
         assert!(stages.contains(&STAGE_CLEANUP_HANDOFF));
+        assert!(stages.contains(&STAGE_SECCOMP));
     }
 }

@@ -1,5 +1,3 @@
-/// Minimal security event logging for rustbox
-/// Logs command injection and path traversal attempts to a structured audit trail.
 use crate::config::types::{IsolateError, Result};
 use log::{error, info, warn};
 use serde::Serialize;
@@ -58,7 +56,6 @@ impl SecurityEvent {
     }
 }
 
-/// Security logger that writes structured JSON to an audit file
 pub struct SecurityLogger {
     audit_file: Arc<Mutex<File>>,
 }
@@ -126,7 +123,6 @@ impl SecurityLogger {
 
 static SECURITY_LOGGER: OnceLock<SecurityLogger> = OnceLock::new();
 
-/// Initialize the global security logger
 pub fn init_security_logger(audit_path: Option<PathBuf>) -> Result<()> {
     match SecurityLogger::new(audit_path.clone()) {
         Ok(logger) => {

@@ -1,15 +1,9 @@
-//! Kernel v2 cgroup backend selector with dual-stack support.
-
 use crate::config::types::{CgroupEvidence, IsolateError, Result};
 use std::path::PathBuf;
 
 use super::cgroup_v1::CgroupV1;
 use super::cgroup_v2::CgroupV2;
 
-/// Sanitize a cgroup instance identifier so it is safe for use as a directory name.
-///
-/// Replaces `/` and `..` with `_`, strips leading/trailing underscores,
-/// and falls back to `"default"` if the result is empty.
 pub(crate) fn sanitize_instance_id(instance_id: &str) -> String {
     let sanitized: String = instance_id
         .chars()
@@ -77,7 +71,6 @@ pub struct SelectedBackend {
     pub backend: Box<dyn CgroupBackend>,
 }
 
-/// Detect host cgroup layout. v2 is preferred when both appear available.
 pub fn detect_cgroup_backend() -> Option<CgroupBackendType> {
     if std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
         return Some(CgroupBackendType::V2);
@@ -151,7 +144,6 @@ pub fn select_cgroup_backend(
     }
 }
 
-/// Compatibility shim used by existing runtime call sites.
 pub fn create_cgroup_backend(
     force_v1: bool,
     strict_mode: bool,

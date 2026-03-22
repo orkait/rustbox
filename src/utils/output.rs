@@ -1,7 +1,3 @@
-/// Output Boundaries and Collector Robustness
-/// Implements P1-IO-001: Output Boundaries and Collector Robustness
-/// Implements P1-IO-002: Output Integrity Classification
-/// Per plan.md Section 12: Output, FD, and Environment Hygiene
 use crate::config::types::{OutputIntegrity, Result};
 use std::io::{BufReader, Read};
 use std::process::{ChildStderr, ChildStdout};
@@ -9,60 +5,44 @@ use std::sync::mpsc::{channel, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Output limits configuration
 #[derive(Debug, Clone)]
 pub struct OutputLimits {
-    /// Combined stdout+stderr limit (bytes)
     pub combined_limit: usize,
-    /// Per-stream stdout limit (bytes)
     pub stdout_limit: usize,
-    /// Per-stream stderr limit (bytes)
     pub stderr_limit: usize,
-    /// Collection timeout (milliseconds)
     pub collection_timeout_ms: u64,
 }
 
 impl Default for OutputLimits {
     fn default() -> Self {
         OutputLimits {
-            combined_limit: 10 * 1024 * 1024, // 10 MB combined
-            stdout_limit: 8 * 1024 * 1024,    // 8 MB stdout
-            stderr_limit: 2 * 1024 * 1024,    // 2 MB stderr
-            collection_timeout_ms: 5000,      // 5 seconds
+            combined_limit: 10 * 1024 * 1024,
+            stdout_limit: 8 * 1024 * 1024,
+            stderr_limit: 2 * 1024 * 1024,
+            collection_timeout_ms: 5000,
         }
     }
 }
 
-/// Output collection result
 #[derive(Debug, Clone)]
 pub struct OutputResult {
-    /// Collected stdout
     pub stdout: Vec<u8>,
-    /// Collected stderr
     pub stderr: Vec<u8>,
-    /// Stdout integrity state
     pub stdout_integrity: OutputIntegrity,
-    /// Stderr integrity state
     pub stderr_integrity: OutputIntegrity,
-    /// Combined integrity state
     pub combined_integrity: OutputIntegrity,
-    /// Total bytes collected
     pub total_bytes: usize,
 }
 
-/// Output collector with bounded collection
 pub struct OutputCollector {
     limits: OutputLimits,
 }
 
 impl OutputCollector {
-    /// Create new output collector with limits
     pub fn new(limits: OutputLimits) -> Self {
         OutputCollector { limits }
     }
 
-    /// Collect output from child process with bounded limits
-    /// Returns (stdout, stderr, integrity_state)
     pub fn collect(
         &self,
         stdout: Option<ChildStdout>,
@@ -75,17 +55,14 @@ impl OutputCollector {
         let stderr_limit = self.limits.stderr_limit;
         let combined_limit = self.limits.combined_limit;
 
-        // Spawn stdout collector thread
         let stdout_handle = stdout.map(|stdout| {
             thread::spawn(move || collect_stream(stdout, stdout_limit, stdout_tx))
         });
 
-        // Spawn stderr collector thread
         let stderr_handle = stderr.map(|stderr| {
             thread::spawn(move || collect_stream(stderr, stderr_limit, stderr_tx))
         });
 
-        // Collect with timeout
         let timeout = Duration::from_millis(self.limits.collection_timeout_ms);
         let start = Instant::now();
 
@@ -95,7 +72,6 @@ impl OutputCollector {
         let mut stderr_integrity = OutputIntegrity::Complete;
         let mut combined_truncated = false;
 
-        // Wait for collectors with timeout
         loop {
             if start.elapsed() > timeout {
                 stdout_integrity = OutputIntegrity::TruncatedByJudgeLimit;
@@ -103,7 +79,6 @@ impl OutputCollector {
                 break;
             }
 
-            // Try to receive from stdout
             match stdout_rx.try_recv() {
                 Ok((data, integrity)) => {
                     stdout_data = data;
@@ -113,7 +88,6 @@ impl OutputCollector {
                 Err(TryRecvError::Disconnected) => {}
             }
 
-            // Try to receive from stderr
             match stderr_rx.try_recv() {
                 Ok((data, integrity)) => {
                     stderr_data = data;
@@ -123,7 +97,6 @@ impl OutputCollector {
                 Err(TryRecvError::Disconnected) => {}
             }
 
-            // Check if both collectors finished
             let stdout_done = stdout_handle.is_none()
                 || matches!(
                     stdout_integrity,
@@ -151,7 +124,6 @@ impl OutputCollector {
             thread::sleep(Duration::from_millis(10));
         }
 
-        // Join threads
         if let Some(handle) = stdout_handle {
             let _ = handle.join();
         }
@@ -159,12 +131,10 @@ impl OutputCollector {
             let _ = handle.join();
         }
 
-        // Check combined limit
         let total_bytes = stdout_data.len() + stderr_data.len();
         if total_bytes > combined_limit {
             combined_truncated = true;
 
-            // Truncate to combined limit (prefer stdout)
             if stdout_data.len() > combined_limit {
                 stdout_data.truncate(combined_limit);
                 stderr_data.clear();
@@ -177,7 +147,6 @@ impl OutputCollector {
             }
         }
 
-        // Determine combined integrity
         let combined_integrity = if combined_truncated {
             OutputIntegrity::TruncatedByJudgeLimit
         } else if matches!(stdout_integrity, OutputIntegrity::CrashMidWrite)
@@ -211,7 +180,6 @@ impl OutputCollector {
     }
 }
 
-/// Collect from a single stream with limit
 fn collect_stream<R: Read + Send + 'static>(
     stream: R,
     limit: usize,
@@ -225,12 +193,10 @@ fn collect_stream<R: Read + Send + 'static>(
     loop {
         match reader.read(&mut chunk) {
             Ok(0) => {
-                // EOF - normal completion
                 break;
             }
             Ok(n) => {
                 if buffer.len() + n > limit {
-                    // Hit limit - truncate
                     let remaining = limit - buffer.len();
                     buffer.extend_from_slice(&chunk[..remaining]);
                     integrity = OutputIntegrity::TruncatedByJudgeLimit;
@@ -240,7 +206,6 @@ fn collect_stream<R: Read + Send + 'static>(
                 }
             }
             Err(e) => {
-                // Read error
                 if e.kind() == std::io::ErrorKind::BrokenPipe {
                     integrity = OutputIntegrity::TruncatedByProgramClose;
                 } else {
@@ -279,17 +244,15 @@ mod tests {
             combined_limit: 1024,
             stdout_limit: 512,
             stderr_limit: 512,
-            collection_timeout_ms: 100, // Short timeout for test
+            collection_timeout_ms: 100,
         };
 
         let collector = OutputCollector::new(limits);
 
-        // Test with no output (None streams)
         let result = collector
             .collect(None, None)
             .expect("Failed to collect output");
 
-        // Should complete successfully with empty output
         assert_eq!(result.stdout.len(), 0);
         assert_eq!(result.stderr.len(), 0);
         assert_eq!(result.combined_integrity, OutputIntegrity::Complete);

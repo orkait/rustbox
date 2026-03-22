@@ -1,6 +1,3 @@
-//! Configuration and policy
-//!
-//! Policy definition, validation, and enforcement.
 
 #[allow(clippy::module_inception)]
 pub mod config;

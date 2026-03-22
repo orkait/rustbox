@@ -1,5 +1,3 @@
-//! Ordered kernel stage pipeline for incremental v2 migration.
-
 use crate::config::types::{IsolateError, Result};
 use std::collections::HashSet;
 
@@ -240,6 +238,10 @@ mod tests {
             name: "evidence",
             domain: KernelDomain::Evidence,
         };
+        let seccomp = DummyStage {
+            name: "seccomp",
+            domain: KernelDomain::Seccomp,
+        };
 
         let mut pipeline = KernelPipeline::new(EnforcementMode::Strict);
         pipeline
@@ -250,7 +252,8 @@ mod tests {
             .push_stage(&capabilities)
             .push_stage(&signal)
             .push_stage(&cleanup)
-            .push_stage(&evidence);
+            .push_stage(&evidence)
+            .push_stage(&seccomp);
 
         let report = pipeline.run().expect("pipeline should run");
         assert_eq!(
@@ -263,7 +266,8 @@ mod tests {
                 "capabilities",
                 "signal",
                 "cleanup",
-                "evidence"
+                "evidence",
+                "seccomp"
             ]
         );
         assert_eq!(report.verified_stages, report.applied_stages);

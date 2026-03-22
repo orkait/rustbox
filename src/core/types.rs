@@ -6,7 +6,6 @@ use crate::config::types::{ExecutionStatus, IsolateConfig};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Runtime execution profile consumed by sandbox core.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionProfile {
     pub command: Vec<String>,
@@ -33,6 +32,8 @@ pub struct ExecutionProfile {
     pub fd_limit: Option<u64>,
     pub virtual_memory_limit: Option<u64>,
     pub directory_bindings: Vec<DirectoryBinding>,
+    pub enable_seccomp: bool,
+    pub seccomp_policy_file: Option<std::path::PathBuf>,
 }
 
 impl ExecutionProfile {
@@ -66,11 +67,12 @@ impl ExecutionProfile {
             fd_limit: config.fd_limit,
             virtual_memory_limit: config.virtual_memory_limit,
             directory_bindings: config.directory_bindings.clone(),
+            enable_seccomp: !config.no_seccomp,
+            seccomp_policy_file: config.seccomp_policy_file.clone(),
         }
     }
 }
 
-/// Optional workspace metadata used by judge adapters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunWorkspace {
     pub root: PathBuf,
@@ -78,7 +80,6 @@ pub struct RunWorkspace {
     pub temp_dir: PathBuf,
 }
 
-/// Host->proxy launch contract.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SandboxLaunchRequest {
     pub instance_id: String,
@@ -101,7 +102,6 @@ impl SandboxLaunchRequest {
     }
 }
 
-/// Signal escalation report for timeout/forced termination paths.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct KillReport {
     pub term_sent: bool,
@@ -110,7 +110,6 @@ pub struct KillReport {
     pub notes: Vec<String>,
 }
 
-/// Runtime evidence produced by core.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LaunchEvidence {
     pub strict_requested: bool,
@@ -159,7 +158,6 @@ impl LaunchEvidence {
     }
 }
 
-/// Proxy->host status payload transferred through status pipe.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProxyStatus {
     pub payload_pid: Option<i32>,
@@ -182,8 +180,6 @@ impl ProxyStatus {
         });
         let resolved_signal = self.term_signal.or(interrupted_signal);
 
-        // SIGXCPU = kernel enforced RLIMIT_CPU. That IS a time limit,
-        // not a random signal — classify as TLE.
         let is_rlimit_cpu = matches!(resolved_signal, Some(libc::SIGXCPU));
 
         let status = if self.timed_out || is_rlimit_cpu {
@@ -214,7 +210,6 @@ impl ProxyStatus {
     }
 }
 
-/// Core launch output.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SandboxLaunchOutcome {
     pub proxy_host_pid: i32,
