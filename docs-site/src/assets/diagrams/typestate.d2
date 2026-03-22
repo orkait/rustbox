@@ -1,4 +1,6 @@
-direction: right
+grid-rows: 3
+grid-columns: 3
+grid-gap: 12
 
 fresh: {
   label: "FreshChild\nclone(2)"
@@ -27,8 +29,9 @@ mnt: {
   style.font-size: 12
 }
 
-cg: {
-  label: "Cgroup\nAttached"
+# Row 2: right-to-left order (snake reversal)
+priv: {
+  label: "Privs\nLocked"
   style.fill: "#eff1f5"
   style.stroke: "#1e66f5"
   style.font-color: "#4c4f69"
@@ -45,8 +48,8 @@ cred: {
   style.font-size: 12
 }
 
-priv: {
-  label: "Privs\nLocked"
+cg: {
+  label: "Cgroup\nAttached"
   style.fill: "#eff1f5"
   style.stroke: "#1e66f5"
   style.font-color: "#4c4f69"
@@ -54,6 +57,7 @@ priv: {
   style.font-size: 12
 }
 
+# Row 3
 exec: {
   label: "Exec\nReady"
   style.fill: "#40a02b"
@@ -64,4 +68,7 @@ exec: {
   style.bold: true
 }
 
-fresh -> ns -> mnt -> cg -> cred -> priv -> exec
+fresh -> ns -> mnt
+mnt -> cg
+cg -> cred -> priv
+priv -> exec

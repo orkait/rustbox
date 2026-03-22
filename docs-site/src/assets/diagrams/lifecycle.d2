@@ -1,7 +1,7 @@
-direction: right
+direction: down
 
 setup: {
-  label: "new()"
+  label: "Isolate::new()"
   style.fill: "#eff1f5"
   style.stroke: "#8839ef"
   style.font-color: "#4c4f69"
@@ -10,7 +10,7 @@ setup: {
 }
 
 compile: {
-  label: "compile"
+  label: "Compile (if needed)"
   style.fill: "#eff1f5"
   style.stroke: "#8839ef"
   style.font-color: "#4c4f69"
@@ -18,45 +18,44 @@ compile: {
   style.font-size: 12
 }
 
-supervise: {
-  label: ""
+supervisor: {
+  label: "Supervisor"
   style.fill: "#e6e9ef"
   style.stroke: "#1e66f5"
-  style.border-radius: 8
+  style.font-color: "#4c4f69"
+  style.border-radius: 6
+  style.font-size: 12
+}
 
-  supervisor: {
-    label: "Supervisor"
-    style.fill: "#e6e9ef"
-    style.stroke: "#1e66f5"
-    style.font-color: "#4c4f69"
-    style.border-radius: 6
-    style.font-size: 12
-  }
+proxy: {
+  label: "Proxy"
+  style.fill: "#e6e9ef"
+  style.stroke: "#1e66f5"
+  style.font-color: "#4c4f69"
+  style.border-radius: 6
+  style.font-size: 12
+}
 
-  proxy: {
-    label: "Proxy"
-    style.fill: "#e6e9ef"
-    style.stroke: "#1e66f5"
-    style.font-color: "#4c4f69"
-    style.border-radius: 6
-    style.font-size: 12
-  }
+sandbox: {
+  label: "Sandbox"
+  style.fill: "#4c4f69"
+  style.stroke: "#fe640b"
+  style.font-color: "#eff1f5"
+  style.border-radius: 12
 
   payload: {
     label: "User Code"
     style.fill: "#fe640b"
-    style.stroke: "#fe640b"
+    style.stroke: "#e64553"
     style.font-color: "#ffffff"
     style.border-radius: 6
     style.font-size: 12
     style.bold: true
   }
-
-  supervisor -> proxy -> payload
 }
 
 evidence: {
-  label: "evidence"
+  label: "Evidence Collection"
   style.fill: "#eff1f5"
   style.stroke: "#40a02b"
   style.font-color: "#4c4f69"
@@ -65,7 +64,7 @@ evidence: {
 }
 
 verdict: {
-  label: "verdict"
+  label: "Verdict Classification"
   style.fill: "#eff1f5"
   style.stroke: "#40a02b"
   style.font-color: "#4c4f69"
@@ -74,7 +73,7 @@ verdict: {
 }
 
 cleanup: {
-  label: "cleanup()"
+  label: "Isolate::cleanup()"
   style.fill: "#eff1f5"
   style.stroke: "#8839ef"
   style.font-color: "#4c4f69"
@@ -82,4 +81,12 @@ cleanup: {
   style.font-size: 12
 }
 
-setup -> compile -> supervise -> evidence -> verdict -> cleanup
+setup -> compile -> supervisor -> proxy -> sandbox.payload
+sandbox.payload -> evidence -> verdict -> cleanup
+
+supervisor -> sandbox.payload: "monitors wall + CPU time" {
+  style.stroke: "#e64553"
+  style.stroke-dash: 5
+  style.font-size: 10
+  style.font-color: "#e64553"
+}
