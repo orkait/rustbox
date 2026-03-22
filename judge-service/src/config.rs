@@ -1,4 +1,3 @@
-/// Service configuration loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
     pub port: u16,
@@ -9,6 +8,12 @@ pub struct ServiceConfig {
     pub node_id: String,
     pub reaper_interval_secs: u64,
     pub stale_timeout_secs: u64,
+    pub allow_localhost_webhooks: bool,
+    pub max_code_bytes: usize,
+    pub max_stdin_bytes: usize,
+    pub sync_wait_timeout_secs: u64,
+    pub sync_poll_interval_ms: u64,
+    pub webhook_timeout_secs: u64,
 }
 
 impl ServiceConfig {
@@ -26,6 +31,12 @@ impl ServiceConfig {
                 .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string()),
             reaper_interval_secs: env_or("RUSTBOX_REAPER_INTERVAL_SECS", 60),
             stale_timeout_secs: env_or("RUSTBOX_STALE_TIMEOUT_SECS", 300),
+            allow_localhost_webhooks: env_or("RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS", false),
+            max_code_bytes: env_or("RUSTBOX_MAX_CODE_BYTES", 64 * 1024),
+            max_stdin_bytes: env_or("RUSTBOX_MAX_STDIN_BYTES", 256 * 1024),
+            sync_wait_timeout_secs: env_or("RUSTBOX_SYNC_WAIT_TIMEOUT_SECS", 30),
+            sync_poll_interval_ms: env_or("RUSTBOX_SYNC_POLL_INTERVAL_MS", 200),
+            webhook_timeout_secs: env_or("RUSTBOX_WEBHOOK_TIMEOUT_SECS", 10),
         }
     }
 }

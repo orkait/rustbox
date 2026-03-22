@@ -1,13 +1,8 @@
-/// Verdict classification and provenance
-/// Implements P0-RESULT-001: Honest Judge Failure Classification
-/// Implements P0-PROV-001: Verdict Provenance Contract
 use crate::config::types::*;
 
-/// Verdict classifier - pure function over evidence bundle
 pub struct VerdictClassifier;
 
 impl VerdictClassifier {
-    /// Classify execution outcome based on evidence (pure, deterministic)
     pub fn classify(
         evidence: &EvidenceBundle,
         limits: &LimitSnapshot,
@@ -29,12 +24,25 @@ impl VerdictClassifier {
         }
 
         if let Some(exit_code) = evidence.wait_outcome.exit_code {
-            if exit_code == 0 && !Self::has_kernel_limit_event(evidence) {
+            if Self::has_kernel_limit_event(evidence) {
+                if let Some(cg) = &evidence.cgroup_evidence {
+                    if cg.oom_events > 0 || cg.oom_kill_events > 0 {
+                        let mut prov = Self::provenance(
+                            evidence, limits, VerdictActor::Kernel, VerdictCause::MleKernelOom,
+                            vec!["wait_outcome".into(), "cgroup_evidence".into(), "oom_events".into()], None,
+                        );
+                        prov.memory_peak = cg.memory_peak.unwrap_or(0);
+                        return (ExecutionStatus::MemoryLimit, prov);
+                    }
+                }
+            }
+
+            if exit_code == 0 {
                 return (ExecutionStatus::Ok, Self::provenance(
                     evidence, limits, VerdictActor::Runtime,
                     VerdictCause::NormalExit, vec!["wait_outcome".into()], None,
                 ));
-            } else if exit_code != 0 {
+            } else {
                 return (ExecutionStatus::RuntimeError, Self::provenance(
                     evidence, limits, VerdictActor::Runtime,
                     VerdictCause::ReNonzeroExit, vec!["wait_outcome".into(), "exit_code".into()], None,
@@ -49,7 +57,6 @@ impl VerdictClassifier {
         Self::classify_internal_error(evidence, limits)
     }
 
-    /// Build provenance with common fields extracted from evidence
     fn provenance(
         evidence: &EvidenceBundle,
         limits: &LimitSnapshot,
@@ -190,7 +197,6 @@ impl VerdictClassifier {
             .unwrap_or(false)
     }
 
-    /// Compute CPU vs wall divergence classification
     pub fn classify_divergence(cpu_time_ms: u64, wall_time_ms: u64) -> DivergenceClass {
         if wall_time_ms == 0 {
             return DivergenceClass::CpuBound;
@@ -317,8 +323,8 @@ mod tests {
         evidence.timing_evidence.cpu_wall_ratio = 0.5;
 
         let (status, prov) = VerdictClassifier::classify(&evidence, &test_limits());
-        assert_eq!(status, ExecutionStatus::InternalError);
-        assert_eq!(prov.verdict_cause, VerdictCause::IeSupervisorFailure);
+        assert_eq!(status, ExecutionStatus::MemoryLimit);
+        assert_eq!(prov.verdict_cause, VerdictCause::MleKernelOom);
     }
 
     #[test]

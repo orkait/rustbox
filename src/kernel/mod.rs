@@ -1,5 +1,3 @@
-//! Kernel v2 contract-first kernel implementation.
-
 pub mod capabilities;
 pub mod cgroup;
 pub mod cgroup_v1;
@@ -10,6 +8,7 @@ pub mod mount;
 pub mod namespace;
 pub mod pipeline;
 mod runtime_exec;
+pub mod seccomp;
 pub mod signal;
 
 pub use contract::{

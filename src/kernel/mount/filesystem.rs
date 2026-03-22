@@ -1,5 +1,3 @@
-//! Filesystem isolation via chroot jail and hardened mount operations.
-
 use crate::config::types::{IsolateError, Result};
 use crate::utils::fork_safe_log::{
     fs_debug_parts, fs_info_parts, fs_warn, fs_warn_parts, itoa_buf, itoa_i32,
@@ -57,6 +55,23 @@ impl DeviceNode {
         &[Self::NULL, Self::ZERO, Self::RANDOM, Self::URANDOM];
 }
 
+fn path_cstr(path: &Path, label: &str) -> Result<std::ffi::CString> {
+    std::ffi::CString::new(path.to_string_lossy().as_bytes())
+        .map_err(|e| IsolateError::Config(format!("Invalid {} path: {}", label, e)))
+}
+
+fn mount_result(rc: i32, label: &str, strict_mode: bool) -> Result<bool> {
+    if rc == 0 { return Ok(true); }
+    let err = std::io::Error::last_os_error();
+    if strict_mode {
+        return Err(IsolateError::Config(format!("{}: {}", label, err)));
+    }
+    let mut ebuf = [0u8; 20];
+    let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
+    fs_warn_parts(&[label, ": errno=", eno]);
+    Ok(false)
+}
+
 impl FilesystemSecurity {
     const DEFAULT_TMPFS_SIZE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -82,7 +97,6 @@ impl FilesystemSecurity {
         }
     }
 
-    /// In strict mode, auto-creates a bounded tmpfs root regardless of chroot_dir.
     pub fn setup_isolation(&mut self) -> Result<()> {
         #[cfg(unix)]
         if self.strict_mode {
@@ -149,7 +163,6 @@ impl FilesystemSecurity {
                 binding.target.display()
             )));
         }
-        // TODO: Add symlink resolution for source/target paths to prevent TOCTOU via symlink races.
 
         if binding.maybe && !binding.source.exists() {
             fs_debug_parts(&[
@@ -323,7 +336,7 @@ impl FilesystemSecurity {
             let target_path = target.join(entry.file_name());
 
             if file_type.is_symlink() {
-                continue; // Skip symlinks for security
+                continue;
             }
             if file_type.is_dir() {
                 Self::copy_directory_contents(&source_path, &target_path)?;
@@ -409,7 +422,6 @@ impl FilesystemSecurity {
         Ok(tmpfs_root)
     }
 
-    /// Bind-mount /bin, /lib, /lib64, /usr read-only into chroot.
     #[cfg(unix)]
     fn mount_standard_bind_set(&self, chroot_path: &Path) -> Result<()> {
         let ro_dirs = ["/bin", "/lib", "/lib64", "/usr"];
@@ -438,7 +450,6 @@ impl FilesystemSecurity {
         Ok(())
     }
 
-    /// Two-pass: MS_BIND then MS_BIND|MS_REMOUNT|MS_RDONLY.
     #[cfg(unix)]
     fn bind_mount_readonly(&self, source: &Path, target: &Path) -> Result<()> {
         let src_cstr = std::ffi::CString::new(source.to_string_lossy().as_bytes())
@@ -570,97 +581,32 @@ impl FilesystemSecurity {
     #[cfg(unix)]
     fn create_device_node(&self, dev_dir: &Path, device: &DeviceNode) -> Result<()> {
         let device_path = dev_dir.join(device.name);
-        if device_path.exists() {
-            return Ok(());
-        }
-
-        let path_cstr = std::ffi::CString::new(device_path.to_string_lossy().as_bytes())
-            .map_err(|e| IsolateError::Config(format!("Invalid path: {}", e)))?;
-
+        if device_path.exists() { return Ok(()); }
+        let cstr = path_cstr(&device_path, "device")?;
         // SAFETY: mknod(2) with valid CString path, character device mode, valid major:minor.
-        let result = unsafe {
-            libc::mknod(
-                path_cstr.as_ptr(),
-                device.mode | 0o666,
-                libc::makedev(device.major, device.minor),
-            )
+        let rc = unsafe {
+            libc::mknod(cstr.as_ptr(), device.mode | 0o666, libc::makedev(device.major, device.minor))
         };
-
-        if result != 0 {
-            let err = std::io::Error::last_os_error();
-            if self.strict_mode {
-                return Err(IsolateError::Config(format!(
-                    "Failed to create device node /dev/{}: {}",
-                    device.name, err
-                )));
-            }
-            let mut ebuf = [0u8; 20];
-            let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-            fs_warn_parts(&[
-                "Skipping device node /dev/",
-                device.name,
-                " in permissive mode: errno=",
-                eno,
-            ]);
-        }
-
+        mount_result(rc, &format!("Failed to create device node /dev/{}", device.name), self.strict_mode)?;
         Ok(())
     }
 
     #[cfg(unix)]
     fn apply_mount_security_flags(&self, chroot_path: &Path) -> Result<()> {
-        let path_cstr = std::ffi::CString::new(chroot_path.to_string_lossy().as_bytes())
-            .map_err(|e| IsolateError::Config(format!("Invalid chroot path: {}", e)))?;
-
-        // Step 1: Bind mount the chroot root onto itself.
+        let cstr = path_cstr(chroot_path, "chroot")?;
         // SAFETY: mount(2) bind mount on chroot root.
-        let result = unsafe {
-            libc::mount(
-                path_cstr.as_ptr(),
-                path_cstr.as_ptr(),
-                std::ptr::null(),
-                libc::MS_BIND,
-                std::ptr::null(),
-            )
+        let rc = unsafe {
+            libc::mount(cstr.as_ptr(), cstr.as_ptr(), std::ptr::null(), libc::MS_BIND, std::ptr::null())
         };
-
-        if result != 0 {
-            let err = std::io::Error::last_os_error();
-            if self.strict_mode {
-                return Err(IsolateError::Config(format!(
-                    "Failed to bind mount chroot root: {}", err
-                )));
-            }
-            log::warn!("Bind mount of chroot root failed in permissive mode - sandbox may lack mount-level protections");
+        if !mount_result(rc, "Failed to bind mount chroot root", self.strict_mode)? {
             return Ok(());
         }
-
-        // Step 2: Remount with security flags. The kernel ignores MS_NOEXEC/MS_NOSUID/MS_NODEV
-        // on a bind mount unless MS_REMOUNT is also specified. This two-step pattern is required.
-        let security_flags =
-            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_NOEXEC | libc::MS_NOSUID | libc::MS_NODEV;
-
+        let flags = libc::MS_BIND | libc::MS_REMOUNT | libc::MS_NOEXEC | libc::MS_NOSUID | libc::MS_NODEV;
         // SAFETY: mount(2) remount with security flags.
-        let result = unsafe {
-            libc::mount(
-                std::ptr::null(),
-                path_cstr.as_ptr(),
-                std::ptr::null(),
-                security_flags,
-                std::ptr::null(),
-            )
+        let rc = unsafe {
+            libc::mount(std::ptr::null(), cstr.as_ptr(), std::ptr::null(), flags, std::ptr::null())
         };
-
-        if result != 0 {
-            let err = std::io::Error::last_os_error();
-            if self.strict_mode {
-                return Err(IsolateError::Config(format!(
-                    "Failed to apply mount security flags: {}", err
-                )));
-            }
-            log::warn!("Mount security flags (nosuid/nodev/noexec) remount failed in permissive mode");
-        }
-
+        mount_result(rc, "Failed to apply mount security flags", self.strict_mode)?;
         Ok(())
     }
 
@@ -686,212 +632,59 @@ impl FilesystemSecurity {
 
     #[cfg(unix)]
     fn mount_hardened_sysfs(&self, sys_path: &Path) -> Result<()> {
-        let mount_flags = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
-
-        let source_cstr = std::ffi::CString::new("sysfs").unwrap();
-        let target_cstr = std::ffi::CString::new(sys_path.to_string_lossy().as_bytes())
-            .map_err(|e| IsolateError::Config(format!("Invalid sys path: {}", e)))?;
-        let fstype_cstr = std::ffi::CString::new("sysfs").unwrap();
-
+        let flags = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
+        let src = std::ffi::CString::new("sysfs").unwrap();
+        let tgt = path_cstr(sys_path, "sys")?;
+        let fst = std::ffi::CString::new("sysfs").unwrap();
         // SAFETY: mount(2) sysfs with read-only flags.
-        let result = unsafe {
-            libc::mount(
-                source_cstr.as_ptr(),
-                target_cstr.as_ptr(),
-                fstype_cstr.as_ptr(),
-                mount_flags,
-                std::ptr::null(),
-            )
-        };
-
-        if result != 0 {
-            let err = std::io::Error::last_os_error();
-            if self.strict_mode {
-                return Err(IsolateError::Config(format!(
-                    "Failed to mount hardened sysfs: {}",
-                    err
-                )));
-            }
-            let mut ebuf = [0u8; 20];
-            let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-            fs_warn_parts(&["Failed to mount hardened sysfs: errno=", eno]);
-        } else {
-            fs_info_parts(&[
-                "Mounted hardened sysfs at ",
-                sys_path.to_str().unwrap_or("<?>"),
-            ]);
-        }
-
+        let rc = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, std::ptr::null()) };
+        mount_result(rc, "Failed to mount hardened sysfs", self.strict_mode)?;
         Ok(())
     }
 
-    /// Mount tmpfs on /dev with 64K size limit and minimal device nodes.
     #[cfg(unix)]
     fn mount_hardened_devfs(&self, dev_path: &Path) -> Result<()> {
-        let mount_flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NOATIME;
-
-        let source_cstr = std::ffi::CString::new("tmpfs").unwrap();
-        let target_cstr = std::ffi::CString::new(dev_path.to_string_lossy().as_bytes())
-            .map_err(|e| IsolateError::Config(format!("Invalid dev path: {}", e)))?;
-        let fstype_cstr = std::ffi::CString::new("tmpfs").unwrap();
-        let options_cstr = std::ffi::CString::new("size=64k,mode=755").unwrap();
-
+        let flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NOATIME;
+        let src = std::ffi::CString::new("tmpfs").unwrap();
+        let tgt = path_cstr(dev_path, "dev")?;
+        let fst = std::ffi::CString::new("tmpfs").unwrap();
+        let opts = std::ffi::CString::new("size=64k,mode=755").unwrap();
         // SAFETY: mount(2) tmpfs with bounded size on /dev.
-        let result = unsafe {
-            libc::mount(
-                source_cstr.as_ptr(),
-                target_cstr.as_ptr(),
-                fstype_cstr.as_ptr(),
-                mount_flags,
-                options_cstr.as_ptr() as *const libc::c_void,
-            )
-        };
-
-        if result != 0 {
-            let err = std::io::Error::last_os_error();
-            if self.strict_mode {
-                return Err(IsolateError::Config(format!(
-                    "Failed to mount tmpfs on /dev: {}",
-                    err
-                )));
-            }
-            let mut ebuf = [0u8; 20];
-            let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-            fs_warn_parts(&["Failed to mount tmpfs on /dev: errno=", eno]);
+        let rc = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, opts.as_ptr() as *const libc::c_void) };
+        if !mount_result(rc, "Failed to mount tmpfs on /dev", self.strict_mode)? {
             return Ok(());
         }
-
-        fs_info_parts(&[
-            "Mounted hardened tmpfs at ",
-            dev_path.to_str().unwrap_or("<?>"),
-        ]);
-        self.create_minimal_devices(dev_path)?;
+        self.create_essential_devices(dev_path)?;
         Ok(())
     }
 
-    /// Mount procfs with hidepid=2 for process hiding.
     #[cfg(unix)]
     fn mount_hardened_procfs(&self, proc_path: &Path) -> Result<()> {
-        let mount_flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
-        let hidepid_opts = std::ffi::CString::new("hidepid=2").unwrap();
-
-        let source_cstr = std::ffi::CString::new("proc").unwrap();
-        let target_cstr = std::ffi::CString::new(proc_path.to_string_lossy().as_bytes())
-            .map_err(|e| IsolateError::Config(format!("Invalid proc path: {}", e)))?;
-        let fstype_cstr = std::ffi::CString::new("proc").unwrap();
-
+        let flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
+        let src = std::ffi::CString::new("proc").unwrap();
+        let tgt = path_cstr(proc_path, "proc")?;
+        let fst = std::ffi::CString::new("proc").unwrap();
+        let hidepid = std::ffi::CString::new("hidepid=2").unwrap();
         // SAFETY: mount(2) procfs with hidepid=2 for process isolation.
-        let result = unsafe {
-            libc::mount(
-                source_cstr.as_ptr(),
-                target_cstr.as_ptr(),
-                fstype_cstr.as_ptr(),
-                mount_flags,
-                hidepid_opts.as_ptr() as *const libc::c_void,
-            )
-        };
-
-        if result != 0 {
-            let err = std::io::Error::last_os_error();
-            if self.strict_mode {
-                return Err(IsolateError::Config(format!(
-                    "Failed to mount hardened procfs with hidepid=2: {}",
-                    err
-                )));
-            }
-            let mut ebuf = [0u8; 20];
-            let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-            fs_warn_parts(&[
-                "Failed to mount procfs with hidepid=2: errno=",
-                eno,
-                ". Retrying without hidepid.",
-            ]);
+        let rc = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, hidepid.as_ptr() as *const libc::c_void) };
+        if rc != 0 {
+            fs_warn_parts(&["procfs hidepid=2 failed, retrying without hidepid"]);
             // SAFETY: mount(2) procfs fallback without hidepid.
-            let fallback = unsafe {
-                libc::mount(
-                    source_cstr.as_ptr(),
-                    target_cstr.as_ptr(),
-                    fstype_cstr.as_ptr(),
-                    mount_flags,
-                    std::ptr::null(),
-                )
-            };
-            if fallback != 0 {
-                let fallback_err = std::io::Error::last_os_error();
-                let mut fbuf = [0u8; 20];
-                let feno = itoa_i32(fallback_err.raw_os_error().unwrap_or(-1), &mut fbuf);
-                fs_warn_parts(&["Failed to mount fallback procfs: errno=", feno]);
-            }
-        } else {
-            fs_info_parts(&[
-                "Mounted hardened procfs with hidepid=2 at ",
-                proc_path.to_str().unwrap_or("<?>"),
-            ]);
+            let rc2 = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, std::ptr::null()) };
+            mount_result(rc2, "Failed to mount fallback procfs", self.strict_mode)?;
         }
-
         Ok(())
     }
 
-    #[cfg(unix)]
-    fn create_minimal_devices(&self, dev_path: &Path) -> Result<()> {
-        for device in DeviceNode::ESSENTIAL_DEVICES {
-            let device_path = dev_path.join(device.name);
-            let path_cstr = std::ffi::CString::new(device_path.to_string_lossy().as_bytes())
-                .map_err(|e| IsolateError::Config(format!("Invalid device path: {}", e)))?;
-
-            // SAFETY: mknod(2) with valid path, char device type, valid major:minor.
-            let result = unsafe {
-                libc::mknod(
-                    path_cstr.as_ptr(),
-                    device.mode | 0o666,
-                    libc::makedev(device.major, device.minor),
-                )
-            };
-
-            if result != 0 {
-                let err = std::io::Error::last_os_error();
-                if self.strict_mode {
-                    return Err(IsolateError::Config(format!(
-                        "Failed to create device node /dev/{}: {}",
-                        device.name, err
-                    )));
-                }
-                let mut ebuf = [0u8; 20];
-                let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-                fs_warn_parts(&[
-                    "Skipping device node /dev/",
-                    device.name,
-                    " in permissive mode: errno=",
-                    eno,
-                ]);
-            } else {
-                fs_debug_parts(&[
-                    "Created device node: ",
-                    device_path.to_str().unwrap_or("<?>"),
-                ]);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Perform chroot(2). Must be called in child process.
     #[cfg(unix)]
     pub fn apply_chroot(&self) -> Result<()> {
         if let Some(ref chroot_path) = self.chroot_dir {
-            let path_cstr = std::ffi::CString::new(chroot_path.to_string_lossy().as_bytes())
-                .map_err(|e| IsolateError::Config(format!("Invalid chroot path: {}", e)))?;
-
+            let cstr = path_cstr(chroot_path, "chroot")?;
             // SAFETY: chroot(2) with valid CString path.
-            let result = unsafe { libc::chroot(path_cstr.as_ptr()) };
-            if result != 0 {
-                let err = std::io::Error::last_os_error();
-                return Err(IsolateError::Config(format!("chroot failed: {}", err)));
+            if unsafe { libc::chroot(cstr.as_ptr()) } != 0 {
+                return Err(IsolateError::Config(format!("chroot failed: {}", std::io::Error::last_os_error())));
             }
-
-            std::env::set_current_dir("/").map_err(|e| {
-                IsolateError::Config(format!("Failed to change to chroot root: {}", e))
-            })?;
+            std::env::set_current_dir("/").map_err(|e| IsolateError::Config(format!("Failed to change to chroot root: {}", e)))?;
         }
         Ok(())
     }
@@ -910,65 +703,18 @@ impl FilesystemSecurity {
 
         #[cfg(unix)]
         {
-            if let Some(ref _chroot_path) = self.chroot_dir {
-                // Bind-mount the HOST workdir into the chroot so compiled
-                // binaries and source files are visible inside the sandbox.
-                let src_cstr =
-                    std::ffi::CString::new(self.workdir.to_string_lossy().as_bytes())
-                        .map_err(|e| {
-                            IsolateError::Config(format!("Invalid workdir source path: {}", e))
-                        })?;
-                let dst_cstr =
-                    std::ffi::CString::new(actual_workdir.to_string_lossy().as_bytes())
-                        .map_err(|e| {
-                            IsolateError::Config(format!("Invalid workdir target path: {}", e))
-                        })?;
-
-                // Bind-mount host workdir → chroot workdir.
+            if self.chroot_dir.is_some() {
+                let src = path_cstr(&self.workdir, "workdir source")?;
+                let dst = path_cstr(&actual_workdir, "workdir target")?;
                 let rc = unsafe {
-                    libc::mount(
-                        src_cstr.as_ptr(),
-                        dst_cstr.as_ptr(),
-                        std::ptr::null(),
-                        libc::MS_BIND | libc::MS_REC,
-                        std::ptr::null(),
-                    )
+                    libc::mount(src.as_ptr(), dst.as_ptr(), std::ptr::null(), libc::MS_BIND | libc::MS_REC, std::ptr::null())
                 };
-                if rc != 0 {
-                    let err = std::io::Error::last_os_error();
-                    if self.strict_mode {
-                        return Err(IsolateError::Config(format!(
-                            "Failed to bind-mount workdir into chroot: {}",
-                            err
-                        )));
-                    }
-                    let mut ebuf = [0u8; 20];
-                    let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-                    fs_warn_parts(&[
-                        "Failed to bind-mount workdir into chroot: errno=",
-                        eno,
-                    ]);
-                } else {
-                    // Remount with nosuid+nodev but WITHOUT noexec, so compiled
-                    // binaries (./solution) can execute inside the sandbox.
-                    let rc = unsafe {
-                        libc::mount(
-                            std::ptr::null(),
-                            dst_cstr.as_ptr(),
-                            std::ptr::null(),
-                            libc::MS_REMOUNT | libc::MS_BIND | libc::MS_NOSUID | libc::MS_NODEV,
-                            std::ptr::null(),
-                        )
+                if mount_result(rc, "Failed to bind-mount workdir into chroot", self.strict_mode)? {
+                    let flags = libc::MS_REMOUNT | libc::MS_BIND | libc::MS_NOSUID | libc::MS_NODEV;
+                    let rc2 = unsafe {
+                        libc::mount(std::ptr::null(), dst.as_ptr(), std::ptr::null(), flags, std::ptr::null())
                     };
-                    if rc != 0 {
-                        let err = std::io::Error::last_os_error();
-                        let mut ebuf = [0u8; 20];
-                        let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-                        fs_warn_parts(&[
-                            "Failed to remount workdir with exec: errno=",
-                            eno,
-                        ]);
-                    }
+                    mount_result(rc2, "Failed to remount workdir", self.strict_mode)?;
                 }
             } else {
                 let metadata = fs::metadata(&actual_workdir)?;
@@ -1026,12 +772,9 @@ impl FilesystemSecurity {
     pub fn cleanup(&self) -> Result<()> {
         #[cfg(unix)]
         if let Some(ref chroot_path) = self.chroot_dir {
-            let path_cstr = std::ffi::CString::new(chroot_path.to_string_lossy().as_bytes())
-                .map_err(|e| IsolateError::Config(format!("Invalid chroot path: {}", e)))?;
+            let cstr = path_cstr(chroot_path, "chroot")?;
             // SAFETY: umount(2) on chroot path; non-fatal if not mounted.
-            unsafe {
-                libc::umount(path_cstr.as_ptr());
-            }
+            unsafe { libc::umount(cstr.as_ptr()); }
         }
         Ok(())
     }

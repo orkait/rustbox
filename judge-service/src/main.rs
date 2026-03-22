@@ -23,17 +23,13 @@ async fn main() -> anyhow::Result<()> {
         "starting judge-service"
     );
 
-    // Connect to database (SQLite or Postgres based on URL)
     let db: Arc<dyn Database> = Arc::from(judge_service::database::connect(&cfg.database_url).await?);
     info!("database ready");
 
-    // Create queue and spawn workers based on backend mode
     let is_postgres = cfg.database_url.starts_with("postgres://")
         || cfg.database_url.starts_with("postgresql://");
 
     let (queue, _worker_handles) = if is_postgres {
-        // Cluster mode: Postgres LISTEN/NOTIFY
-        // Create a dedicated PgDatabase instance for the listener
         let pg_db = Arc::new(
             judge_service::database::postgres::PgDatabase::connect(&cfg.database_url).await?,
         );
@@ -43,36 +39,41 @@ async fn main() -> anyhow::Result<()> {
             db.clone(),
             pg_db,
             cfg.node_id.clone(),
+            cfg.webhook_timeout_secs,
         );
         info!(count = cfg.workers, mode = "postgres", "worker pool started");
         (queue, handles)
     } else {
-        // Single-node mode: async-channel
         let queue = Arc::new(JobQueue::channel(cfg.queue_size));
         let handles = judge_service::worker::spawn_channel_workers(
             cfg.workers,
             db.clone(),
             queue.clone(),
             cfg.node_id.clone(),
+            cfg.webhook_timeout_secs,
         );
         info!(count = cfg.workers, mode = "channel", "worker pool started");
         (queue, handles)
     };
 
-    // Spawn reaper
     let _reaper = judge_service::worker::spawn_reaper(
         db.clone(),
         Duration::from_secs(cfg.reaper_interval_secs),
         Duration::from_secs(cfg.stale_timeout_secs),
     );
 
-    // Build HTTP server
     let state = AppState {
         db,
         queue,
         worker_count: cfg.workers,
         api_key: cfg.api_key,
         node_id: cfg.node_id,
+        allow_localhost_webhooks: cfg.allow_localhost_webhooks,
+        max_code_bytes: cfg.max_code_bytes,
+        max_stdin_bytes: cfg.max_stdin_bytes,
+        sync_wait_timeout_secs: cfg.sync_wait_timeout_secs,
+        sync_poll_interval_ms: cfg.sync_poll_interval_ms,
+        webhook_timeout_secs: cfg.webhook_timeout_secs,
     };
 
     if state.api_key.is_some() {
@@ -89,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = judge_service::api::router()
         .layer(cors)
-        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB max request body
+        .layer(DefaultBodyLimit::max(1024 * 1024))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", cfg.port);

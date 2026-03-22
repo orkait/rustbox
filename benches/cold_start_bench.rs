@@ -195,7 +195,7 @@ public class Main {
     for _ in 0..WARMUP_ITERATIONS {
         let _ = Command::new("rustbox")
             .arg("run")
-            .arg("--lang=java17")
+            .arg("--lang=java21")
             .arg("--code")
             .arg(code)
             .output();
@@ -206,7 +206,7 @@ public class Main {
         let start = Instant::now();
         let _ = Command::new("rustbox")
             .arg("run")
-            .arg("--lang=java17")
+            .arg("--lang=java21")
             .arg("--code")
             .arg(code)
             .output();

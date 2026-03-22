@@ -1,38 +1,25 @@
-/// Core types and structures for the rustbox system
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use thiserror::Error;
 
-/// Directory binding configuration for filesystem access
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DirectoryBinding {
-    /// Source directory on host system
     pub source: PathBuf,
-    /// Target directory within sandbox
     pub target: PathBuf,
-    /// Access permissions
     pub permissions: DirectoryPermissions,
-    /// Ignore if source doesn't exist
     pub maybe: bool,
-    /// Create as temporary directory
     pub is_tmp: bool,
 }
 
-/// Directory access permissions
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum DirectoryPermissions {
-    /// Read-only access
     ReadOnly,
-    /// Read-write access
     ReadWrite,
-    /// No execution allowed
     NoExec,
 }
 
 impl DirectoryBinding {
-    /// Parse directory binding with security validation
     pub fn parse_secure(binding_str: &str) -> crate::config::types::Result<Self> {
         use crate::observability::audit::events;
         use crate::runtime::security::path_validation;
@@ -54,17 +41,14 @@ impl DirectoryBinding {
                 std::path::Path::new(path_parts[1]),
             )
         } else {
-            // If no target specified, use same path in sandbox
             let path = std::path::Path::new(path_part);
             (path, path)
         };
 
-        // Use security validation for paths
         let (validated_source, validated_target) =
             match path_validation::validate_directory_binding(source, target) {
                 Ok(paths) => paths,
                 Err(e) => {
-                    // Log security event for path traversal attempt
                     events::path_traversal_attempt(binding_str, None);
                     return Err(e);
                 }
@@ -81,7 +65,7 @@ impl DirectoryBinding {
                 "noexec" => permissions = DirectoryPermissions::NoExec,
                 "maybe" => maybe = true,
                 "tmp" => is_tmp = true,
-                "" => {} // Empty option
+                "" => {}
                 _ => {
                     return Err(crate::config::types::IsolateError::Config(format!(
                         "Unknown directory binding option: {}",
@@ -101,131 +85,79 @@ impl DirectoryBinding {
     }
 }
 
-/// Process isolation configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IsolateConfig {
-    /// Unique identifier for this isolation instance
     pub instance_id: String,
-    /// Working directory for the isolated process
     pub workdir: PathBuf,
-    /// Root directory for chroot (optional)
     pub chroot_dir: Option<PathBuf>,
-    /// User ID to run as
     pub uid: Option<u32>,
-    /// Group ID to run as
     pub gid: Option<u32>,
-    /// Memory limit in bytes
     pub memory_limit: Option<u64>,
-    /// Time limit for execution
     pub time_limit: Option<Duration>,
-    /// CPU time limit
     pub cpu_time_limit: Option<Duration>,
-    /// Wall clock time limit
     pub wall_time_limit: Option<Duration>,
-    /// Maximum number of processes
     pub process_limit: Option<u32>,
-    /// Maximum file size
     pub file_size_limit: Option<u64>,
-    /// Stack size limit in bytes
     pub stack_limit: Option<u64>,
-    /// Core dump size limit in bytes (0 to disable core dumps)
     pub core_limit: Option<u64>,
-    /// File descriptor limit (max open files)
     pub fd_limit: Option<u64>,
-    /// Virtual address space limit in bytes (RLIMIT_AS).
-    /// Per-language: Java needs >=4GB for compressed class pointers;
-    /// Python/C++ use 1GB to prevent mmap(MAP_NORESERVE) VMA exhaustion.
     pub virtual_memory_limit: Option<u64>,
-    /// Custom environment variables.
-    /// SECURITY: never persisted to instances.json — environment may contain
-    /// secrets or user-specific tokens. Populated at runtime from config.json
-    /// via IsolateConfig::with_language_defaults(). (SEC-8)
     #[serde(skip_serializing, default)]
     pub environment: Vec<(String, String)>,
-    /// Strict mode: fail hard if cgroups unavailable or permission denied
     pub strict_mode: bool,
-    /// Force cgroup v1 backend selection (`--cgroup-v1` override)
     #[serde(default)]
     pub force_cgroup_v1: bool,
-    /// Inherit file descriptors from parent process
     #[serde(default)]
     pub inherit_fds: bool,
-    /// Redirect stdout to file (optional)
     pub stdout_file: Option<PathBuf>,
-    /// Redirect stderr to file (optional)
     pub stderr_file: Option<PathBuf>,
-    /// Enable TTY support for interactive programs
     pub enable_tty: bool,
-    /// Use pipes for real-time I/O instead of files
     pub use_pipes: bool,
-    /// Input data to send to stdin
     pub stdin_data: Option<String>,
-    /// Redirect stdin from file (optional)
     pub stdin_file: Option<PathBuf>,
-    /// Buffer size for I/O operations (bytes)
     pub io_buffer_size: usize,
-    /// Text encoding for I/O operations
     pub text_encoding: String,
-    /// Namespace isolation configuration
     pub enable_pid_namespace: bool,
     pub enable_mount_namespace: bool,
     pub enable_network_namespace: bool,
     pub enable_user_namespace: bool,
-    /// Allow degraded (no-isolation) fallback for non-root permissive mode.
-    /// Default false: EPERM from clone() is a hard error unless explicitly opted in.
     #[serde(default)]
     pub allow_degraded: bool,
-    /// Directory bindings for filesystem access
+    #[serde(default)]
+    pub no_seccomp: bool,
+    #[serde(default)]
+    pub seccomp_policy_file: Option<PathBuf>,
     pub directory_bindings: Vec<DirectoryBinding>,
 }
 
 impl IsolateConfig {
-    /// Runtime root directory scoped by effective UID.
-    /// Prevents root and non-root runs from colliding on shared `/tmp/rustbox`.
     pub fn runtime_root_dir() -> PathBuf {
         let euid = unsafe { libc::geteuid() };
         std::env::temp_dir().join(format!("rustbox-uid-{}", euid))
     }
 
-    /// Derive per-box UID/GID from box_id (IOI Isolate convention).
-    /// UIDs 60000-60999, one per box.
-    pub fn uid_for_box(box_id: u32) -> u32 {
-        const BASE_UID: u32 = 60000;
-        const MAX_BOX_ID: u32 = 999;
-        if box_id > MAX_BOX_ID {
-            return 65534; // fallback to nobody for out-of-range
-        }
-        BASE_UID + box_id
-    }
 }
 
 impl Default for IsolateConfig {
-    /// Judge-V1 default profile per plan.md Section 2.1
-    /// - strict mode enabled
-    /// - no network
-    /// - proxy+payload process headroom
-    /// - read-only filesystem with controlled writable work area
-    /// - no_new_privileges required (enforced in executor)
     fn default() -> Self {
         Self {
             instance_id: uuid::Uuid::new_v4().to_string(),
             workdir: Self::runtime_root_dir(),
             chroot_dir: None,
-            // Judge-v1 strict baseline: payload must drop to unprivileged identity.
-            uid: Some(65534),                      // nobody
-            gid: Some(65534),                      // nogroup
-            memory_limit: Some(128 * 1024 * 1024), // 128MB default for judge
+            uid: Some(65534),
+            gid: Some(65534),
+            memory_limit: Some(128 * 1024 * 1024),
             time_limit: Some(Duration::from_secs(10)),
             cpu_time_limit: Some(Duration::from_secs(10)),
             wall_time_limit: Some(Duration::from_secs(20)),
-            process_limit: Some(10), // Proxy + payload baseline headroom
-            file_size_limit: Some(64 * 1024 * 1024), // 64MB
-            stack_limit: Some(8 * 1024 * 1024), // 8MB default stack
-            core_limit: Some(0),     // Disable core dumps by default
-            fd_limit: Some(64),      // Default file descriptor limit
-            virtual_memory_limit: None, // Set per-language in with_language_defaults()
+            process_limit: Some(10),
+            file_size_limit: Some(64 * 1024 * 1024),
+            stack_limit: Some(8 * 1024 * 1024),
+            core_limit: Some(0),
+            fd_limit: Some(64),
+            virtual_memory_limit: None,
             environment: Vec::new(),
-            strict_mode: true, // Strict mode by default (judge-v1)
+            strict_mode: true,
             force_cgroup_v1: false,
             inherit_fds: false,
             stdout_file: None,
@@ -234,102 +166,72 @@ impl Default for IsolateConfig {
             use_pipes: false,
             stdin_data: None,
             stdin_file: None,
-            io_buffer_size: 8192, // 8KB default buffer
+            io_buffer_size: 8192,
             text_encoding: "utf-8".to_string(),
-            enable_pid_namespace: true,     // Mandatory for judge-v1
-            enable_mount_namespace: true,   // Mandatory for judge-v1
-            enable_network_namespace: true, // Network isolation
-            enable_user_namespace: false,   // Rootful strict GA (judge-v1)
-            allow_degraded: false,          // C3: Never degrade by default
+            enable_pid_namespace: true,
+            enable_mount_namespace: true,
+            enable_network_namespace: true,
+            enable_user_namespace: false,
+            allow_degraded: false,
+            no_seccomp: false,
+            seccomp_policy_file: None,
             directory_bindings: Vec::new(),
         }
     }
 }
 
-/// Execution result from an isolated process
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionResult {
-    /// Exit code of the process
     pub exit_code: Option<i32>,
-    /// Execution status
     pub status: ExecutionStatus,
-    /// Standard output
     pub stdout: String,
-    /// Standard error
     pub stderr: String,
-    /// Output integrity state from runtime collector
     pub output_integrity: OutputIntegrity,
-    /// CPU time used (in seconds)
     pub cpu_time: f64,
-    /// Wall clock time used (in seconds)
     pub wall_time: f64,
-    /// Peak memory usage (in bytes)
     pub memory_peak: u64,
-    /// Signal that terminated the process (if any)
     pub signal: Option<i32>,
-    /// Success flag
     pub success: bool,
-    /// Additional error message
     pub error_message: Option<String>,
 }
 
-/// Status of process execution - STABLE TAXONOMY (v1 frozen)
-/// Per plan.md Section 8.4: Status set is closed in v1
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum ExecutionStatus {
-    /// Process completed successfully (exit code 0, no violations)
     #[default]
     #[serde(rename = "OK")]
     Ok,
-    /// Time limit exceeded (CPU or wall time)
     #[serde(rename = "TLE")]
     TimeLimit,
-    /// Memory limit exceeded
     #[serde(rename = "MLE")]
     MemoryLimit,
-    /// Runtime error (non-zero exit, non-limit signal)
     #[serde(rename = "RE")]
     RuntimeError,
-    /// Internal error (judge infrastructure failure)
     #[serde(rename = "IE")]
     InternalError,
-    /// Fatal signal (not attributable to judge kill or kernel limit)
     #[serde(rename = "SIG")]
     Signaled,
-    /// Security violation (forbidden syscall, etc.)
     #[serde(rename = "SV")]
     SecurityViolation,
-    /// Abuse pattern detected (fork bomb, FD exhaustion, etc.)
     #[serde(rename = "ABUSE")]
     Abuse,
-    /// Process limit exceeded
     #[serde(rename = "PLE")]
     ProcessLimit,
-    /// File size limit exceeded
     #[serde(rename = "FSE")]
     FileSizeLimit,
 }
 
-/// Verdict actor - who made the termination decision
-/// Per plan.md Section 8.4: Closed set in v1
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum VerdictActor {
-    /// Judge system initiated termination
     #[serde(rename = "judge")]
     Judge,
-    /// Kernel enforced limit
     #[serde(rename = "kernel")]
     Kernel,
-    /// Runtime/program behavior
     #[serde(rename = "runtime")]
     Runtime,
 }
 
-/// Verdict cause - specific reason for non-OK verdict
-/// Per plan.md Section 8.4: Closed set in v1
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum VerdictCause {
-    // TLE causes
     #[serde(rename = "tle_cpu_judge")]
     TleCpuJudge,
     #[serde(rename = "tle_cpu_kernel")]
@@ -337,23 +239,19 @@ pub enum VerdictCause {
     #[serde(rename = "tle_wall_judge")]
     TleWallJudge,
 
-    // MLE causes
     #[serde(rename = "mle_kernel_oom")]
     MleKernelOom,
     #[serde(rename = "mle_limit_breach")]
     MleLimitBreach,
 
-    // RE causes
     #[serde(rename = "re_nonzero_exit")]
     ReNonzeroExit,
     #[serde(rename = "re_fatal_signal")]
     ReFatalSignal,
 
-    // SIG causes
     #[serde(rename = "sig_unattributed")]
     SigUnattributed,
 
-    // ABUSE causes
     #[serde(rename = "abuse_fork_bomb")]
     AbuseForkBomb,
     #[serde(rename = "abuse_fd_exhaustion")]
@@ -363,7 +261,6 @@ pub enum VerdictCause {
     #[serde(rename = "abuse_exec_churn")]
     AbuseExecChurn,
 
-    // IE causes
     #[serde(rename = "ie_missing_evidence")]
     IeMissingEvidence,
     #[serde(rename = "ie_contradictory_evidence")]
@@ -373,13 +270,10 @@ pub enum VerdictCause {
     #[serde(rename = "ie_cleanup_failure")]
     IeCleanupFailure,
 
-    // Other
     #[serde(rename = "normal_exit")]
     NormalExit,
 }
 
-/// Output integrity classification
-/// Per plan.md Section 12
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum OutputIntegrity {
     #[default]
@@ -407,9 +301,6 @@ impl std::fmt::Display for OutputIntegrity {
     }
 }
 
-
-/// CPU vs Wall divergence classification
-/// Per plan.md Section 13
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum DivergenceClass {
     #[serde(rename = "cpu_bound")]
@@ -420,7 +311,6 @@ pub enum DivergenceClass {
     HostInterferenceSuspected,
 }
 
-/// Custom error types for rustbox
 #[derive(Error, Debug)]
 pub enum IsolateError {
     #[error("IO error: {0}")]
@@ -438,12 +328,6 @@ pub enum IsolateError {
     #[error("Lock error: {0}")]
     Lock(String),
 
-    #[error("Lock already held by process")]
-    LockBusy,
-
-    #[error("Lock file corrupted or incompatible")]
-    LockCorrupted,
-
     #[error("Namespace isolation error: {0}")]
     Namespace(String),
 
@@ -456,99 +340,8 @@ pub enum IsolateError {
     #[error("Privilege error: {0}")]
     Privilege(String),
 
-    #[error("Advanced lock error: {0}")]
-    AdvancedLock(LockError),
 }
 
-/// Enhanced lock error types for the new locking system
-#[derive(Error, Debug)]
-pub enum LockError {
-    #[error("Box {box_id} is busy (owned by PID {owner_pid:?})")]
-    Busy { box_id: u32, owner_pid: Option<u32> },
-
-    #[error(
-        "Timeout waiting for box {box_id} after {waited:?} (current owner: {current_owner:?})"
-    )]
-    Timeout {
-        box_id: u32,
-        waited: Duration,
-        current_owner: Option<String>,
-    },
-
-    #[error("Lock directory permission denied: {details}")]
-    PermissionDenied { details: String },
-
-    #[error("Filesystem error: {0}")]
-    FilesystemError(#[from] std::io::Error),
-
-    #[error("Lock corruption detected for box {box_id}: {details}")]
-    CorruptedLock { box_id: u32, details: String },
-
-    #[error("System error: {message}")]
-    SystemError { message: String },
-
-    #[error("Lock manager not initialized")]
-    NotInitialized,
-}
-
-/// Convert lock errors to appropriate exit codes
-impl From<LockError> for i32 {
-    fn from(err: LockError) -> i32 {
-        match err {
-            LockError::Busy { .. } => 2,              // Temporary failure
-            LockError::Timeout { .. } => 3,           // Timeout
-            LockError::PermissionDenied { .. } => 77, // Permission error
-            LockError::FilesystemError(_) => 74,      // IO error
-            LockError::CorruptedLock { .. } => 75,    // Data error
-            LockError::SystemError { .. } => 1,       // General error
-            LockError::NotInitialized => 1,           // General error
-        }
-    }
-}
-
-/// Result type for lock operations
-pub type LockResult<T> = std::result::Result<T, LockError>;
-
-/// Lock information stored in lock files
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockInfo {
-    pub pid: u32,
-    pub box_id: u32,
-    pub created_at: SystemTime,
-    pub rustbox_version: String,
-}
-
-/// Health status for lock manager
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum HealthStatus {
-    Healthy,
-    Degraded,
-    Unhealthy,
-}
-
-/// Lock manager health information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockManagerHealth {
-    pub status: HealthStatus,
-    pub active_locks: u32,
-    pub stale_locks_cleaned: u64,
-    pub lock_directory_writable: bool,
-    pub cleanup_thread_alive: bool,
-    pub metrics: LockMetrics,
-}
-
-/// Metrics for lock operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockMetrics {
-    pub total_acquisitions: u64,
-    pub average_acquisition_time_ms: f64,
-    pub lock_contentions: u64,
-    pub cleanup_operations: u64,
-    pub stale_locks_cleaned: u64,
-    pub errors_by_type: HashMap<String, u64>,
-}
-
-/// Result type alias for rustbox operations
 pub type Result<T> = std::result::Result<T, IsolateError>;
 impl From<std::process::Output> for ExecutionResult {
     fn from(output: std::process::Output) -> Self {
@@ -564,9 +357,9 @@ impl From<std::process::Output> for ExecutionResult {
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             output_integrity: OutputIntegrity::Complete,
-            cpu_time: 0.0,  // Not available from std::process::Output
-            wall_time: 0.0, // Not available from std::process::Output
-            memory_peak: 0, // Not available from std::process::Output
+            cpu_time: 0.0,
+            wall_time: 0.0,
+            memory_peak: 0,
             signal: {
                 use std::os::unix::process::ExitStatusExt;
                 output.status.signal()
@@ -582,47 +375,30 @@ impl From<nix::errno::Errno> for IsolateError {
     }
 }
 
-/// Capability Report - Per plan.md Section 4.2
-/// Reports what controls were configured, applied, and missing
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CapabilityReport {
-    /// Controls that were requested/configured
     pub configured_controls: Vec<String>,
-    /// Controls that were successfully applied
     pub applied_controls: Vec<String>,
-    /// Controls that could not be applied
     pub missing_controls: Vec<String>,
-    /// Execution mode
     pub mode: SecurityMode,
-    /// Reason for mode decision
     pub mode_decision_reason: String,
-    /// Reason execution is unsafe (if applicable)
     pub unsafe_execution_reason: Option<String>,
-    /// Selected cgroup backend
     pub cgroup_backend_selected: Option<String>,
-    /// pidfd support mode
     pub pidfd_mode: PidfdMode,
-    /// /proc policy applied
     pub proc_policy_applied: String,
-    /// /sys policy applied
     pub sys_policy_applied: String,
 }
 
-/// Security mode
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum SecurityMode {
-    /// Strict: mandatory controls must be enforced
     #[serde(rename = "strict")]
     Strict,
-    /// Permissive: degraded controls allowed but marked unsafe
     #[serde(rename = "permissive")]
     Permissive,
-    /// Dev: trusted local debugging, no sandbox guarantees
     #[serde(rename = "dev")]
     Dev,
 }
 
-/// pidfd support mode
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum PidfdMode {
     #[serde(rename = "native")]
@@ -633,49 +409,31 @@ pub enum PidfdMode {
     Unavailable,
 }
 
-/// Evidence Bundle - Per plan.md Section 8.5.1
-/// Immutable evidence collected during execution
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvidenceBundle {
-    /// Wait outcome (exit code, signal, etc.)
     pub wait_outcome: WaitOutcome,
-    /// Judge actions (timer expiries, signals sent, escalation)
     pub judge_actions: Vec<JudgeAction>,
-    /// Cgroup evidence snapshot
     pub cgroup_evidence: Option<CgroupEvidence>,
-    /// Timing evidence
     pub timing_evidence: TimingEvidence,
-    /// Process lifecycle evidence
     pub process_lifecycle: ProcessLifecycleEvidence,
-    /// Evidence collection errors
     pub evidence_collection_errors: Vec<String>,
 }
 
-/// Wait outcome from process termination
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WaitOutcome {
-    /// Exit code (if normal exit)
     pub exit_code: Option<i32>,
-    /// Terminating signal (if signaled)
     pub terminating_signal: Option<i32>,
-    /// Whether process was stopped
     pub stopped: bool,
-    /// Whether process was continued
     pub continued: bool,
 }
 
-/// Judge action during execution
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JudgeAction {
-    /// Timestamp of action
     pub timestamp: SystemTime,
-    /// Action type
     pub action_type: JudgeActionType,
-    /// Action details
     pub details: String,
 }
 
-/// Judge action types
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum JudgeActionType {
     #[serde(rename = "timer_expiry")]
@@ -688,74 +446,45 @@ pub enum JudgeActionType {
     ForcedKill,
 }
 
-/// Cgroup evidence from resource accounting
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CgroupEvidence {
-    /// Memory usage peak
     pub memory_peak: Option<u64>,
-    /// Memory limit
     pub memory_limit: Option<u64>,
-    /// OOM events
     pub oom_events: u64,
-    /// OOM kill events
     pub oom_kill_events: u64,
-    /// CPU usage (microseconds)
     pub cpu_usage_usec: Option<u64>,
-    /// Process count
     pub process_count: Option<u32>,
-    /// Process limit
     pub process_limit: Option<u32>,
 }
 
-/// Timing evidence
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimingEvidence {
-    /// Wall clock elapsed (monotonic)
     pub wall_elapsed_ms: u64,
-    /// CPU time used (from cgroup or rusage)
     pub cpu_time_ms: u64,
-    /// CPU/wall ratio
     pub cpu_wall_ratio: f64,
-    /// Divergence classification
     pub divergence_class: Option<DivergenceClass>,
 }
 
-/// Process lifecycle evidence
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProcessLifecycleEvidence {
-    /// Reap summary
     pub reap_summary: String,
-    /// Descendant containment summary
     pub descendant_containment: String,
-    /// Zombie count after cleanup
     pub zombie_count: u32,
 }
 
-/// Verdict Provenance - Per plan.md Section 8.5
-/// Complete provenance for non-OK verdicts
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VerdictProvenance {
-    /// Who made the termination decision
     pub verdict_actor: VerdictActor,
-    /// Specific reason for verdict
     pub verdict_cause: VerdictCause,
-    /// Evidence sources used
     pub verdict_evidence_sources: Vec<String>,
-    /// Terminating signal (if applicable)
     pub termination_signal: Option<i32>,
-    /// CPU time used
     pub cpu_time_used: f64,
-    /// Wall time used
     pub wall_time_used: f64,
-    /// Peak memory usage
     pub memory_peak: u64,
-    /// Limit snapshot at execution time
     pub limit_snapshot: LimitSnapshot,
-    /// Evidence collection errors
     pub evidence_collection_errors: Vec<String>,
 }
 
-/// Limit snapshot at execution time
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LimitSnapshot {
     pub cpu_limit_ms: Option<u64>,
@@ -765,64 +494,37 @@ pub struct LimitSnapshot {
     pub output_limit_bytes: Option<u64>,
 }
 
-/// Enhanced Execution Result with Judge-V1 requirements
-/// Per plan.md Section 14.1
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JudgeExecutionResult {
-    /// Execution status (stable taxonomy)
     pub status: ExecutionStatus,
-    /// Exit code (if normal exit)
     pub exit_code: Option<i32>,
-    /// Standard output
     pub stdout: String,
-    /// Standard error
     pub stderr: String,
-    /// Output integrity classification
     pub output_integrity: OutputIntegrity,
-    /// CPU time used (seconds)
     pub cpu_time: f64,
-    /// Wall time used (seconds)
     pub wall_time: f64,
-    /// Peak memory usage (bytes)
     pub memory_peak: u64,
-    /// Verdict provenance (for non-OK)
     pub verdict_provenance: Option<VerdictProvenance>,
-    /// Capability report
     pub capability_report: CapabilityReport,
-    /// Execution envelope ID (SHA256 hash)
     pub execution_envelope_id: String,
-    /// Evidence bundle
     pub evidence_bundle: EvidenceBundle,
-    /// Language runtime envelope (if applicable)
     pub language_runtime_envelope: Option<String>,
 }
 
-/// Execution Envelope Inputs - Per plan.md Section 14.2
-/// Canonical inputs for deterministic envelope hash
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionEnvelopeInputs {
-    /// Kernel release
     pub kernel_release: String,
-    /// Key capability flags
     pub capability_flags: Vec<String>,
-    /// Namespace set actually applied
     pub namespaces_applied: Vec<String>,
-    /// Cgroup backend
     pub cgroup_backend: String,
-    /// Effective limit set
     pub effective_limits: LimitSnapshot,
-    /// Mount topology fingerprint
     pub mount_topology_fingerprint: String,
-    /// UID/GID execution identity
     pub uid_gid_identity: String,
-    /// Rustbox version/build
     pub rustbox_version: String,
-    /// Language runtime envelope ID
     pub language_runtime_envelope_id: Option<String>,
 }
 
 impl ExecutionEnvelopeInputs {
-    /// Compute SHA256 hash of canonical envelope inputs
     pub fn compute_envelope_id(&self) -> String {
         use sha2::{Digest, Sha256};
         let canonical = serde_json::to_string(self).unwrap_or_default();

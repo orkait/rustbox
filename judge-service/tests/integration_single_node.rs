@@ -34,6 +34,7 @@ async fn start_server() -> (String, Arc<dyn judge_service::database::Database>) 
         db.clone(),
         queue.clone(),
         "test-node".to_string(),
+        10,
     );
 
     let state = judge_service::AppState {
@@ -42,6 +43,12 @@ async fn start_server() -> (String, Arc<dyn judge_service::database::Database>) 
         worker_count: 2,
         api_key: None,
         node_id: "test-node".to_string(),
+        allow_localhost_webhooks: true,
+        max_code_bytes: 64 * 1024,
+        max_stdin_bytes: 256 * 1024,
+        sync_wait_timeout_secs: 30,
+        sync_poll_interval_ms: 200,
+        webhook_timeout_secs: 10,
     };
 
     let app = judge_service::api::router().with_state(state);

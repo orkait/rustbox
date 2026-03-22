@@ -1,7 +1,3 @@
-/// Host-clean baseline checker.
-///
-/// Captures a snapshot of mounts, cgroups, and processes before execution,
-/// then verifies after cleanup that no sandbox-attributable resources leaked.
 use crate::config::types::{IsolateError, Result};
 use log::{error, info};
 use std::fs;
@@ -14,7 +10,6 @@ pub struct BaselineChecker {
 }
 
 impl BaselineChecker {
-    /// Capture baseline before execution
     pub fn capture_baseline() -> Result<Self> {
         Ok(Self {
             baseline_mounts: Self::get_mounts()?,
@@ -23,7 +18,6 @@ impl BaselineChecker {
         })
     }
 
-    /// Verify host-clean baseline after cleanup
     pub fn verify_baseline(&self) -> Result<()> {
         let current_mounts = Self::get_mounts()?;
         let current_cgroups = Self::get_cgroups()?;

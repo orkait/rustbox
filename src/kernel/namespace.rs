@@ -1,5 +1,3 @@
-//! Process isolation via Linux namespaces.
-
 use crate::config::types::{IsolateError, Result};
 use nix::sched::{CloneFlags, unshare};
 use nix::unistd::sethostname;
@@ -149,7 +147,7 @@ impl NamespaceIsolation {
 
         // SAFETY: ioctl reads from initialized ifreq.
         let set_flags = unsafe { libc::ioctl(sock, libc::SIOCSIFFLAGS as _, &ifr) };
-        let ioctl_err = std::io::Error::last_os_error(); // capture before close clobbers errno
+        let ioctl_err = std::io::Error::last_os_error();
         // SAFETY: close valid descriptor.
         let _ = unsafe { libc::close(sock) };
 
@@ -164,7 +162,6 @@ impl NamespaceIsolation {
     }
 }
 
-/// Harden mount propagation so sandbox mounts never leak back to host.
 pub fn harden_mount_propagation() -> Result<()> {
     use nix::mount::{MsFlags, mount};
 

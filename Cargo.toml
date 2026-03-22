@@ -28,6 +28,7 @@ libc = "0.2"
 fastrand = "2.0"
 crossbeam-channel = "0.5"
 sha2 = "0.10"
+seccompiler = "0.4"
 caps = "0.5"
 once_cell = "1.19"
 

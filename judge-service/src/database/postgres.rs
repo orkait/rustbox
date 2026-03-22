@@ -11,8 +11,6 @@ pub struct PgDatabase {
     pool: sqlx::PgPool,
 }
 
-/// Row type that maps 1:1 with the submissions table columns.
-/// `sqlx::FromRow` drives column-to-field mapping.
 #[derive(sqlx::FromRow)]
 struct PgSubmissionRow {
     id: Uuid,
@@ -21,6 +19,8 @@ struct PgSubmissionRow {
     language: String,
     code: String,
     stdin: String,
+    webhook_url: Option<String>,
+    webhook_secret: Option<String>,
     status: String,
     node_id: Option<String>,
     sandbox_id: Option<String>,
@@ -47,6 +47,8 @@ impl From<PgSubmissionRow> for Submission {
             language: r.language,
             code: r.code,
             stdin: r.stdin,
+            webhook_url: r.webhook_url,
+            webhook_secret: r.webhook_secret,
             status: r.status,
             node_id: r.node_id,
             sandbox_id: r.sandbox_id,
@@ -67,7 +69,6 @@ impl From<PgSubmissionRow> for Submission {
 }
 
 impl PgDatabase {
-    /// Open a connection pool to the given Postgres URL (max 20 connections).
     pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(20)
@@ -76,14 +77,9 @@ impl PgDatabase {
         Ok(Self { pool })
     }
 
-    /// Create the submissions table, indexes, and LISTEN/NOTIFY trigger if they
-    /// do not yet exist. Uses an advisory lock on a single connection so
-    /// concurrent node startups don't race on DDL.
     pub async fn run_migrations(&self) -> anyhow::Result<()> {
-        // Acquire a dedicated connection (advisory locks are per-connection).
         let mut conn = self.pool.acquire().await?;
 
-        // Advisory lock prevents concurrent migration races across nodes.
         sqlx::query("SELECT pg_advisory_lock(42)")
             .execute(&mut *conn)
             .await?;
@@ -107,6 +103,8 @@ impl PgDatabase {
                 language      TEXT          NOT NULL,
                 code          TEXT          NOT NULL,
                 stdin         TEXT          NOT NULL DEFAULT '',
+                webhook_url   TEXT,
+                webhook_secret TEXT,
                 status        TEXT          NOT NULL DEFAULT 'pending',
                 node_id       TEXT,
                 sandbox_id    TEXT,
@@ -171,8 +169,6 @@ impl PgDatabase {
         Ok(())
     }
 
-    /// Return a `PgListener` already subscribed to the "new_submission" channel.
-    /// The caller drives `.recv()` to wake workers without polling.
     pub async fn listener(&self) -> anyhow::Result<sqlx::postgres::PgListener> {
         let mut listener = sqlx::postgres::PgListener::connect_with(&self.pool).await?;
         listener.listen("new_submission").await?;
@@ -183,19 +179,18 @@ impl PgDatabase {
 #[async_trait]
 impl Database for PgDatabase {
     async fn insert_submission(&self, sub: &Submission) -> anyhow::Result<()> {
-        // ON CONFLICT DO NOTHING makes the call idempotent for deduplication.
         sqlx::query(
             r#"
             INSERT INTO submissions
-                (id, user_id, ip_address, language, code, stdin, status,
-                 node_id, sandbox_id, verdict, exit_code, stdout, stderr, signal,
+                (id, user_id, ip_address, language, code, stdin, webhook_url, webhook_secret,
+                 status, node_id, sandbox_id, verdict, exit_code, stdout, stderr, signal,
                  error_message, cpu_time, wall_time, memory_peak,
                  created_at, started_at, completed_at)
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7,
-                 $8, $9, $10, $11, $12, $13, $14,
-                 $15, $16, $17, $18,
-                 $19, $20, $21)
+                ($1, $2, $3, $4, $5, $6, $7, $8,
+                 $9, $10, $11, $12, $13, $14, $15, $16,
+                 $17, $18, $19, $20,
+                 $21, $22, $23)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
@@ -205,6 +200,8 @@ impl Database for PgDatabase {
         .bind(&sub.language)
         .bind(&sub.code)
         .bind(&sub.stdin)
+        .bind(&sub.webhook_url)
+        .bind(&sub.webhook_secret)
         .bind(&sub.status)
         .bind(&sub.node_id)
         .bind(&sub.sandbox_id)
@@ -226,8 +223,6 @@ impl Database for PgDatabase {
         Ok(())
     }
 
-    /// Atomically claim the oldest pending submission for this node using
-    /// FOR UPDATE SKIP LOCKED — safe for concurrent workers without contention.
     async fn claim_pending(&self, node_id: &str) -> anyhow::Result<Option<Submission>> {
         let row: Option<PgSubmissionRow> = sqlx::query_as(
             r#"
@@ -340,8 +335,6 @@ impl Database for PgDatabase {
         Ok(row.map(Submission::from))
     }
 
-    /// Reap submissions stuck in 'running' longer than `timeout`.
-    /// Marks them as error (not pending) to prevent duplicate execution.
     async fn reap_stale(&self, timeout: Duration) -> anyhow::Result<u64> {
         let timeout_secs = timeout.as_secs_f64();
         let result = sqlx::query(

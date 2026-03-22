@@ -1,5 +1,3 @@
-//! Async-signal-safe process lifecycle signaling.
-
 use log::info;
 use nix::sys::signal::{self, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

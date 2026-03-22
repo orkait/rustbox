@@ -1,25 +1,15 @@
 use crate::config::types::{ExecutionResult, IsolateConfig, IsolateError, Result};
-use crate::core::types::LaunchEvidence;
-/// Main isolate management interface
-use crate::exec::executor::ProcessExecutor;
-use crate::safety::lock_manager::{acquire_box_lock, with_file_lock, BoxLockGuard};
-use log::warn;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::config::validator::validate_config;
+use crate::core::types::{LaunchEvidence, SandboxLaunchRequest};
+use crate::kernel::cgroup::{self, CgroupBackend};
+use crate::observability::audit::events;
+use crate::runtime::security::command_validation;
+use crate::safety::cleanup::BaselineChecker;
+use crate::safety::uid_pool;
 use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
-/// Persistent isolate instance configuration
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct IsolateInstance {
-    config: IsolateConfig,
-    created_at: chrono::DateTime<chrono::Utc>,
-    last_used: chrono::DateTime<chrono::Utc>,
-}
-
-/// Per-run execution overrides applied on top of persisted instance config.
 #[derive(Clone, Debug, Default)]
 pub struct ExecutionOverrides {
     pub stdin_data: Option<String>,
@@ -36,321 +26,194 @@ pub(crate) fn apply_overrides_to_config(
     overrides: &ExecutionOverrides,
 ) -> IsolateConfig {
     let mut config = base.clone();
-
-    if let Some(cpu_seconds) = overrides.max_cpu {
-        config.cpu_time_limit = Some(Duration::from_secs(cpu_seconds));
-        config.time_limit = Some(Duration::from_secs(cpu_seconds));
+    if let Some(v) = overrides.max_cpu {
+        config.cpu_time_limit = Some(Duration::from_secs(v));
+        config.time_limit = Some(Duration::from_secs(v));
     }
-
-    if let Some(memory_mb) = overrides.max_memory {
-        config.memory_limit = Some(memory_mb * 1024 * 1024); // Convert MB to bytes
+    if let Some(v) = overrides.max_memory {
+        config.memory_limit = Some(v * 1024 * 1024);
     }
-
-    if let Some(time_seconds) = overrides.max_time {
-        config.cpu_time_limit = Some(Duration::from_secs(time_seconds));
+    if let Some(v) = overrides.max_time {
+        config.cpu_time_limit = Some(Duration::from_secs(v));
     }
-
-    if let Some(wall_time_seconds) = overrides.max_wall_time {
-        config.wall_time_limit = Some(Duration::from_secs(wall_time_seconds));
+    if let Some(v) = overrides.max_wall_time {
+        config.wall_time_limit = Some(Duration::from_secs(v));
     }
-
-    if let Some(fd_limit_val) = overrides.fd_limit {
-        config.fd_limit = Some(fd_limit_val);
+    if let Some(v) = overrides.fd_limit {
+        config.fd_limit = Some(v);
     }
-
-    if let Some(proc_limit) = overrides.process_limit {
-        config.process_limit = Some(proc_limit);
+    if let Some(v) = overrides.process_limit {
+        config.process_limit = Some(v);
     }
-
     config
 }
 
-/// Atomically write content to a file: write to temp → fsync → rename → fsync parent dir.
-/// Prevents data loss on crash (ext4/xfs can lose renames without parent dir fsync).
-fn atomic_write(target: &Path, content: &[u8]) -> std::io::Result<()> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no parent dir"))?;
-
-    // Write to a temp file in the same directory (same filesystem for rename)
-    let temp_path = parent.join(format!(
-        ".{}.tmp.{}",
-        target.file_name().unwrap_or_default().to_string_lossy(),
-        std::process::id()
-    ));
-
-    {
-        let mut f = fs::File::create(&temp_path)?;
-        f.write_all(content)?;
-        f.sync_all()?; // fsync the data
-    }
-
-    // Atomic rename
-    fs::rename(&temp_path, target)?;
-
-    // fsync the parent directory to ensure the rename is durable
-    if let Ok(dir) = fs::File::open(parent) {
-        let _ = dir.sync_all();
-    }
-
-    Ok(())
-}
-
-/// Main isolate manager for handling multiple isolated environments
 pub struct Isolate {
-    instance: IsolateInstance,
+    config: IsolateConfig,
     base_path: PathBuf,
-    box_lock_guard: Option<BoxLockGuard>,
+    cgroup: Option<Box<dyn CgroupBackend>>,
+    baseline: Option<BaselineChecker>,
     last_launch_evidence: Option<LaunchEvidence>,
+    _uid_guard: Option<uid_pool::UidGuard>,
 }
 
 impl Isolate {
-    fn candidate_state_roots() -> Vec<PathBuf> {
-        let preferred = IsolateConfig::runtime_root_dir();
-        let fallback = std::env::temp_dir().join("rustbox");
-
-        if preferred == fallback {
-            vec![preferred]
-        } else {
-            vec![preferred, fallback]
-        }
-    }
-
     fn select_state_root() -> Result<PathBuf> {
-        let mut failures = Vec::new();
-
-        for candidate in Self::candidate_state_roots() {
-            match fs::create_dir_all(&candidate) {
-                Ok(_) => {
-                    let probe = candidate.join(format!(".write_probe_{}", std::process::id()));
-                    match fs::write(&probe, b"ok") {
-                        Ok(_) => {
-                            let _ = fs::remove_file(probe);
-                            return Ok(candidate);
-                        }
-                        Err(e) => failures.push(format!("{} => {}", candidate.display(), e)),
-                    }
-                }
-                Err(e) => failures.push(format!("{} => {}", candidate.display(), e)),
+        let candidates = vec![
+            IsolateConfig::runtime_root_dir(),
+            std::env::temp_dir().join("rustbox"),
+        ];
+        for candidate in &candidates {
+            if fs::create_dir_all(candidate).is_ok() {
+                return Ok(candidate.clone());
             }
         }
-
-        Err(IsolateError::Config(format!(
-            "No writable rustbox state root available: {}",
-            failures.join("; ")
-        )))
+        Err(IsolateError::Config("No writable state root available".to_string()))
     }
 
-    fn ensure_instance_workdir(&mut self) -> Result<()> {
+    fn ensure_workdir(&mut self) -> Result<()> {
         let workdir = self.base_path.join("workdir");
-        fs::create_dir_all(&workdir).map_err(IsolateError::Io)?;
+        fs::create_dir_all(&workdir)?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-
-            fs::set_permissions(&workdir, fs::Permissions::from_mode(0o755))
-                .map_err(IsolateError::Io)?;
-
+            fs::set_permissions(&workdir, fs::Permissions::from_mode(0o755))?;
             if unsafe { libc::geteuid() } == 0 {
-                if let (Some(uid), Some(gid)) = (self.instance.config.uid, self.instance.config.gid)
-                {
+                if let (Some(uid), Some(gid)) = (self.config.uid, self.config.gid) {
                     use nix::unistd::{chown, Gid, Uid};
-                    chown(&workdir, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid))).map_err(
-                        |e| {
-                            IsolateError::Config(format!(
-                                "Failed to set workdir ownership {}:{} on {}: {}",
-                                uid,
-                                gid,
-                                workdir.display(),
-                                e
-                            ))
-                        },
-                    )?;
+                    chown(&workdir, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))
+                        .map_err(|e| IsolateError::Config(format!("chown workdir: {}", e)))?;
                 }
             }
         }
 
-        self.instance.config.workdir = workdir;
+        self.config.workdir = workdir;
         Ok(())
     }
 
-    /// Extract box ID from instance_id (format: "rustbox/{box_id}")
-    fn extract_box_id(instance_id: &str) -> Result<u32> {
-        if let Some(box_id_str) = instance_id.strip_prefix("rustbox/") {
-            box_id_str.parse::<u32>().map_err(|_| {
-                IsolateError::Config(format!("Invalid box ID in instance_id: {}", instance_id))
-            })
-        } else {
-            Err(IsolateError::Config(format!(
-                "Instance ID must start with 'rustbox/': {}",
-                instance_id
-            )))
-        }
-    }
+    /// Allocate all resources. Nothing else allocates after this.
+    pub fn new(mut config: IsolateConfig) -> Result<Self> {
+        let uid_guard = uid_pool::UidGuard::allocate()?;
+        let pool_uid = uid_guard.uid();
+        config.uid = Some(pool_uid);
+        config.gid = Some(pool_uid);
+        config.instance_id = format!("rustbox/{}", pool_uid);
 
-    /// Create a new isolate instance
-    pub fn new(config: IsolateConfig) -> Result<Self> {
-        if config.instance_id.contains("..") || config.instance_id.starts_with('/') {
-            return Err(IsolateError::Config(format!(
-                "instance_id contains unsafe path components: {}", config.instance_id
-            )));
+        if config.strict_mode && unsafe { libc::geteuid() } != 0 {
+            return Err(IsolateError::Privilege("Strict mode requires root".to_string()));
+        }
+
+        let validation = validate_config(&config)?;
+        for warning in validation.warnings {
+            log::warn!("Config: {}", warning);
         }
 
         let mut base_path = Self::select_state_root()?;
-        base_path.push(&config.instance_id);
+        base_path.push(pool_uid.to_string());
+        fs::create_dir_all(&base_path)?;
 
-        // Create base directory
-        fs::create_dir_all(&base_path).map_err(IsolateError::Io)?;
-
-        let instance = IsolateInstance {
-            config,
-            created_at: chrono::Utc::now(),
-            last_used: chrono::Utc::now(),
+        let cgroup = match cgroup::create_cgroup_backend(
+            config.force_cgroup_v1, config.strict_mode, &config.instance_id,
+        ) {
+            Ok(cg) => match cg.create(&config.instance_id) {
+                Ok(()) => {
+                    if let Some(mem) = config.memory_limit {
+                        cg.set_memory_limit(&config.instance_id, mem)?;
+                    }
+                    if let Some(procs) = config.process_limit {
+                        cg.set_process_limit(&config.instance_id, procs)?;
+                    }
+                    Some(cg)
+                }
+                Err(e) if config.strict_mode => return Err(e),
+                Err(_) => None,
+            },
+            Err(e) if config.strict_mode => return Err(e),
+            Err(_) => None,
         };
 
-        let mut isolate = Self {
-            instance,
-            base_path,
-            box_lock_guard: None,
+        let baseline = BaselineChecker::capture_baseline().ok();
+
+        Ok(Self {
+            config, base_path, cgroup, baseline,
             last_launch_evidence: None,
-        };
-
-        // Acquire lock before any operations
-        isolate.acquire_lock(true)?;
-
-        // Save the new instance
-        isolate.atomic_instances_update(|instances| {
-            instances.insert(
-                isolate.instance.config.instance_id.clone(),
-                isolate.instance.clone(),
-            );
-        })?;
-
-        Ok(isolate)
+            _uid_guard: Some(uid_guard),
+        })
     }
 
-    /// Load an existing isolate instance
-    pub fn load(instance_id: &str) -> Result<Option<Self>> {
-        let mut config_file = Self::select_state_root()?;
-        config_file.push("instances.json");
-
-        if !config_file.exists() {
-            return Ok(None);
-        }
-
-        let instances = Self::load_all_instances()?;
-        if let Some(instance) = instances.get(instance_id) {
-            let mut base_path = Self::select_state_root()?;
-            base_path.push(instance_id);
-
-            if base_path.exists() {
-                let isolate = Self {
-                    instance: instance.clone(),
-                    base_path,
-                    box_lock_guard: None,
-                    last_launch_evidence: None,
-                };
-                // Don't acquire lock for load - only for exclusive operations
-                Ok(Some(isolate))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// List all isolate instances
-    pub fn list_all() -> Result<Vec<String>> {
-        let instances = Self::load_all_instances()?;
-        Ok(instances.keys().cloned().collect())
-    }
-
-    /// Execute a command in this isolate
     pub fn execute(
         &mut self,
         command: &[String],
         stdin_data: Option<&str>,
     ) -> Result<ExecutionResult> {
-        let overrides = ExecutionOverrides {
+        self.execute_with_overrides(command, &ExecutionOverrides {
             stdin_data: stdin_data.map(str::to_string),
-            ..ExecutionOverrides::default()
-        };
-        self.execute_with_overrides(command, &overrides)
+            ..Default::default()
+        })
     }
 
-    /// Execute a command in this isolate with runtime resource overrides
+    /// Pure execution. No allocation, no deallocation.
     pub fn execute_with_overrides(
         &mut self,
         command: &[String],
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        // Acquire lock for execution to prevent conflicts
-        if self.box_lock_guard.is_none() {
-            self.acquire_lock(false)?;
+        self.ensure_workdir()?;
+
+        let config = apply_overrides_to_config(&self.config, overrides);
+
+        if command.is_empty() {
+            return Err(IsolateError::Config("Empty command".to_string()));
         }
 
-        self.ensure_instance_workdir()?;
+        let validated = match command_validation::validate_and_resolve_command(&command[0]) {
+            Ok(path) => path,
+            Err(e) => {
+                events::command_injection_attempt(&command[0], None);
+                return Err(e);
+            }
+        };
+        let mut argv = vec![validated.to_string_lossy().to_string()];
+        argv.extend(command.iter().skip(1).cloned());
 
-        // Update last used timestamp
-        self.instance.last_used = chrono::Utc::now();
-        self.save()?;
+        if self.cgroup.is_none() && config.strict_mode {
+            return Err(IsolateError::Cgroup("No cgroup backend for strict mode".to_string()));
+        }
 
-        // Clone config and apply overrides
-        let config = apply_overrides_to_config(&self.instance.config, overrides);
+        let request = SandboxLaunchRequest::from_config(
+            &config, &argv, overrides.stdin_data.as_deref(),
+            self.cgroup.as_ref().map(|cg| cg.get_cgroup_path(&config.instance_id)),
+        );
 
-        // Create executor with modified config
-        let mut executor = ProcessExecutor::new(config)?;
+        let outcome = crate::core::supervisor::launch_with_supervisor(
+            request, self.cgroup.as_deref(),
+        )?;
 
-        // Execute the command
-        let result = executor.execute(command, overrides.stdin_data.as_deref())?;
-        self.last_launch_evidence = executor.take_launch_evidence();
-        Ok(result)
+        self.last_launch_evidence = Some(outcome.evidence);
+        Ok(outcome.result)
     }
 
-    /// Execute code directly from string input (Judge0-style)
     pub fn execute_code_string(
-        &mut self,
-        language: &str,
-        code: &str,
-        overrides: &ExecutionOverrides,
+        &mut self, language: &str, code: &str, overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
         match language.to_lowercase().as_str() {
-            "python" | "py" => {
-                self.execute_interpreted(code, "solution.py", &["/usr/bin/python3", "-u"], overrides)
-            }
-            "javascript" | "js" => {
-                self.execute_interpreted(code, "solution.js", &["/usr/local/bin/qjs", "--std"], overrides)
-            }
-            "typescript" | "ts" => {
-                self.execute_interpreted(code, "solution.ts", &["/usr/local/bin/bun", "run"], overrides)
-            }
+            "python" | "py" => self.execute_interpreted(code, "solution.py", &["/usr/bin/python3", "-u"], overrides),
+            "javascript" | "js" => self.execute_interpreted(code, "solution.js", &["/usr/local/bin/qjs", "--std"], overrides),
+            "typescript" | "ts" => self.execute_interpreted(code, "solution.ts", &["/usr/local/bin/bun", "run"], overrides),
             "cpp" | "c++" | "cxx" => self.compile_and_execute_cpp(code, overrides),
             "java" => self.compile_and_execute_java(code, overrides),
-            _ => Err(IsolateError::Config(format!(
-                "Unsupported language: {}",
-                language
-            ))),
+            _ => Err(IsolateError::Config(format!("Unsupported language: {}", language))),
         }
     }
 
-    /// Execute an interpreted language: write source → run → delete.
-    ///
-    /// Unified path for Python, JavaScript, and TypeScript. The `filename`
-    /// is the source file name (e.g. "solution.py") and `prefix_args` are
-    /// the runtime args placed before the source path in the command.
     fn execute_interpreted(
-        &mut self,
-        code: &str,
-        filename: &str,
-        prefix_args: &[&str],
-        overrides: &ExecutionOverrides,
+        &mut self, code: &str, filename: &str, prefix_args: &[&str], overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        self.ensure_instance_workdir()?;
-        self.wipe_workdir_contents();
+        self.ensure_workdir()?;
+        self.wipe_workdir();
 
-        let source_file = self.instance.config.workdir.join(filename);
+        let source_file = self.config.workdir.join(filename);
         let mut command: Vec<String> = prefix_args.iter().map(|s| s.to_string()).collect();
         command.push(source_file.to_string_lossy().to_string());
 
@@ -360,489 +223,179 @@ impl Isolate {
         result
     }
 
-    /// Shared compile-phase config: permissive mode, generous limits.
-    /// Only the default memory and minimum process limit differ between C++ and Java.
     fn configure_compile_phase(
-        config: &mut IsolateConfig,
-        original_config: &IsolateConfig,
-        overrides: &ExecutionOverrides,
-        default_memory_mb: u64,
-        min_process_limit: u32,
+        config: &mut IsolateConfig, original: &IsolateConfig, overrides: &ExecutionOverrides,
+        default_memory_mb: u64, min_process_limit: u32,
     ) {
         config.strict_mode = false;
         config.allow_degraded = unsafe { libc::geteuid() } != 0;
         config.process_limit = Some(min_process_limit);
-
         config.memory_limit = Some(
-            overrides
-                .max_memory
-                .map(|mb| mb * 1024 * 1024)
-                .unwrap_or(default_memory_mb * 1024 * 1024),
+            overrides.max_memory.map(|mb| mb * 1024 * 1024).unwrap_or(default_memory_mb * 1024 * 1024),
         );
-
-        let original_cpu = original_config.cpu_time_limit.map(|d| d.as_secs()).unwrap_or(8);
-        let original_wall = original_config.wall_time_limit.map(|d| d.as_secs()).unwrap_or(10);
-        let cpu = overrides.max_cpu.or(overrides.max_time).unwrap_or(original_cpu).max(15);
-        let wall = overrides.max_wall_time.unwrap_or(original_wall).max(30);
+        let orig_cpu = original.cpu_time_limit.map(|d| d.as_secs()).unwrap_or(8);
+        let orig_wall = original.wall_time_limit.map(|d| d.as_secs()).unwrap_or(10);
+        let cpu = overrides.max_cpu.or(overrides.max_time).unwrap_or(orig_cpu).max(15);
+        let wall = overrides.max_wall_time.unwrap_or(orig_wall).max(30);
         config.cpu_time_limit = Some(Duration::from_secs(cpu));
         config.time_limit = Some(Duration::from_secs(cpu));
         config.wall_time_limit = Some(Duration::from_secs(wall));
     }
 
-    fn build_compile_failure_result(
-        compile_result: ExecutionResult,
-        stderr_prefix: &str,
-        error_message: &str,
-    ) -> ExecutionResult {
-        let status = match compile_result.status {
-            crate::config::types::ExecutionStatus::TimeLimit => {
-                crate::config::types::ExecutionStatus::TimeLimit
-            }
-            crate::config::types::ExecutionStatus::MemoryLimit => {
-                crate::config::types::ExecutionStatus::MemoryLimit
-            }
+    fn build_compile_failure_result(r: ExecutionResult, prefix: &str, msg: &str) -> ExecutionResult {
+        let status = match r.status {
+            crate::config::types::ExecutionStatus::TimeLimit => crate::config::types::ExecutionStatus::TimeLimit,
+            crate::config::types::ExecutionStatus::MemoryLimit => crate::config::types::ExecutionStatus::MemoryLimit,
             _ => crate::config::types::ExecutionStatus::RuntimeError,
         };
-
-        // Destructure to avoid redundant clones on owned fields
-        let ExecutionResult {
-            exit_code,
-            stderr,
-            stdout,
-            error_message: compile_error,
-            output_integrity,
-            wall_time,
-            cpu_time,
-            memory_peak,
-            ..
-        } = compile_result;
-
-        let detail = if !stderr.trim().is_empty() {
-            stderr
-        } else if !stdout.trim().is_empty() {
-            stdout
-        } else {
-            compile_error.unwrap_or_else(|| "no compiler stderr".to_string())
-        };
+        let detail = if !r.stderr.trim().is_empty() { r.stderr.clone() }
+            else if !r.stdout.trim().is_empty() { r.stdout.clone() }
+            else { r.error_message.clone().unwrap_or_else(|| "no compiler output".to_string()) };
 
         ExecutionResult {
-            status,
-            exit_code,
-            stdout: String::new(),
-            stderr: format!("{}:\n{}", stderr_prefix, detail),
-            output_integrity,
-            wall_time,
-            cpu_time,
-            memory_peak,
-            success: false,
-            signal: None,
-            error_message: Some(error_message.to_string()),
+            status, exit_code: r.exit_code, stdout: String::new(),
+            stderr: format!("{}:\n{}", prefix, detail),
+            output_integrity: r.output_integrity, wall_time: r.wall_time,
+            cpu_time: r.cpu_time, memory_peak: r.memory_peak,
+            success: false, signal: None, error_message: Some(msg.to_string()),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn compile_and_execute_with_spec<F>(
-        &mut self,
-        code: &str,
-        source_file: PathBuf,
-        compile_command: Vec<String>,
-        execute_command: Vec<String>,
-        overrides: &ExecutionOverrides,
-        stderr_prefix: &str,
-        error_message: &str,
-        restore_before_execute: bool,
-        restore_on_return: bool,
-        mut configure_compile: F,
+    fn compile_and_execute<F>(
+        &mut self, code: &str, source_file: PathBuf,
+        compile_cmd: Vec<String>, run_cmd: Vec<String>,
+        overrides: &ExecutionOverrides, prefix: &str, msg: &str,
+        mut configure: F,
     ) -> Result<ExecutionResult>
-    where
-        F: FnMut(&mut IsolateConfig, &IsolateConfig, &ExecutionOverrides),
+    where F: FnMut(&mut IsolateConfig, &IsolateConfig, &ExecutionOverrides),
     {
-        self.ensure_instance_workdir()?;
-        // Clear any artifacts from a prior run before writing new user data.
-        self.wipe_workdir_contents();
-
+        self.ensure_workdir()?;
+        self.wipe_workdir();
         fs::write(&source_file, code)?;
 
-        let original_config = self.instance.config.clone();
-        configure_compile(&mut self.instance.config, &original_config, overrides);
+        let saved = self.config.clone();
+        configure(&mut self.config, &saved, overrides);
 
-        let compile_result = match self.execute(&compile_command, None) {
+        let compile_result = match self.execute(&compile_cmd, None) {
             Ok(r) => r,
-            Err(e) => {
-                self.instance.config = original_config;
-                // Wipe source + any partial compiler output before returning.
-                self.wipe_workdir_contents();
-                return Err(e);
-            }
+            Err(e) => { self.config = saved; self.wipe_workdir(); return Err(e); }
         };
+
         if !compile_result.success {
-            if restore_on_return {
-                self.instance.config = original_config;
-            }
-            // Wipe source before returning the compile-error verdict.
-            self.wipe_workdir_contents();
-            return Ok(Self::build_compile_failure_result(
-                compile_result,
-                stderr_prefix,
-                error_message,
-            ));
+            self.config = saved;
+            self.wipe_workdir();
+            return Ok(Self::build_compile_failure_result(compile_result, prefix, msg));
         }
 
-        // Compilation succeeded — source is no longer needed.
-        // Delete it now so it isn't on disk during the execution phase.
         let _ = fs::remove_file(&source_file);
-
-        if restore_before_execute {
-            self.instance.config = original_config.clone();
-        }
-
-        let result = self.execute_with_overrides(&execute_command, overrides);
-        if restore_on_return {
-            self.instance.config = original_config;
-        }
-
-        // Wipe compiled artifacts (binary, .class files, anything the sandboxed
-        // process may have written) immediately after execution completes.
-        // Rustbox does not own user data; execution and cleanup are first-class.
-        self.wipe_workdir_contents();
-
+        self.config = saved;
+        let result = self.execute_with_overrides(&run_cmd, overrides);
+        self.wipe_workdir();
         result
     }
 
-    /// Compile and execute C++ code from string
-    fn compile_and_execute_cpp(
-        &mut self,
-        code: &str,
-        overrides: &ExecutionOverrides,
-    ) -> Result<ExecutionResult> {
-        self.ensure_instance_workdir()?;
-        let source_file = self.instance.config.workdir.join("solution.cpp");
-        self.compile_and_execute_with_spec(
-            code,
-            source_file,
-            vec!["/usr/bin/g++".into(), "-o".into(), "solution".into(),
-                 "solution.cpp".into(), "-std=c++17".into(), "-O2".into()],
+    fn compile_and_execute_cpp(&mut self, code: &str, overrides: &ExecutionOverrides) -> Result<ExecutionResult> {
+        self.ensure_workdir()?;
+        let src = self.config.workdir.join("solution.cpp");
+        self.compile_and_execute(
+            code, src,
+            vec!["/usr/bin/g++".into(), "-o".into(), "solution".into(), "solution.cpp".into(), "-std=c++17".into(), "-O2".into()],
             vec!["./solution".into()],
-            overrides,
-            "Compilation Error",
-            "Compilation failed",
-            true, true,
-            |cfg, orig, ovr| Self::configure_compile_phase(cfg, orig, ovr, 256, 120),
+            overrides, "Compilation Error", "Compilation failed",
+            |c, o, v| Self::configure_compile_phase(c, o, v, 256, 120),
         )
     }
 
-    /// Compile and execute Java code from string
-    fn compile_and_execute_java(
-        &mut self,
-        code: &str,
-        overrides: &ExecutionOverrides,
-    ) -> Result<ExecutionResult> {
-        self.ensure_instance_workdir()?;
-        let class_name = self
-            .extract_java_class_name(code)
-            .unwrap_or_else(|| "Main".to_string());
-        let source_file = self.instance.config.workdir.join(format!("{}.java", class_name));
-        self.compile_and_execute_with_spec(
-            code,
-            source_file,
-            vec!["javac".into(), "-proc:none".into(), "-cp".into(), ".".into(),
-                 format!("{}.java", class_name)],
-            vec!["java".into(), "-cp".into(), ".".into(), class_name],
-            overrides,
-            "Java Compilation Error",
-            "Java compilation failed",
-            true, true,
-            |cfg, orig, ovr| Self::configure_compile_phase(cfg, orig, ovr, 512, 1024),
+    fn compile_and_execute_java(&mut self, code: &str, overrides: &ExecutionOverrides) -> Result<ExecutionResult> {
+        self.ensure_workdir()?;
+        let class = extract_java_class_name(code).unwrap_or_else(|| "Main".to_string());
+        let src = self.config.workdir.join(format!("{}.java", class));
+        self.compile_and_execute(
+            code, src,
+            vec!["javac".into(), "-proc:none".into(), "-cp".into(), ".".into(), format!("{}.java", class)],
+            vec!["java".into(), "-cp".into(), ".".into(), class],
+            overrides, "Java Compilation Error", "Java compilation failed",
+            |c, o, v| Self::configure_compile_phase(c, o, v, 512, 1024),
         )
     }
 
-    /// Extract Java class name from source code (simple regex-based extraction)
-    fn extract_java_class_name(&self, code: &str) -> Option<String> {
-        // Look for "public class ClassName" pattern
-        for line in code.lines() {
-            let line = line.trim();
-            if line.starts_with("public class ") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 3 {
-                    let class_name = parts[2].trim_end_matches('{').trim();
-                    // Sanitize: only allow Java identifier characters (alphanumeric + underscore)
-                    // to prevent path traversal via crafted class names like "../../../tmp/evil"
-                    if class_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                        return Some(class_name.to_string());
-                    }
-                    return None; // reject names with path separators, dots, etc.
-                }
-            }
-        }
-        None
-    }
-
-    /// Wipe every file and subdirectory inside workdir without removing the
-    /// directory itself. Called before AND after each execution so that:
-    ///   - No prior-run artifacts are visible to the next run.
-    ///   - User-submitted source + compiled artifacts are deleted as soon as
-    ///     execution completes, not deferred to Isolate::cleanup().
-    ///
-    /// Uses remove_tree_secure (openat/unlinkat) so a sandboxed process that
-    /// planted a symlink inside workdir cannot redirect deletion outside the dir.
-    fn wipe_workdir_contents(&self) {
-        let workdir = &self.instance.config.workdir;
-        if !workdir.as_os_str().is_empty() && workdir.exists() {
-            if let Ok(entries) = fs::read_dir(workdir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() && !path.is_symlink() {
-                        if let Err(e) =
-                            crate::safety::safe_cleanup::remove_tree_secure(&path)
-                        {
-                            warn!(
-                                "wipe_workdir_contents: failed to remove dir {}: {}",
-                                path.display(),
-                                e
-                            );
-                        }
-                    } else if let Err(e) = fs::remove_file(&path) {
-                        warn!(
-                            "wipe_workdir_contents: failed to remove file {}: {}",
-                            path.display(),
-                            e
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    /// Clean up this isolate instance
-    pub fn cleanup(mut self) -> Result<()> {
-        let instance_id = self.instance.config.instance_id.clone();
-
-        // Acquire lock for cleanup to prevent conflicts
-        if self.box_lock_guard.is_none() {
-            self.acquire_lock(false)?;
-        }
-
-        // Remove from storage atomically
-        self.atomic_instances_update(|instances| {
-            instances.remove(&instance_id);
-        })?;
-
-        // Clean up filesystem — use remove_tree_secure (openat/unlinkat) rather
-        // than fs::remove_dir_all so a symlink planted by sandboxed code cannot
-        // redirect deletion to paths outside the sandbox base directory.
-        if self.base_path.exists() {
-            crate::safety::safe_cleanup::remove_tree_secure(&self.base_path)?;
-        }
-
-        // Release lock before removing lock file
-        self.release_lock();
-
-        // Lock will be automatically released by BoxLockManager when dropped
-
-        Ok(())
-    }
-
-    /// Get configuration
-    pub fn config(&self) -> &IsolateConfig {
-        &self.instance.config
-    }
-
-    /// Get mutable configuration for runtime overrides.
-    pub fn config_mut(&mut self) -> &mut IsolateConfig {
-        &mut self.instance.config
-    }
-
-    /// Consume launch evidence from the most recent execution.
-    pub fn take_last_launch_evidence(&mut self) -> Option<LaunchEvidence> {
-        self.last_launch_evidence.take()
-    }
-
-    /// Add directory bindings to the isolate configuration
-    pub fn add_directory_bindings(
-        &mut self,
-        bindings: Vec<crate::config::types::DirectoryBinding>,
-    ) -> Result<()> {
-        // Validate all bindings before applying any
-        for binding in &bindings {
-            // Check if source exists (unless maybe flag is set)
-            if !binding.maybe && !binding.source.exists() {
-                return Err(IsolateError::Config(format!(
-                    "Source directory does not exist: {}",
-                    binding.source.display()
-                )));
-            }
-
-            // Validate source is actually a directory
-            if binding.source.exists() && !binding.source.is_dir() {
-                return Err(IsolateError::Config(format!(
-                    "Source path is not a directory: {}",
-                    binding.source.display()
-                )));
-            }
-
-            // Validate target path format
-            if !binding.target.is_absolute() {
-                return Err(IsolateError::Config(format!(
-                    "Target path must be absolute (start with /): {}",
-                    binding.target.display()
-                )));
-            }
-        }
-
-        // Add bindings to configuration
-        self.instance.config.directory_bindings.extend(bindings);
-
-        // Update last_used timestamp
-        self.instance.last_used = chrono::Utc::now();
-
-        // Save updated configuration
-        self.save()?;
-
-        Ok(())
-    }
-
-    /// Save instance configuration with atomic operations
-    pub fn save(&self) -> Result<()> {
-        self.atomic_instances_update(|instances| {
-            instances.insert(
-                self.instance.config.instance_id.clone(),
-                self.instance.clone(),
-            );
-        })
-    }
-
-    /// Load all instances from storage (lock-protected against concurrent writes)
-    fn load_all_instances() -> Result<HashMap<String, IsolateInstance>> {
-        let instances_dir = Self::select_state_root()?;
-
-        let instances_file = instances_dir.join("instances.json");
-
-        if !instances_file.exists() {
-            return Ok(HashMap::new());
-        }
-
-        // Read under the same file lock used by atomic_instances_update to prevent
-        // partial reads during concurrent writes
-        with_file_lock(&instances_file, || {
-            let content = fs::read_to_string(&instances_file)?;
-            if content.trim().is_empty() {
-                return Ok(HashMap::new());
-            }
-
-            match serde_json::from_str(&content) {
-                Ok(parsed) => Ok(parsed),
-                Err(e) => {
-                    // Corruption recovery: back up the corrupt file and return empty
-                    warn!(
-                        "instances.json is corrupted during read ({}), backing up and returning empty",
-                        e
-                    );
-                    let backup_path = instances_dir.join("instances.json.corrupted");
-                    let _ = fs::copy(&instances_file, &backup_path);
-                    Ok(HashMap::new())
-                }
-            }
-        })
-        .map_err(|e| match e {
-            crate::config::types::LockError::FilesystemError(io_err) => IsolateError::Io(io_err),
-            crate::config::types::LockError::SystemError { message } => IsolateError::Config(message),
-            _ => IsolateError::Lock(e.to_string()),
-        })
-    }
-
-    /// Acquire exclusive lock for this isolate instance using enhanced lock manager
-    fn acquire_lock(&mut self, _is_init: bool) -> Result<()> {
-        // Extract box_id from instance_id
-        let box_id = Self::extract_box_id(&self.instance.config.instance_id)?;
-
-        // Use the new enhanced lock system directly
-        let lock_guard = acquire_box_lock(box_id).map_err(IsolateError::AdvancedLock)?;
-
-        // Store the lock guard
-        self.box_lock_guard = Some(lock_guard);
-        Ok(())
-    }
-
-    /// Atomic update of instances.json using enhanced lock manager
-    fn atomic_instances_update<F>(&self, update_fn: F) -> Result<()>
-    where
-        F: FnOnce(&mut HashMap<String, IsolateInstance>),
-    {
-        let instances_dir = Self::select_state_root()?;
-        fs::create_dir_all(&instances_dir)?;
-        let instances_file = instances_dir.join("instances.json");
-
-        // Use the enhanced lock manager's file locking (now uses dedicated .lock inode)
-        with_file_lock(&instances_file, || {
-            // Load current instances with corruption recovery
-            let mut instances = if instances_file.exists() {
-                let content = fs::read_to_string(&instances_file)?;
-                if content.trim().is_empty() {
-                    HashMap::new()
+    fn wipe_workdir(&self) {
+        let workdir = &self.config.workdir;
+        if workdir.as_os_str().is_empty() || !workdir.exists() { return; }
+        if let Ok(entries) = fs::read_dir(workdir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && !path.is_symlink() {
+                    let _ = crate::safety::safe_cleanup::remove_tree_secure(&path);
                 } else {
-                    match serde_json::from_str(&content) {
-                        Ok(parsed) => parsed,
-                        Err(e) => {
-                            // Corruption recovery: back up the corrupt file and start fresh
-                            warn!(
-                                "instances.json is corrupted ({}), backing up and starting fresh",
-                                e
-                            );
-                            let backup_path = instances_dir.join("instances.json.corrupted");
-                            let _ = fs::copy(&instances_file, &backup_path);
-                            HashMap::new()
-                        }
-                    }
+                    let _ = fs::remove_file(&path);
                 }
-            } else {
-                HashMap::new()
-            };
-
-            // Apply update
-            update_fn(&mut instances);
-
-            // Write atomically with fsync
-            let content = serde_json::to_string_pretty(&instances).map_err(|e| {
-                crate::config::types::LockError::SystemError {
-                    message: format!("Failed to serialize instances: {}", e),
-                }
-            })?;
-
-            atomic_write(&instances_file, content.as_bytes())?;
-
-            Ok(())
-        })
-        .map_err(|e| match e {
-            crate::config::types::LockError::FilesystemError(io_err) => IsolateError::Io(io_err),
-            crate::config::types::LockError::SystemError { message } => {
-                IsolateError::Config(message)
             }
-            _ => IsolateError::Lock(e.to_string()),
-        })
-    }
-
-    /// Acquire execution lock for loaded isolate (public version of acquire_lock)
-    pub fn acquire_execution_lock(&mut self) -> Result<()> {
-        if self.box_lock_guard.is_some() {
-            return Ok(()); // Already have lock
         }
-        self.acquire_lock(false)
     }
 
-    /// Release the lock (happens automatically on drop)
-    fn release_lock(&mut self) {
-        self.box_lock_guard = None; // Lock guard automatically releases on drop
+    /// Deallocate everything. Only place that frees resources.
+    pub fn cleanup(mut self) -> Result<()> {
+        let mut evidence = self.last_launch_evidence.take();
+
+        if let Some(checker) = self.baseline.take() {
+            if let Some(ref mut ev) = evidence {
+                if checker.verify_baseline().is_err() {
+                    ev.cleanup_verified = false;
+                    ev.process_lifecycle.descendant_containment = "baseline_verification_failed".to_string();
+                }
+            }
+        }
+
+        if let Some(cg) = self.cgroup.take() {
+            let _ = cg.remove(&self.config.instance_id);
+        }
+        if self.base_path.exists() {
+            let _ = crate::safety::safe_cleanup::remove_tree_secure(&self.base_path);
+        }
+        drop(self._uid_guard.take());
+        Ok(())
+    }
+
+    pub fn config(&self) -> &IsolateConfig { &self.config }
+    pub fn config_mut(&mut self) -> &mut IsolateConfig { &mut self.config }
+    pub fn take_last_launch_evidence(&mut self) -> Option<LaunchEvidence> { self.last_launch_evidence.take() }
+
+    pub fn add_directory_bindings(&mut self, bindings: Vec<crate::config::types::DirectoryBinding>) -> Result<()> {
+        for binding in &bindings {
+            if !binding.maybe && !binding.source.exists() {
+                return Err(IsolateError::Config(format!("Source directory does not exist: {}", binding.source.display())));
+            }
+            if binding.source.exists() && !binding.source.is_dir() {
+                return Err(IsolateError::Config(format!("Not a directory: {}", binding.source.display())));
+            }
+            if !binding.target.is_absolute() {
+                return Err(IsolateError::Config(format!("Target must be absolute: {}", binding.target.display())));
+            }
+        }
+        self.config.directory_bindings.extend(bindings);
+        Ok(())
     }
 }
 
 impl Drop for Isolate {
     fn drop(&mut self) {
-        // Defense-in-depth: wipe any residual user data from workdir even if
-        // the caller forgot to call cleanup() (panic, early return, library
-        // misuse). The execute methods already wipe inline, so this is a
-        // safety net — not the primary cleanup path. (SEC-3)
-        self.wipe_workdir_contents();
-        // Lock is automatically released when file descriptor is closed
-        self.release_lock();
+        self.wipe_workdir();
+        if let Some(cg) = self.cgroup.take() {
+            let _ = cg.remove(&self.config.instance_id);
+        }
     }
+}
+
+fn extract_java_class_name(code: &str) -> Option<String> {
+    for line in code.lines() {
+        if let Some(rest) = line.trim().strip_prefix("public class ") {
+            let name = rest.split_whitespace().next()?.trim_end_matches('{').trim();
+            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
 }

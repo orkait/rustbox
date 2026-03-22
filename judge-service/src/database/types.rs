@@ -2,6 +2,18 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const STATUS_PENDING: &str = "pending";
+pub const STATUS_RUNNING: &str = "running";
+pub const STATUS_COMPLETED: &str = "completed";
+pub const STATUS_ERROR: &str = "error";
+
+pub const VERDICT_ACCEPTED: &str = "AC";
+pub const VERDICT_RUNTIME_ERROR: &str = "RE";
+pub const VERDICT_TIME_LIMIT: &str = "TLE";
+pub const VERDICT_MEMORY_LIMIT: &str = "MLE";
+pub const VERDICT_SIGNALED: &str = "SIG";
+pub const VERDICT_INTERNAL_ERROR: &str = "IE";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Submission {
     pub id: Uuid,
@@ -10,6 +22,8 @@ pub struct Submission {
     pub language: String,
     pub code: String,
     pub stdin: String,
+    pub webhook_url: Option<String>,
+    pub webhook_secret: Option<String>,
     pub status: String,
     pub node_id: Option<String>,
     pub sandbox_id: Option<String>,

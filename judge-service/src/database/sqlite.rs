@@ -19,11 +19,8 @@ impl SqliteDatabase {
         let conn = Connection::open(path)
             .with_context(|| format!("Failed to open SQLite database at {}", path))?;
 
-        // WAL mode for concurrent readers
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-        // 5-second busy timeout before returning SQLITE_BUSY
         conn.busy_timeout(Duration::from_millis(5000))?;
-        // NORMAL sync is safe with WAL and much faster than FULL
         conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
 
         Ok(Self {
@@ -32,7 +29,7 @@ impl SqliteDatabase {
     }
 
     pub fn run_migrations(&self) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         conn.execute_batch(
             r#"
@@ -43,6 +40,8 @@ impl SqliteDatabase {
                 language        TEXT NOT NULL,
                 code            TEXT NOT NULL,
                 stdin           TEXT NOT NULL DEFAULT '',
+                webhook_url     TEXT,
+                webhook_secret  TEXT,
                 status          TEXT NOT NULL DEFAULT 'pending',
                 node_id         TEXT,
                 sandbox_id      TEXT,
@@ -75,15 +74,15 @@ fn row_to_submission(row: &Row) -> rusqlite::Result<Submission> {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
     })?;
 
-    let created_at_str: String = row.get(18)?;
+    let created_at_str: String = row.get(20)?;
     let created_at = DateTime::parse_from_rfc3339(&created_at_str)
         .map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(18, rusqlite::types::Type::Text, Box::new(e))
+            rusqlite::Error::FromSqlConversionFailure(20, rusqlite::types::Type::Text, Box::new(e))
         })?
         .with_timezone(&Utc);
 
-    let started_at = parse_optional_datetime(row, 19)?;
-    let completed_at = parse_optional_datetime(row, 20)?;
+    let started_at = parse_optional_datetime(row, 21)?;
+    let completed_at = parse_optional_datetime(row, 22)?;
 
     Ok(Submission {
         id,
@@ -92,18 +91,20 @@ fn row_to_submission(row: &Row) -> rusqlite::Result<Submission> {
         language: row.get(3)?,
         code: row.get(4)?,
         stdin: row.get(5)?,
-        status: row.get(6)?,
-        node_id: row.get(7)?,
-        sandbox_id: row.get(8)?,
-        verdict: row.get(9)?,
-        exit_code: row.get(10)?,
-        stdout: row.get(11)?,
-        stderr: row.get(12)?,
-        signal: row.get(13)?,
-        error_message: row.get(14)?,
-        cpu_time: row.get(15)?,
-        wall_time: row.get(16)?,
-        memory_peak: row.get(17)?,
+        webhook_url: row.get(6)?,
+        webhook_secret: row.get(7)?,
+        status: row.get(8)?,
+        node_id: row.get(9)?,
+        sandbox_id: row.get(10)?,
+        verdict: row.get(11)?,
+        exit_code: row.get(12)?,
+        stdout: row.get(13)?,
+        stderr: row.get(14)?,
+        signal: row.get(15)?,
+        error_message: row.get(16)?,
+        cpu_time: row.get(17)?,
+        wall_time: row.get(18)?,
+        memory_peak: row.get(19)?,
         created_at,
         started_at,
         completed_at,
@@ -132,19 +133,19 @@ fn parse_optional_datetime(row: &Row, idx: usize) -> rusqlite::Result<Option<Dat
 #[async_trait]
 impl Database for SqliteDatabase {
     async fn insert_submission(&self, sub: &Submission) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             r#"
             INSERT OR IGNORE INTO submissions (
-                id, user_id, ip_address, language, code, stdin, status,
-                node_id, sandbox_id, verdict, exit_code, stdout, stderr,
+                id, user_id, ip_address, language, code, stdin, webhook_url, webhook_secret,
+                status, node_id, sandbox_id, verdict, exit_code, stdout, stderr,
                 signal, error_message, cpu_time, wall_time, memory_peak,
                 created_at, started_at, completed_at
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7,
-                ?8, ?9, ?10, ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17, ?18,
-                ?19, ?20, ?21
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+                ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                ?16, ?17, ?18, ?19, ?20,
+                ?21, ?22, ?23
             )
             "#,
             params![
@@ -154,6 +155,8 @@ impl Database for SqliteDatabase {
                 sub.language,
                 sub.code,
                 sub.stdin,
+                sub.webhook_url,
+                sub.webhook_secret,
                 sub.status,
                 sub.node_id,
                 sub.sandbox_id,
@@ -175,10 +178,8 @@ impl Database for SqliteDatabase {
     }
 
     async fn claim_pending(&self, node_id: &str) -> anyhow::Result<Option<Submission>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Atomically claim the oldest pending submission and return it.
-        // The RETURNING clause requires SQLite >= 3.35.0 (2021-03-12).
         let result = conn.query_row(
             r#"
             UPDATE submissions
@@ -192,8 +193,8 @@ impl Database for SqliteDatabase {
                 LIMIT 1
             )
             RETURNING
-                id, user_id, ip_address, language, code, stdin, status,
-                node_id, sandbox_id, verdict, exit_code, stdout, stderr,
+                id, user_id, ip_address, language, code, stdin, webhook_url, webhook_secret,
+                status, node_id, sandbox_id, verdict, exit_code, stdout, stderr,
                 signal, error_message, cpu_time, wall_time, memory_peak,
                 created_at, started_at, completed_at
             "#,
@@ -209,7 +210,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn mark_running(&self, id: Uuid, node_id: &str, sandbox_id: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             r#"
             UPDATE submissions
@@ -230,7 +231,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn mark_completed(&self, id: Uuid, result: &ExecutionOutput) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             r#"
             UPDATE submissions
@@ -265,7 +266,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn mark_error(&self, id: Uuid, error: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             r#"
             UPDATE submissions
@@ -280,12 +281,12 @@ impl Database for SqliteDatabase {
     }
 
     async fn get_submission(&self, id: Uuid) -> anyhow::Result<Option<Submission>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
             r#"
             SELECT
-                id, user_id, ip_address, language, code, stdin, status,
-                node_id, sandbox_id, verdict, exit_code, stdout, stderr,
+                id, user_id, ip_address, language, code, stdin, webhook_url, webhook_secret,
+                status, node_id, sandbox_id, verdict, exit_code, stdout, stderr,
                 signal, error_message, cpu_time, wall_time, memory_peak,
                 created_at, started_at, completed_at
             FROM submissions
@@ -303,7 +304,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn reap_stale(&self, timeout: Duration) -> anyhow::Result<u64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let cutoff = Utc::now() - chrono::Duration::from_std(timeout)?;
         let rows_updated = conn.execute(
             r#"

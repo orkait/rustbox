@@ -207,7 +207,6 @@ fn remove_dir_contents(dir_fd: RawFd) -> io::Result<()> {
                 }
                 Err(err) if is_missing(&err) => continue,
                 Err(err) if is_notdir_or_loop(&err) => {
-                    // Type changed between stat/open; remove as non-directory.
                     unlinkat_ignoring_missing(dir_fd, &name, 0)?;
                 }
                 Err(err) => return Err(err),
@@ -232,10 +231,6 @@ fn remove_entry_at(parent_fd: RawFd, name: &CStr) -> io::Result<()> {
     }
 }
 
-/// Remove a path without following symlinks.
-///
-/// Directory trees are removed via openat/fstatat/unlinkat traversal.
-/// Non-directory entries (including symlinks) are unlinked directly.
 pub fn remove_tree_secure(path: &Path) -> Result<()> {
     let name_os = path.file_name().ok_or_else(|| {
         IsolateError::Filesystem(format!(

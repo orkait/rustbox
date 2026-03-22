@@ -9,6 +9,10 @@ pub struct SubmitRequest {
     pub code: String,
     #[serde(default)]
     pub stdin: String,
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,7 +61,6 @@ impl From<Submission> for ResultResponse {
     }
 }
 
-/// Compress JSON string to base64-encoded deflate.
 #[allow(dead_code)]
 pub fn compress_meta(json: &str) -> String {
     use base64::Engine;
@@ -71,7 +74,6 @@ pub fn compress_meta(json: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(&compressed)
 }
 
-/// Decompress base64-encoded deflate back to JSON Value.
 #[allow(dead_code)]
 pub fn decompress_meta(compressed: &str) -> Option<serde_json::Value> {
     use base64::Engine;

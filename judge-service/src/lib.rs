@@ -17,4 +17,10 @@ pub struct AppState {
     pub worker_count: usize,
     pub api_key: Option<String>,
     pub node_id: String,
+    pub allow_localhost_webhooks: bool,
+    pub max_code_bytes: usize,
+    pub max_stdin_bytes: usize,
+    pub sync_wait_timeout_secs: u64,
+    pub sync_poll_interval_ms: u64,
+    pub webhook_timeout_secs: u64,
 }

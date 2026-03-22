@@ -15,8 +15,6 @@ static INIT: Once = Once::new();
 fn init_subsystems() {
     INIT.call_once(|| {
         let _ = rustbox::observability::audit::init_security_logger(None);
-        rustbox::safety::lock_manager::init_lock_manager()
-            .expect("lock manager init failed");
     });
 }
 

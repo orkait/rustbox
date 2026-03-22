@@ -1,19 +1,50 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;
+use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::database::types::Submission;
+use crate::database::types::{Submission, STATUS_PENDING, STATUS_COMPLETED, STATUS_ERROR};
 use crate::types::{ErrorResponse, HealthResponse, ResultResponse, SubmitRequest, SubmitResponse};
 use crate::AppState;
 
-/// Constant-time comparison to prevent timing side-channel on API key.
-/// Always compares all bytes regardless of where they differ.
+fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), String> {
+    let parsed: url::Url = url.parse().map_err(|_| "invalid webhook URL".to_string())?;
+
+    if !allow_localhost && parsed.scheme() != "https" {
+        return Err("webhook_url must use HTTPS (set RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS=true for dev mode)".to_string());
+    }
+    if allow_localhost && !matches!(parsed.scheme(), "https" | "http") {
+        return Err("webhook_url must use HTTP or HTTPS".to_string());
+    }
+
+    let host = parsed.host_str().ok_or("webhook_url missing host")?;
+
+    if !allow_localhost {
+        if host == "localhost" || host == "[::1]" {
+            return Err("webhook_url cannot target localhost".to_string());
+        }
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            let blocked = match ip {
+                std::net::IpAddr::V4(v4) =>
+                    v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                    || (v4.octets()[0] == 169 && v4.octets()[1] == 254),
+                std::net::IpAddr::V6(v6) => v6.is_loopback(),
+            };
+            if blocked {
+                return Err("webhook_url cannot target private/loopback IPs".to_string());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -33,12 +64,18 @@ pub fn router() -> Router<AppState> {
         .route("/api/health", get(health))
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct SubmitQuery {
+    #[serde(default)]
+    wait: bool,
+}
+
 async fn submit(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<SubmitQuery>,
     Json(req): Json<SubmitRequest>,
 ) -> impl IntoResponse {
-    // Check API key if configured (constant-time comparison)
     if let Some(ref key) = state.api_key {
         let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
         if !constant_time_eq(provided.as_bytes(), key.as_bytes()) {
@@ -52,25 +89,48 @@ async fn submit(
         }
     }
 
-    // Validate input sizes
-    const MAX_CODE_SIZE: usize = 64 * 1024; // 64KB
-    const MAX_STDIN_SIZE: usize = 256 * 1024; // 256KB
-    if req.code.len() > MAX_CODE_SIZE {
+    if req.code.len() > state.max_code_bytes {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "code exceeds maximum size of 64KB"})),
+            Json(serde_json::json!({"error": format!("code exceeds maximum size of {}KB", state.max_code_bytes / 1024)})),
         )
             .into_response();
     }
-    if req.stdin.len() > MAX_STDIN_SIZE {
+    if req.stdin.len() > state.max_stdin_bytes {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "stdin exceeds maximum size of 256KB"})),
+            Json(serde_json::json!({"error": format!("stdin exceeds maximum size of {}KB", state.max_stdin_bytes / 1024)})),
         )
             .into_response();
     }
 
-    // Validate language
+    if let Some(ref url) = req.webhook_url {
+        if let Err(msg) = validate_webhook_url(url, state.allow_localhost_webhooks) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!(ErrorResponse { error: msg })),
+            )
+                .into_response();
+        }
+        let secret = req.webhook_secret.as_deref().unwrap_or("");
+        if secret.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!(ErrorResponse {
+                    error: "webhook_secret is required when webhook_url is provided".to_string(),
+                })),
+            ).into_response();
+        }
+        if secret.len() > 256 {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!(ErrorResponse {
+                    error: "webhook_secret must be 256 bytes or less".to_string(),
+                })),
+            ).into_response();
+        }
+    }
+
     let lang = req.language.to_lowercase();
     if !matches!(lang.as_str(), "python" | "py" | "cpp" | "c++" | "cxx" | "java") {
         return (
@@ -82,14 +142,12 @@ async fn submit(
             .into_response();
     }
 
-    // Parse optional Idempotency-Key header; generate UUID if absent
     let id = headers
         .get("idempotency-key")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| Uuid::parse_str(s).ok())
         .unwrap_or_else(Uuid::new_v4);
 
-    // Idempotency check: if this ID already exists, return current state
     match state.db.get_submission(id).await {
         Ok(Some(existing)) => {
             tracing::info!(%id, "idempotent hit - submission already exists");
@@ -102,7 +160,7 @@ async fn submit(
             )
                 .into_response();
         }
-        Ok(None) => { /* new submission, proceed */ }
+        Ok(None) => {}
         Err(e) => {
             tracing::error!(error = %e, "failed to check idempotency");
             return (
@@ -115,7 +173,6 @@ async fn submit(
         }
     }
 
-    // Check queue backpressure before inserting
     if state.queue.is_full() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -126,7 +183,6 @@ async fn submit(
             .into_response();
     }
 
-    // Build new submission
     let submission = Submission {
         id,
         user_id: None,
@@ -134,7 +190,9 @@ async fn submit(
         language: lang.clone(),
         code: req.code,
         stdin: req.stdin,
-        status: "pending".to_string(),
+        webhook_url: req.webhook_url,
+        webhook_secret: req.webhook_secret,
+        status: STATUS_PENDING.to_string(),
         node_id: None,
         sandbox_id: None,
         verdict: None,
@@ -151,7 +209,6 @@ async fn submit(
         completed_at: None,
     };
 
-    // Insert into database
     if let Err(e) = state.db.insert_submission(&submission).await {
         tracing::error!(error = %e, "failed to create submission");
         return (
@@ -163,7 +220,6 @@ async fn submit(
             .into_response();
     }
 
-    // Enqueue to job queue (no-op in Postgres mode; trigger fires NOTIFY)
     if let Err(e) = state.queue.enqueue(id).await {
         tracing::error!(error = %e, "failed to enqueue job");
         return (
@@ -176,7 +232,34 @@ async fn submit(
     }
 
     tracing::info!(%id, language = %lang, "submission queued");
-    (StatusCode::ACCEPTED, Json(serde_json::json!(SubmitResponse { id }))).into_response()
+
+    if !query.wait {
+        return (StatusCode::ACCEPTED, Json(serde_json::json!(SubmitResponse { id }))).into_response();
+    }
+
+    let poll_interval = std::time::Duration::from_millis(state.sync_poll_interval_ms);
+    let max_wait = std::time::Duration::from_secs(state.sync_wait_timeout_secs);
+    let deadline = tokio::time::Instant::now() + max_wait;
+
+    loop {
+        tokio::time::sleep(poll_interval).await;
+        match state.db.get_submission(id).await {
+            Ok(Some(sub)) if sub.status == STATUS_COMPLETED || sub.status == STATUS_ERROR => {
+                let resp: ResultResponse = sub.into();
+                return (StatusCode::OK, Json(serde_json::json!(resp))).into_response();
+            }
+            _ => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return (
+                StatusCode::REQUEST_TIMEOUT,
+                Json(serde_json::json!({
+                    "id": id,
+                    "error": "execution did not complete within 30s, poll GET /api/result/{id}"
+                })),
+            ).into_response();
+        }
+    }
 }
 
 async fn result(
@@ -184,7 +267,6 @@ async fn result(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    // Check API key if configured (constant-time comparison)
     if let Some(ref key) = state.api_key {
         let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
         if !constant_time_eq(provided.as_bytes(), key.as_bytes()) {

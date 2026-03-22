@@ -1,5 +1,3 @@
-//! cgroup v1 backend implementation.
-
 use crate::config::types::{CgroupEvidence, IsolateError, Result};
 use std::collections::HashMap;
 use std::fs;
@@ -37,14 +35,12 @@ impl CgroupV1 {
                 continue;
             }
 
-            // Try traditional path first (bare metal / Docker cgroup:host)
             let traditional = controller_root.join("rustbox").join(&sanitized_instance);
             if fs::create_dir_all(traditional.parent().unwrap_or(&controller_root)).is_ok() {
                 controller_paths.insert(controller.to_string(), traditional);
                 continue;
             }
 
-            // Fall back to process's own cgroup subtree (container with delegation)
             if let Some(self_path) = self_cgroups.get(controller) {
                 if self_path != "/" {
                     let delegated = controller_root
@@ -79,9 +75,6 @@ impl CgroupV1 {
         })
     }
 
-    /// Parse /proc/self/cgroup to find per-controller cgroup paths.
-    /// V1 format: `<hierarchy-id>:<controllers>:<path>`
-    /// Example: `12:memory:/docker/abc123`
     fn detect_self_cgroup_paths() -> HashMap<String, String> {
         let mut paths = HashMap::new();
         let content = fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
@@ -92,7 +85,6 @@ impl CgroupV1 {
             }
             let controllers = parts[1];
             let path = parts[2].to_string();
-            // V1 lines have non-empty controller field (v2 unified is "0::")
             if controllers.is_empty() {
                 continue;
             }
@@ -107,33 +99,58 @@ impl CgroupV1 {
         self.controller_paths.get(controller)
     }
 
-    fn ensure_controller_dirs(&self) -> Result<()> {
-        if !self.enabled {
-            return Ok(());
+    fn require_controller(&self, name: &str) -> Result<Option<&PathBuf>> {
+        match self.controller_path(name) {
+            Some(path) => Ok(Some(path)),
+            None if self.strict_mode => Err(IsolateError::Cgroup(format!(
+                "{} controller unavailable for cgroup v1",
+                name
+            ))),
+            None => Ok(None),
         }
+    }
 
+    fn foreach_controller<F>(&self, context: &str, mut op: F) -> Result<()>
+    where
+        F: FnMut(&str, &PathBuf) -> std::result::Result<(), String>,
+    {
         let mut failures = Vec::new();
         for (controller, path) in &self.controller_paths {
-            if let Err(err) = fs::create_dir_all(path) {
-                failures.push(format!("{}: {}", controller, err));
+            if let Err(msg) = op(controller, path) {
+                failures.push(msg);
             }
         }
+        self.finish_failures(context, failures)
+    }
 
+    fn finish_failures(&self, context: &str, failures: Vec<String>) -> Result<()> {
         if failures.is_empty() {
             return Ok(());
         }
-
+        let detail = failures.join(", ");
         if self.strict_mode {
-            Err(IsolateError::Cgroup(format!(
-                "failed to create cgroup v1 directories: {}",
-                failures.join(", ")
-            )))
+            Err(IsolateError::Cgroup(format!("{}: {}", context, detail)))
         } else {
-            log::warn!(
-                "failed to create some cgroup v1 directories (permissive mode): {}",
-                failures.join(", ")
-            );
+            log::warn!("{} (permissive mode): {}", context, detail);
             Ok(())
+        }
+    }
+
+    fn collect_metric<T>(&self, field_name: &str, result: Result<T>, fallback: T) -> Result<T> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(err) if self.strict_mode => Err(IsolateError::Cgroup(format!(
+                "failed collecting {} in strict mode: {}",
+                field_name, err
+            ))),
+            Err(err) => {
+                log::warn!(
+                    "failed collecting {} in permissive mode: {}",
+                    field_name,
+                    err
+                );
+                Ok(fallback)
+            }
         }
     }
 
@@ -154,6 +171,24 @@ impl CgroupV1 {
                 e
             ))
         })
+    }
+
+    fn read_controller_u64(&self, controller: &str, file: &str) -> Result<u64> {
+        let Some(base) = self.controller_path(controller) else {
+            return Ok(0);
+        };
+        let path = base.join(file);
+        if !path.exists() {
+            return Ok(0);
+        }
+        Self::read_u64(&path, file)
+    }
+
+    fn read_controller_limit(&self, controller: &str, file: &str) -> Result<Option<u64>> {
+        self.controller_path(controller)
+            .map(|path| Self::read_optional_limit(&path.join(file), file))
+            .transpose()
+            .map(|opt| opt.flatten())
     }
 
     fn read_optional_limit(path: &Path, field_name: &str) -> Result<Option<u64>> {
@@ -184,63 +219,6 @@ impl CgroupV1 {
         })
     }
 
-    fn collect_optional_metric<T>(&self, field_name: &str, result: Result<T>) -> Result<Option<T>> {
-        match result {
-            Ok(value) => Ok(Some(value)),
-            Err(err) if self.strict_mode => Err(IsolateError::Cgroup(format!(
-                "failed collecting {} in strict mode: {}",
-                field_name, err
-            ))),
-            Err(err) => {
-                log::warn!(
-                    "failed collecting {} in permissive mode: {}",
-                    field_name,
-                    err
-                );
-                Ok(None)
-            }
-        }
-    }
-
-    fn collect_counter_metric(&self, field_name: &str, result: Result<u64>) -> Result<u64> {
-        match result {
-            Ok(value) => Ok(value),
-            Err(err) if self.strict_mode => Err(IsolateError::Cgroup(format!(
-                "failed collecting {} in strict mode: {}",
-                field_name, err
-            ))),
-            Err(err) => {
-                log::warn!(
-                    "failed collecting {} in permissive mode: {}",
-                    field_name,
-                    err
-                );
-                Ok(0)
-            }
-        }
-    }
-
-    fn convert_optional_u32_limit(
-        &self,
-        field_name: &str,
-        value: Option<u64>,
-    ) -> Result<Option<u32>> {
-        match value {
-            Some(raw) => match u32::try_from(raw) {
-                Ok(parsed) => Ok(Some(parsed)),
-                Err(_) if self.strict_mode => Err(IsolateError::Cgroup(format!(
-                    "{} exceeds u32 limit",
-                    field_name
-                ))),
-                Err(_) => {
-                    log::warn!("{} exceeds u32 limit in permissive mode", field_name);
-                    Ok(None)
-                }
-            },
-            None => Ok(None),
-        }
-    }
-
     fn write_value(path: &Path, value: &impl ToString, strict_mode: bool, name: &str) -> Result<()> {
         if let Err(err) = fs::write(path, value.to_string()) {
             if strict_mode {
@@ -268,7 +246,12 @@ impl CgroupBackend for CgroupV1 {
     }
 
     fn create(&self, _instance_id: &str) -> Result<()> {
-        self.ensure_controller_dirs()
+        if !self.enabled {
+            return Ok(());
+        }
+        self.foreach_controller("failed to create cgroup v1 directories", |controller, path| {
+            fs::create_dir_all(path).map_err(|err| format!("{}: {}", controller, err))
+        })
     }
 
     fn remove(&self, _instance_id: &str) -> Result<()> {
@@ -312,21 +295,13 @@ impl CgroupBackend for CgroupV1 {
             }
         }
 
-        if failures.is_empty() {
-            Ok(())
-        } else if self.strict_mode {
-            Err(IsolateError::Cgroup(format!(
-                "failed removing cgroup v1 instance '{}': {}",
-                self.sanitized_instance,
-                failures.join(", ")
-            )))
-        } else {
-            log::warn!(
-                "failed removing some cgroup v1 paths (permissive mode): {}",
-                failures.join(", ")
-            );
-            Ok(())
-        }
+        self.finish_failures(
+            &format!(
+                "failed removing cgroup v1 instance '{}'",
+                self.sanitized_instance
+            ),
+            failures,
+        )
     }
 
     fn attach_process(&self, _instance_id: &str, pid: u32) -> Result<()> {
@@ -340,30 +315,13 @@ impl CgroupBackend for CgroupV1 {
             ));
         }
 
-        let mut failures = Vec::new();
-        for (controller, path) in &self.controller_paths {
-            let tasks = path.join("tasks");
-            if let Err(err) = fs::write(&tasks, pid.to_string()) {
-                failures.push(format!("{}: {}", controller, err));
-            }
-        }
-
-        if failures.is_empty() {
-            Ok(())
-        } else if self.strict_mode {
-            Err(IsolateError::Cgroup(format!(
-                "failed attaching PID {} to cgroup v1: {}",
-                pid,
-                failures.join(", ")
-            )))
-        } else {
-            log::warn!(
-                "partial cgroup v1 attach failure for PID {} (permissive mode): {}",
-                pid,
-                failures.join(", ")
-            );
-            Ok(())
-        }
+        self.foreach_controller(
+            &format!("failed attaching PID {} to cgroup v1", pid),
+            |controller, path| {
+                fs::write(path.join("tasks"), pid.to_string())
+                    .map_err(|err| format!("{}: {}", controller, err))
+            },
+        )
     }
 
     fn set_memory_limit(&self, _instance_id: &str, limit_bytes: u64) -> Result<()> {
@@ -376,19 +334,10 @@ impl CgroupBackend for CgroupV1 {
             ));
         }
 
-        let Some(memory_path) = self.controller_path("memory") else {
-            if self.strict_mode {
-                return Err(IsolateError::Cgroup(
-                    "memory controller unavailable for cgroup v1".to_string(),
-                ));
-            }
+        let Some(memory_path) = self.require_controller("memory")? else {
             return Ok(());
         };
 
-        // cgroup v1 enforces: memsw.limit >= memory.limit
-        // On a fresh cgroup (defaults are huge), we must set memory first, then memsw.
-        // On a reused cgroup with a low memsw, we must set memsw first, then memory.
-        // Strategy: try memory-first; if memsw then fails, retry memsw-first.
         let mem_file = memory_path.join("memory.limit_in_bytes");
         let memsw = memory_path.join("memory.memsw.limit_in_bytes");
         let has_memsw = memsw.exists();
@@ -396,7 +345,6 @@ impl CgroupBackend for CgroupV1 {
         Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
 
         if has_memsw && Self::write_value(&memsw, &limit_bytes, self.strict_mode, "memory.memsw.limit_in_bytes").is_err() {
-            // Retry: set memsw first (raise ceiling), then memory
             let _ = Self::write_value(&memsw, &limit_bytes, false, "memory.memsw.limit_in_bytes");
             Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
         }
@@ -419,12 +367,7 @@ impl CgroupBackend for CgroupV1 {
             ));
         }
 
-        let Some(pids_path) = self.controller_path("pids") else {
-            if self.strict_mode {
-                return Err(IsolateError::Cgroup(
-                    "pids controller unavailable for cgroup v1".to_string(),
-                ));
-            }
+        let Some(pids_path) = self.require_controller("pids")? else {
             return Ok(());
         };
 
@@ -441,42 +384,21 @@ impl CgroupBackend for CgroupV1 {
             return Ok(());
         }
 
-        let Some(cpu_path) = self.controller_path("cpu") else {
-            if self.strict_mode {
-                return Err(IsolateError::Cgroup(
-                    "cpu controller unavailable for cgroup v1".to_string(),
-                ));
-            }
+        let Some(cpu_path) = self.require_controller("cpu")? else {
             return Ok(());
         };
 
-        // Set relative CPU weight (shares). Default is 1024 = fair share.
         let shares = limit_usec.clamp(2, 262_144);
         Self::write_value(
             &cpu_path.join("cpu.shares"),
             &shares,
             self.strict_mode,
             "cpu.shares",
-        )?;
-
-        // NOTE: CFS quota (cpu.cfs_quota_us) is NOT set here.
-        // CPU time enforcement uses RLIMIT_CPU (kernel sends SIGXCPU/SIGKILL)
-        // and the supervisor's cgroup CPU-usage watchdog polling loop.
-        // Setting CFS quota from a shares value is a semantic error —
-        // shares and quota have completely different units and meaning.
-
-        Ok(())
+        )
     }
 
     fn get_memory_usage(&self) -> Result<u64> {
-        let Some(memory_path) = self.controller_path("memory") else {
-            return Ok(0);
-        };
-        let usage_path = memory_path.join("memory.usage_in_bytes");
-        if !usage_path.exists() {
-            return Ok(0);
-        }
-        Self::read_u64(&usage_path, "memory.usage_in_bytes")
+        self.read_controller_u64("memory", "memory.usage_in_bytes")
     }
 
     fn get_memory_peak(&self) -> Result<u64> {
@@ -491,14 +413,7 @@ impl CgroupBackend for CgroupV1 {
     }
 
     fn get_cpu_usage(&self) -> Result<u64> {
-        let Some(cpuacct_path) = self.controller_path("cpuacct") else {
-            return Ok(0);
-        };
-        let usage_path = cpuacct_path.join("cpuacct.usage");
-        if !usage_path.exists() {
-            return Ok(0);
-        }
-        let nanos = Self::read_u64(&usage_path, "cpuacct.usage")?;
+        let nanos = self.read_controller_u64("cpuacct", "cpuacct.usage")?;
         Ok(nanos / 1_000)
     }
 
@@ -535,8 +450,6 @@ impl CgroupBackend for CgroupV1 {
         let Some(memory_path) = self.controller_path("memory") else {
             return Ok(0);
         };
-        // memory.oom_control contains the actual OOM kill count.
-        // memory.failcnt only counts allocation retries (false positives).
         let oom_control = memory_path.join("memory.oom_control");
         if oom_control.exists() {
             let content = std::fs::read_to_string(&oom_control).unwrap_or_default();
@@ -552,30 +465,40 @@ impl CgroupBackend for CgroupV1 {
     }
 
     fn collect_evidence(&self, _instance_id: &str) -> Result<CgroupEvidence> {
-        let memory_limit_raw = self
-            .controller_path("memory")
-            .map(|path| {
-                Self::read_optional_limit(
-                    &path.join("memory.limit_in_bytes"),
-                    "memory.limit_in_bytes",
-                )
-            })
-            .transpose()?
-            .flatten();
-        let process_limit_raw = self
-            .controller_path("pids")
-            .map(|path| Self::read_optional_limit(&path.join("pids.max"), "pids.max"))
-            .transpose()?
-            .flatten();
-        let process_limit = self.convert_optional_u32_limit("pids.max", process_limit_raw)?;
+        let memory_limit_raw = self.read_controller_limit("memory", "memory.limit_in_bytes")?;
+        let process_limit_raw = self.read_controller_limit("pids", "pids.max")?;
 
-        let memory_peak =
-            self.collect_optional_metric("memory.max_usage_in_bytes", self.get_memory_peak())?;
-        let cpu_usage_usec = self.collect_optional_metric("cpuacct.usage", self.get_cpu_usage())?;
-        let process_count =
-            self.collect_optional_metric("pids.current/tasks", self.get_process_count())?;
+        let process_limit = match process_limit_raw {
+            Some(raw) => match u32::try_from(raw) {
+                Ok(parsed) => Some(parsed),
+                Err(_) if self.strict_mode => {
+                    return Err(IsolateError::Cgroup("pids.max exceeds u32 limit".to_string()));
+                }
+                Err(_) => {
+                    log::warn!("pids.max exceeds u32 limit in permissive mode");
+                    None
+                }
+            },
+            None => None,
+        };
+
+        let memory_peak = self.collect_metric(
+            "memory.max_usage_in_bytes",
+            self.get_memory_peak().map(Some),
+            None,
+        )?;
+        let cpu_usage_usec = self.collect_metric(
+            "cpuacct.usage",
+            self.get_cpu_usage().map(Some),
+            None,
+        )?;
+        let process_count = self.collect_metric(
+            "pids.current/tasks",
+            self.get_process_count().map(Some),
+            None,
+        )?;
         let oom_kill_count =
-            self.collect_counter_metric("memory.failcnt", self.get_oom_kill_count())?;
+            self.collect_metric("memory.failcnt", self.get_oom_kill_count(), 0)?;
 
         Ok(CgroupEvidence {
             memory_peak,

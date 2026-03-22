@@ -4,86 +4,126 @@
 
 **Kernel-enforced process isolation for competitive programming judges.**
 
-Inspired by [IOI Isolate](https://github.com/ioi/isolate).
+Inspired by [IOI Isolate](https://github.com/ioi/isolate). Built to replace [Judge0](https://github.com/judge0/judge0).
 
 <br />
 
 ![Rust](https://img.shields.io/badge/Rust-2021%20edition-f74c00?logo=rust&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-cgroups%20v1%2Fv2-FCC624?logo=linux&logoColor=black)
 ![Status](https://img.shields.io/badge/status-v0.1.0-blue)
-![Tests](https://img.shields.io/badge/tests-144%20unit%20%2B%207%20trybuild-brightgreen)
-![Clippy](https://img.shields.io/badge/clippy-0%20warnings-brightgreen)
+![Tests](https://img.shields.io/badge/tests-108%20unit%20%2B%203%20seccomp%20%2B%207%20trybuild-brightgreen)
 ![Languages](https://img.shields.io/badge/sandbox-Python%20%7C%20C%2B%2B%20%7C%20Java%20%7C%20JS%20%7C%20TS-green)
+![LOC](https://img.shields.io/badge/LOC-~14k%20Rust-orange)
+![Deploy](https://img.shields.io/badge/deploy-1%20binary%20%2B%20SQLite-purple)
 
 </div>
 
 ---
 
-Rustbox executes untrusted code inside kernel-enforced sandboxes with deterministic resource limits and evidence-backed verdicts. It uses Linux namespaces, cgroups (v1/v2), capability dropping, and rlimits to make sure submitted code can't escape, interfere with other submissions, or touch the host.
+Rustbox executes untrusted code inside kernel-enforced sandboxes with deterministic resource limits, seccomp-bpf syscall filtering, and evidence-backed verdicts. One binary, no Docker daemon, no Redis - just Linux namespaces, cgroups, and the type system.
 
 ```
                     +-----------+
-  source code ----->|  rustbox  |-----> status (OK / TLE / MLE / RE / Signaled)
+  source code ----->|  rustbox  |-----> verdict (AC / TLE / MLE / RE / SIG)
   + language        |  (judge)  |-----> stdout, stderr
   + limits          +-----------+-----> evidence bundle (controls, memory peak, cpu time)
                      namespaces
-                     cgroups
+                     cgroups + seccomp
                      capabilities
                      rlimits
 ```
 
+## Why not Judge0?
+
+| | Judge0 | Rustbox |
+|---|--------|---------|
+| Deployment | 4 containers (Rails + PG + Redis + worker) | 1 binary + SQLite |
+| Isolation | Docker containers | Linux namespaces + cgroups + seccomp |
+| Syscall filtering | Docker default seccomp | Custom 18-syscall deny-list |
+| Sandbox escape CVEs | [CVE-2024-28185](https://nvd.nist.gov/vuln/detail/CVE-2024-28185) (CVSS 10.0) | Symlink-safe cleanup, O_NOFOLLOW, path validation |
+| Safety model | Runtime checks | Compile-time typestate (misordering = compile error) |
+| Verdicts | Exit code + timing | Kernel evidence bundles (cgroup OOM events, /proc, waitpid) |
+| Cold start | ~200-500ms (Docker spin-up) | ~5-15ms (clone + typestate chain) |
+
 ## :rocket: Quick Start
 
+### CLI (single execution)
+
 ```bash
-# Build
 cargo build --release
 
-# Permissive mode (no root needed, great for development)
-target/release/judge execute-code --permissive --box-id 1 \
+# Permissive mode (no root, for development)
+target/release/judge execute-code --permissive \
   --language python --code 'print("hello")'
 
 # Strict mode (root required, full kernel isolation)
-sudo target/release/judge execute-code --strict --box-id 1 \
+sudo target/release/judge execute-code --strict \
   --language python --code 'print("hello")'
 ```
 
-Output is `JudgeResultV1` JSON on stdout. Here's what the key fields look like (full output includes evidence bundle, capability report, and provenance):
+### HTTP API (judge service)
 
-```json
-{
-  "schema_version": "1.0",
-  "status": "OK",
-  "exit_code": 0,
-  "stdout": "hello\n",
-  "stderr": "",
-  "cpu_time": 0.011,
-  "wall_time": 0.015,
-  "memory_peak": 8388608,
-  "output_integrity": "complete",
-  "execution_envelope_id": "sha256:..."
-}
+```bash
+# Start the service (SQLite, no external deps)
+cargo run -p judge-service
+
+# Async submit
+curl -X POST http://localhost:8080/api/submit \
+  -H "Content-Type: application/json" \
+  -d '{"language": "python", "code": "print(42)"}'
+
+# Sync submit (blocks until done)
+curl -X POST "http://localhost:8080/api/submit?wait=true" \
+  -H "Content-Type: application/json" \
+  -d '{"language": "python", "code": "print(42)"}'
+
+# Poll result
+curl http://localhost:8080/api/result/{id}
 ```
 
-> `cpu_time` and `wall_time` are in **seconds** (float). `memory_peak` is in **bytes**.
+<details>
+<summary><strong>:bell: Webhook notifications</strong></summary>
+
+Fire-and-forget with signed callbacks (Standard Webhooks spec):
+
+```bash
+curl -X POST http://localhost:8080/api/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "python",
+    "code": "print(42)",
+    "webhook_url": "https://myapp.com/api/judge-callback",
+    "webhook_secret": "your-secret-key"
+  }'
+```
+
+Rustbox POSTs the result to your URL with HMAC-SHA256 signature headers:
+
+```
+webhook-id: <submission-uuid>
+webhook-timestamp: 1674087231
+webhook-signature: v1,<base64-hmac>
+```
+
+Signed content: `{msg_id}.{timestamp}.{body}` - verify with your secret to prevent forgery.
+
+</details>
 
 <details>
-<summary><strong>:test_tube: All Five Languages</strong></summary>
+<summary><strong>:test_tube: All five languages</strong></summary>
 
 ```bash
 # Python
-sudo target/release/judge execute-code --strict --box-id 1 \
-  --language python --code 'print(sum(range(100)))'
+target/release/judge execute-code --permissive --language python --code 'print(sum(range(100)))'
 
 # C++ (compiled then executed)
-sudo target/release/judge execute-code --strict --box-id 2 \
-  --language cpp --code '
+target/release/judge execute-code --permissive --language cpp --code '
 #include <iostream>
 int main() { std::cout << 42 << std::endl; }
 '
 
 # Java (compiled then executed)
-sudo target/release/judge execute-code --strict --box-id 3 \
-  --language java --code '
+target/release/judge execute-code --permissive --language java --code '
 public class Main {
     public static void main(String[] args) {
         System.out.println("hello world");
@@ -91,249 +131,190 @@ public class Main {
 }
 '
 
-# JavaScript (QuickJS - interpreted)
-sudo target/release/judge execute-code --strict --box-id 4 \
-  --language javascript --code 'console.log(2 + 2)'
+# JavaScript (QuickJS)
+target/release/judge execute-code --permissive --language javascript --code 'console.log(2 + 2)'
 
-# TypeScript (Bun - interpreted)
-sudo target/release/judge execute-code --strict --box-id 5 \
-  --language typescript --code 'console.log("typed!")'
+# TypeScript (Bun)
+target/release/judge execute-code --permissive --language typescript --code 'console.log("typed!")'
 ```
 
-Language aliases: `py`, `c++`/`cxx`/`cc`/`c`, `js`, `ts`
+Language aliases: `py`, `c++`/`cxx`, `js`, `ts`
 
 </details>
 
 ## :shield: Security Model
 
-Rustbox applies **7 independent layers** of kernel-enforced isolation. Every layer must pass before untrusted code runs - failure in any layer aborts the sandbox in strict mode.
+Rustbox applies **8 independent layers** of kernel-enforced isolation. Every layer must pass before untrusted code runs - failure in any layer aborts the sandbox in strict mode.
 
 | Layer | Mechanism | What it stops |
 |-------|-----------|---------------|
 | Process isolation | `CLONE_NEWPID`, `CLONE_NEWIPC` | Can't see or signal host processes |
 | Filesystem | tmpfs chroot + read-only bind mounts | Writable workdir only, no host access |
-| Network | `CLONE_NEWNET` | No network access (strict mode) |
+| Network | `CLONE_NEWNET` | No network access |
 | Memory | cgroup `memory.max` + `RLIMIT_AS` | Physical + virtual memory caps |
 | CPU | `RLIMIT_CPU` + cgroup watchdog | Hard CPU time limit |
 | Processes | cgroup `pids.max` + `RLIMIT_NPROC` | Fork bomb prevention |
 | Privileges | `setresuid` + all caps zeroed + `PR_SET_NO_NEW_PRIVS` | No root, no escalation, no suid |
+| Syscall filtering | seccomp-bpf deny-list (18 syscalls) | Blocks io_uring, ptrace, bpf, module loading |
 
-### :lock: Type-State Pre-Exec Chain
+### :lock: Type-state pre-exec chain
 
-The core safety mechanism. Sandbox setup is enforced **at compile time** through Rust's type system - skipping or reordering steps is a compile error:
+Sandbox setup is enforced **at compile time** through Rust's type system - skipping or reordering steps is a compile error:
 
 ```
-FreshChild
-  -> NamespacesReady
-    -> MountsPrivate
-      -> CgroupAttached
-        -> CredsDropped
-          -> PrivsLocked
-            -> ExecReady    // only this state can call exec_payload()
+FreshChild -> NamespacesReady -> MountsPrivate -> CgroupAttached
+  -> CredsDropped -> PrivsLocked -> [seccomp filter] -> ExecReady
 ```
 
-Verified by 7 [trybuild](https://docs.rs/trybuild) compile-fail tests in `tests/typestate_compile_fail/`.
+Only `Sandbox<ExecReady>` can call `exec_payload()`. Verified by 7 [trybuild](https://docs.rs/trybuild) compile-fail tests.
 
-### :no_entry: Environment Sanitization
+### :no_entry: Seccomp deny-list
 
-A blocklist strips dangerous environment variables **after** config merge (preventing re-injection through `config.json`):
+Following the [nsjail](https://github.com/google/nsjail) pattern (DEFAULT ALLOW + block dangerous syscalls):
 
-<details>
-<summary>Blocked variables</summary>
+| Family | Syscalls | Action |
+|--------|----------|--------|
+| io_uring | `io_uring_setup`, `io_uring_enter`, `io_uring_register` | ERRNO(ENOSYS) |
+| Tracing | `ptrace`, `process_vm_readv`, `process_vm_writev` | KILL_PROCESS |
+| Kernel subsystems | `bpf`, `userfaultfd`, `perf_event_open` | KILL_PROCESS |
+| Module loading | `kexec_load`, `init_module`, `finit_module`, `delete_module` | KILL_PROCESS |
+| Mount/swap | `mount`, `umount2`, `pivot_root`, `swapon`, `swapoff` | KILL_PROCESS |
 
-**Loader hijack** (VULN-002): `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, `LD_PROFILE`, `LD_BIND_NOW`, `LD_BIND_NOT`, `LD_DYNAMIC_WEAK`, `LD_USE_LOAD_BIAS`
-
-**Interpreter injection** (VULN-014): `BASH_ENV`, `ENV`, `CDPATH`, `PYTHONSTARTUP`, `PERL5OPT`, `RUBYOPT`, `NODE_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`
-
-**Allowed but validated**: `JAVA_TOOL_OPTIONS` (checked for `-javaagent:`, `-agentpath:`, `-agentlib:` flags). `PYTHONPATH` is allowed since filesystem isolation is the control.
-
-</details>
+Override with `--seccomp-policy policy.json` or disable with `--no-seccomp`.
 
 ## :building_construction: Architecture
 
-### :package: Three Binaries, One CLI
+### Execution flow
 
-All binaries call `rustbox::cli::run()` with a different mode:
+```
+CLI / HTTP API
+  -> Isolate::new()                    allocate UID from pool, create cgroup
+  -> execute_code_string(lang, code)   write source, dispatch by language
+       -> supervisor::clone()          proxy in new namespaces (PID, mount, net, IPC)
+            -> proxy::fork()           payload child through typestate chain
+                 7 setup stages        namespaces, mounts, cgroup, rlimits, creds, caps, seccomp
+                 -> execvp()           replace process image
+            -> proxy: collect stdout/stderr, wait, report
+       -> supervisor: wall/CPU watchdog via cgroup, collect evidence
+  -> classify verdict from kernel evidence
+  -> cleanup: verify baseline, remove cgroup, wipe workdir, release UID
+```
 
-| Binary | Mode | Commands |
-|--------|------|----------|
-| `isolate` | Sandbox lifecycle | `init`, `run`, `status`, `cleanup` |
-| `judge` | Language adapter | `execute-code`, `check-deps` |
-| `rustbox` | All commands | Everything above |
-
-### :file_folder: Module Layout
+### Module layout
 
 ```
 src/
-  kernel/         Thin unsafe wrappers around Linux primitives
-                    namespaces, cgroups v1/v2, capabilities, mounts,
-                    credentials, signals
-  exec/           Type-state pre-exec chain (preexec.rs), process executor
-  core/           Supervisor (clone/waitpid), proxy (PID 1 in sandbox), types
+  kernel/         Thin unsafe wrappers: namespaces, cgroups v1/v2, capabilities,
+                  mounts, credentials, signals, seccomp
+  exec/           Type-state pre-exec chain (preexec.rs)
+  core/           Supervisor (clone/waitpid), proxy (PID 1 in sandbox)
+  runtime/        Isolate lifecycle (new/execute/cleanup), command security
   config/         Config loading, validation, per-language presets
-  runtime/        Isolate lifecycle, security validation
-  verdict/        Evidence-backed verdict classification (pure functions)
-  safety/         Idempotent cleanup, file-lock manager
+  verdict/        Evidence-backed verdict classification
+  safety/         UID pool (lock-free atomic bitset), cleanup, workspace management
   observability/  Security audit logging (injection + traversal detection)
   utils/          FD closure, env hygiene, fork-safe logging, JSON schema
-  judge/          Language adapters (Python, C++, Java, JS, TS)
-```
 
-### :arrows_counterclockwise: Execution Flow
-
-```
-CLI args
-  -> IsolateConfig::with_language_defaults(language, box_id)
-  -> Isolate::new(config)
-  -> execute_code_string(language, code)
-       |
-       |-- [compile step: permissive mode, drops UID]     # C++/Java only
-       |
-       '-- [execute step: strict mode, full isolation]
-             -> ProcessExecutor::new()                    # cgroup create + limits
-             -> launch_with_supervisor()                  # clone(NEWPID|NEWIPC|NEWNET)
-                  -> proxy: fork payload child
-                       -> type-state pre-exec chain       # 7 steps, compile-time enforced
-                       -> execvp(command)
-                  -> proxy: collect stdout/stderr, wait, report status
-             -> supervisor: wall-time/cpu watchdog, collect evidence
-             -> ExecutionResult + LaunchEvidence
-  -> JudgeResultV1 JSON to stdout
+judge-service/    HTTP API: submit, poll, webhooks, SQLite/PostgreSQL
 ```
 
 ## :gear: Configuration
 
-`config.json` defines per-language resource limits, environment, filesystem bindings, and compilation settings:
+### Judge service (environment variables)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RUSTBOX_PORT` | 8080 | HTTP listen port |
+| `RUSTBOX_WORKERS` | 2 | Concurrent sandbox workers |
+| `RUSTBOX_QUEUE_SIZE` | 100 | Max pending submissions |
+| `RUSTBOX_DATABASE_URL` | `sqlite:rustbox.db` | SQLite or PostgreSQL URL |
+| `RUSTBOX_API_KEY` | (none) | API key for authentication |
+| `RUSTBOX_MAX_CODE_BYTES` | 65536 | Max source code size |
+| `RUSTBOX_MAX_STDIN_BYTES` | 262144 | Max stdin size |
+| `RUSTBOX_SYNC_WAIT_TIMEOUT_SECS` | 30 | Timeout for `?wait=true` |
+| `RUSTBOX_WEBHOOK_TIMEOUT_SECS` | 10 | Webhook delivery timeout |
+| `RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS` | false | Allow HTTP + localhost in dev |
+| `RUSTBOX_STALE_TIMEOUT_SECS` | 300 | Reaper timeout for stuck jobs |
+
+### Per-language defaults (`config.json`)
 
 <details>
-<summary>Example config.json (simplified)</summary>
+<summary>Example</summary>
 
 ```json
 {
-  "isolate": {
-    "box_dir": "/tmp/rustbox",
-    "run_dir": "/var/run/rustbox"
-  },
-  "security": {
-    "drop_capabilities": true,
-    "use_namespaces": true,
-    "use_cgroups": true,
-    "no_new_privileges": true
-  },
   "languages": {
     "python": {
       "memory": { "limit_mb": 128 },
       "time": { "cpu_time_seconds": 4, "wall_time_seconds": 7 },
       "processes": { "max_processes": 10 },
-      "filesystem": {
-        "max_file_size_kb": 512,
-        "required_binaries": ["/usr/bin/python3"]
-      },
       "environment": {
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1"
-      },
-      "compilation": { "enabled": false }
+      }
     },
     "cpp": {
       "memory": { "limit_mb": 256 },
       "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
-      "processes": { "max_processes": 8 },
-      "filesystem": {
-        "required_binaries": ["/usr/bin/gcc", "/usr/bin/g++"]
-      },
-      "compilation": {
-        "enabled": true,
-        "compiler": "g++ -std=c++17 -O2"
-      }
+      "compilation": { "compiler": "g++ -std=c++17 -O2" }
     }
   }
 }
 ```
 
-Each language also supports `java`, `javascript`, and `typescript` sections. See `config.json` for the full schema.
-
 </details>
-
-Config is loaded from `./config.json` (dev) or `/etc/rustbox/config.json` (production). When running as root, world-writable config files are rejected.
 
 ## :hammer_and_wrench: Build and Test
 
 ```bash
-# Build
-cargo build                    # debug
-cargo build --release          # release
-
-# Run all tests (non-root)
-cargo test --all
-
-# Strict mode integration tests (root required)
-sudo cargo test --test integration_execution -- --include-ignored
-
-# Clippy (zero warnings)
-cargo clippy --all-targets -- -D warnings
-
-# Smoke test
-target/debug/judge execute-code --permissive --box-id 1 --language python --code 'print(1)'
-
-# Check language toolchains
-target/debug/judge check-deps --verbose
+cargo build                          # debug build
+cargo build --release                # release build
+cargo test --all                     # all tests (non-root)
+cargo test --test integration_execution -- --test-threads=1  # integration tests
+sudo cargo test --test integration_execution -- --include-ignored  # strict mode (root)
+target/debug/judge check-deps --verbose  # verify language toolchains
 ```
 
-### :bar_chart: Test Suites
-
-| Suite | What it tests | Count |
-|-------|---------------|-------|
-| Unit | Types, config, verdict classifier, cleanup, presets, language adapters | 144 |
-| Integration (permissive) | All 5 languages, verdict types, stdin, timeouts | 19 |
-| Integration (strict) | Full isolation chain under root | 7 (ignored without root) |
-| Compile-fail (trybuild) | Type-state invariants - verifies misordering is a compile error | 7 |
+| Suite | Count | What it tests |
+|-------|-------|---------------|
+| Unit | 108 | Config, verdict classifier, presets, seccomp, kernel primitives |
+| Integration (permissive) | 19 | All 5 languages, verdicts, stdin, timeouts |
+| Integration (strict) | 7 | Full isolation chain under root (ignored without root) |
+| Seccomp | 3 | io_uring blocked, no-seccomp flag, seccomp+python works |
+| Compile-fail (trybuild) | 7 | Type-state invariants |
+| Judge-service | 6 | Submit, poll, idempotency, languages, health |
 
 ## :whale: Docker
 
-### Standalone
-
 ```bash
-docker build -f docker/base/Dockerfile -t rustbox-base:local .
-docker build -f docker/isolate/Dockerfile -t rustbox .
+docker build -f docker/base/Dockerfile -t rustbox .
 
-docker run --cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt no-new-privileges \
-  rustbox judge execute-code --strict --box-id 1 --language python --code 'print(1)'
+# Single execution
+docker run --privileged rustbox \
+  judge execute-code --strict --language python --code 'print(1)'
+
+# Judge service
+docker run --privileged -p 8080:8080 rustbox \
+  judge-service
 ```
 
-<details>
-<summary><strong>Full Stack (judge service + web UI)</strong></summary>
-
-```bash
-# Set required credentials
-export POSTGRES_PASSWORD=<strong-password>
-export REDIS_PASSWORD=<strong-password>
-
-# Start all services
-docker compose up -d
-
-# Submit via API
-curl -X POST http://localhost:8080/api/submit \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $RUSTBOX_API_KEY" \
-  -d '{"language": "python", "code": "print(42)"}'
-```
-
-</details>
+The Docker image uses `jlink` to build a minimal 62MB Java runtime instead of a full 285MB JDK.
 
 ## :clipboard: Requirements
 
 | Requirement | Details |
 |-------------|---------|
 | OS | Linux with cgroups v1 or v2 |
-| Privileges | Root for strict mode (namespaces, cgroups, credential drop) |
+| Privileges | Root for strict mode |
 | Rust | Edition 2021 |
 | Python | `python3` in `$PATH` |
 | C++ | `g++` (GCC) |
-| Java | `javac` + `java` (OpenJDK 17+) |
+| Java | `javac` + `java` (OpenJDK 21) |
 | JavaScript | [`qjs`](https://bellard.org/quickjs/) (QuickJS) |
-| TypeScript | [`bun`](https://bun.sh/) (Bun runtime) |
+| TypeScript | [`bun`](https://bun.sh/) |
 
 ## :pray: Acknowledgments
 
-Inspired by [IOI Isolate](https://github.com/ioi/isolate) by Martin Mares and Bernard Blackham.
+- [IOI Isolate](https://github.com/ioi/isolate) by Martin Mares and Bernard Blackham - the original sandbox for competitive programming
+- [nsjail](https://github.com/google/nsjail) by Google - seccomp and Kafel policy design inspiration
+- [Standard Webhooks](https://www.standardwebhooks.com/) - webhook signature specification
