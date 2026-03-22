@@ -1,0 +1,32 @@
+---
+title: rustbox
+description: Kernel-enforced sandboxing for untrusted code execution
+template: splash
+hero:
+  tagline: Run arbitrary code from strangers on the internet. Make sure they can't do anything interesting with your server.
+  actions:
+    - text: Get Started
+      link: /getting-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/orkait/rustbox
+      variant: minimal
+      icon: github
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <Card title="8 layers of isolation" icon="approve-check">
+    Namespaces, cgroups, seccomp, capabilities, chroot, rlimits, credential drop, NO_NEW_PRIVS. Not one layer - all eight.
+  </Card>
+  <Card title="Compile-time safety" icon="seti:lock">
+    The typestate chain makes it impossible to run code without applying all security controls first. Misordering is a compiler error.
+  </Card>
+  <Card title="Evidence-based verdicts" icon="document">
+    Every TLE, MLE, and RE is backed by kernel evidence. No guesswork, no heuristics - just what the kernel observed.
+  </Card>
+  <Card title="2.8MB binary" icon="rocket">
+    No Docker, no VMs, no JVM. A static binary that talks directly to the Linux kernel. Builds in seconds, deploys anywhere.
+  </Card>
+</CardGrid>
