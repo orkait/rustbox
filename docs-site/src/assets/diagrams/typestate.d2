@@ -1,86 +1,67 @@
-grid-rows: 3
-grid-columns: 3
-grid-gap: 16
+direction: right
 
 fresh: {
   label: "FreshChild\nclone(2)"
   style.fill: "#eff1f5"
   style.stroke: "#8839ef"
   style.font-color: "#4c4f69"
-  style.border-radius: 10
-  style.font-size: 13
+  style.border-radius: 8
+  style.font-size: 12
 }
 
 ns: {
-  label: "NamespacesReady\nunshare(2)"
+  label: "Namespaces\nReady"
   style.fill: "#eff1f5"
   style.stroke: "#8839ef"
   style.font-color: "#4c4f69"
-  style.border-radius: 10
-  style.font-size: 13
+  style.border-radius: 8
+  style.font-size: 12
 }
 
 mnt: {
-  label: "MountsPrivate\nmount + chroot"
+  label: "Mounts\nPrivate"
   style.fill: "#eff1f5"
   style.stroke: "#8839ef"
   style.font-color: "#4c4f69"
-  style.border-radius: 10
-  style.font-size: 13
-}
-
-# Row 2 - reverse direction (snake)
-r2pad: {
-  style.fill: transparent
-  style.stroke: transparent
-}
-
-cred: {
-  label: "CredsDropped\nsetresuid/gid"
-  style.fill: "#e6e9ef"
-  style.stroke: "#1e66f5"
-  style.font-color: "#4c4f69"
-  style.border-radius: 10
-  style.font-size: 13
+  style.border-radius: 8
+  style.font-size: 12
 }
 
 cg: {
-  label: "CgroupAttached\ncgroup write"
-  style.fill: "#e6e9ef"
+  label: "Cgroup\nAttached"
+  style.fill: "#eff1f5"
   style.stroke: "#1e66f5"
   style.font-color: "#4c4f69"
-  style.border-radius: 10
-  style.font-size: 13
+  style.border-radius: 8
+  style.font-size: 12
 }
 
-# Row 3
-priv: {
-  label: "PrivsLocked\ncapset + prctl"
-  style.fill: "#e6e9ef"
+cred: {
+  label: "Creds\nDropped"
+  style.fill: "#eff1f5"
   style.stroke: "#1e66f5"
   style.font-color: "#4c4f69"
-  style.border-radius: 10
-  style.font-size: 13
+  style.border-radius: 8
+  style.font-size: 12
+}
+
+priv: {
+  label: "Privs\nLocked"
+  style.fill: "#eff1f5"
+  style.stroke: "#1e66f5"
+  style.font-color: "#4c4f69"
+  style.border-radius: 8
+  style.font-size: 12
 }
 
 exec: {
-  label: "ExecReady\nseccomp → exec()"
+  label: "Exec\nReady"
   style.fill: "#40a02b"
   style.stroke: "#40a02b"
   style.font-color: "#ffffff"
-  style.border-radius: 10
-  style.font-size: 13
+  style.border-radius: 8
+  style.font-size: 12
   style.bold: true
 }
 
-r3pad: {
-  style.fill: transparent
-  style.stroke: transparent
-}
-
-# Connections - snake pattern
-fresh -> ns -> mnt
-mnt -> cg
-cg -> cred
-cred -> priv
-priv -> exec
+fresh -> ns -> mnt -> cg -> cred -> priv -> exec
