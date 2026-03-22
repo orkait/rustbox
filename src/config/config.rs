@@ -106,10 +106,9 @@ impl RustBoxConfig {
                                     && !is_wsl_mount
                                 {
                                     log::warn!(
-                                        "Skipping world-writable config file: {}",
+                                        "Loading world-writable config file: {} (consider chmod 644)",
                                         candidate.display()
                                     );
-                                    continue;
                                 }
                             }
                         }

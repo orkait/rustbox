@@ -93,6 +93,7 @@ impl Isolate {
     }
 
     /// Allocate all resources. Nothing else allocates after this.
+    /// On failure, cleans up any partially-created state (directory, cgroup).
     pub fn new(mut config: IsolateConfig) -> Result<Self> {
         let uid_guard = uid_pool::UidGuard::allocate()?;
         let pool_uid = uid_guard.uid();
@@ -119,17 +120,31 @@ impl Isolate {
             Ok(cg) => match cg.create(&config.instance_id) {
                 Ok(()) => {
                     if let Some(mem) = config.memory_limit {
-                        cg.set_memory_limit(&config.instance_id, mem)?;
+                        if let Err(e) = cg.set_memory_limit(&config.instance_id, mem) {
+                            let _ = cg.remove(&config.instance_id);
+                            let _ = crate::safety::safe_cleanup::remove_tree_secure(&base_path);
+                            return Err(e);
+                        }
                     }
                     if let Some(procs) = config.process_limit {
-                        cg.set_process_limit(&config.instance_id, procs)?;
+                        if let Err(e) = cg.set_process_limit(&config.instance_id, procs) {
+                            let _ = cg.remove(&config.instance_id);
+                            let _ = crate::safety::safe_cleanup::remove_tree_secure(&base_path);
+                            return Err(e);
+                        }
                     }
                     Some(cg)
                 }
-                Err(e) if config.strict_mode => return Err(e),
+                Err(e) if config.strict_mode => {
+                    let _ = crate::safety::safe_cleanup::remove_tree_secure(&base_path);
+                    return Err(e);
+                }
                 Err(_) => None,
             },
-            Err(e) if config.strict_mode => return Err(e),
+            Err(e) if config.strict_mode => {
+                let _ = crate::safety::safe_cleanup::remove_tree_secure(&base_path);
+                return Err(e);
+            }
             Err(_) => None,
         };
 
@@ -199,9 +214,13 @@ impl Isolate {
     ) -> Result<ExecutionResult> {
         match language.to_lowercase().as_str() {
             "python" | "py" => self.execute_interpreted(code, "solution.py", &["/usr/bin/python3", "-u"], overrides),
-            "javascript" | "js" => self.execute_interpreted(code, "solution.js", &["/usr/local/bin/qjs", "--std"], overrides),
+            "javascript" | "js" => self.execute_interpreted(code, "solution.js", &["/usr/local/bin/bun", "run"], overrides),
             "typescript" | "ts" => self.execute_interpreted(code, "solution.ts", &["/usr/local/bin/bun", "run"], overrides),
-            "cpp" | "c++" | "cxx" => self.compile_and_execute_cpp(code, overrides),
+            "c" => self.compile_and_execute_c(code, overrides),
+            "cpp" | "c++" => self.compile_and_execute_cpp(code, overrides),
+            "go" => self.compile_and_execute_go(code, overrides),
+            "rust" | "rs" => self.compile_and_execute_rust(code, overrides),
+            "zig" => self.compile_and_execute_zig(code, overrides),
             "java" => self.compile_and_execute_java(code, overrides),
             _ => Err(IsolateError::Config(format!("Unsupported language: {}", language))),
         }
@@ -293,6 +312,59 @@ impl Isolate {
         let result = self.execute_with_overrides(&run_cmd, overrides);
         self.wipe_workdir();
         result
+    }
+
+    fn compile_and_execute_c(&mut self, code: &str, overrides: &ExecutionOverrides) -> Result<ExecutionResult> {
+        self.ensure_workdir()?;
+        let src = self.config.workdir.join("solution.c");
+        self.compile_and_execute(
+            code, src,
+            vec!["/usr/bin/gcc".into(), "-o".into(), "solution".into(), "solution.c".into(), "-std=c17".into(), "-O2".into(), "-lm".into()],
+            vec!["./solution".into()],
+            overrides, "Compilation Error", "Compilation failed",
+            |c, o, v| Self::configure_compile_phase(c, o, v, 256, 120),
+        )
+    }
+
+    fn compile_and_execute_go(&mut self, code: &str, overrides: &ExecutionOverrides) -> Result<ExecutionResult> {
+        self.ensure_workdir()?;
+        let src = self.config.workdir.join("solution.go");
+        self.compile_and_execute(
+            code, src,
+            vec!["/usr/local/go/bin/go".into(), "build".into(), "-o".into(), "solution".into(), "solution.go".into()],
+            vec!["./solution".into()],
+            overrides, "Compilation Error", "Compilation failed",
+            |c, o, v| {
+                Self::configure_compile_phase(c, o, v, 512, 120);
+                c.environment.push(("CGO_ENABLED".into(), "0".into()));
+                c.environment.push(("GOCACHE".into(), "/tmp/go-cache".into()));
+                c.environment.push(("GOPATH".into(), "/tmp/gopath".into()));
+            },
+        )
+    }
+
+    fn compile_and_execute_rust(&mut self, code: &str, overrides: &ExecutionOverrides) -> Result<ExecutionResult> {
+        self.ensure_workdir()?;
+        let src = self.config.workdir.join("solution.rs");
+        self.compile_and_execute(
+            code, src,
+            vec!["/usr/local/bin/rustc".into(), "-O".into(), "-o".into(), "solution".into(), "solution.rs".into()],
+            vec!["./solution".into()],
+            overrides, "Compilation Error", "Compilation failed",
+            |c, o, v| Self::configure_compile_phase(c, o, v, 512, 10),
+        )
+    }
+
+    fn compile_and_execute_zig(&mut self, code: &str, overrides: &ExecutionOverrides) -> Result<ExecutionResult> {
+        self.ensure_workdir()?;
+        let src = self.config.workdir.join("solution.zig");
+        self.compile_and_execute(
+            code, src,
+            vec!["/usr/local/bin/zig".into(), "build-exe".into(), "solution.zig".into(), "-OReleaseFast".into()],
+            vec!["./solution".into()],
+            overrides, "Compilation Error", "Compilation failed",
+            |c, o, v| Self::configure_compile_phase(c, o, v, 512, 10),
+        )
     }
 
     fn compile_and_execute_cpp(&mut self, code: &str, overrides: &ExecutionOverrides) -> Result<ExecutionResult> {

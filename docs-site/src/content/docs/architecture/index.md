@@ -13,6 +13,11 @@ The result is a 2.8MB binary that provides 8 layers of isolation, evidence-backe
 
 ## Module map
 
-<img src="/module-map.svg" alt="Module map" style="max-width: 360px; display: block; margin: 1rem auto;" />
+```
+┌─────────┐     ┌──────────┐     ┌──────────────────────┐     ┌─────────────────────┐     ┌─────────────────┐     ┌───────────────┐
+│ CLI/API │ --> │ runtime/ │ --> │verdict/ config/ obs/ │ --> │    core/ + exec/    │ --> │     kernel/     │ --> │    safety/    │
+└─────────┘     └──────────┘     └──────────────────────┘     └─────────────────────┘     └─────────────────┘     └───────────────┘
+ entry point       isolate.rs       pure logic, no unsafe        supervisor+typestate         unsafe wrappers         cleanup+utils
+```
 
 Each layer only talks to the layer directly below it. `verdict/` never touches the kernel. `kernel/` never makes policy decisions. This isn't just good architecture - it's the reason the unsafe audit passes: `verdict/` has zero unsafe blocks because it never needs to touch a syscall.

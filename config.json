@@ -96,7 +96,7 @@
 				"max_file_size_kb": 512,
 				"max_open_files": 64,
 				"additional_read_only_paths": [],
-				"required_binaries": ["/usr/local/bin/qjs"]
+				"required_binaries": ["/usr/local/bin/bun"]
 			},
 			"environment": {},
 			"compilation": {

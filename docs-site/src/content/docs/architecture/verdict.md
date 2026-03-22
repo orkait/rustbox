@@ -49,9 +49,9 @@ CPU time and wall time don't always agree. The ratio tells you something:
 
 | CPU/Wall ratio | Classification | What it means |
 |---------------|----------------|---------------|
-| > 0.8 | CPU-bound | Process was computing the whole time |
-| < 0.3 | Sleep/block-bound | Process was waiting (sleep, I/O) |
-| Intermediate | Host interference suspected | System load may have affected results |
+| &ge; 0.8 | CPU-bound | Process was computing the whole time |
+| &le; 0.2 | Sleep/block-bound | Process was waiting (sleep, I/O) |
+| 0.2 - 0.8 | Host interference suspected | System load may have affected results |
 
 This matters for competitive programming: a TLE where the process was CPU-bound is a genuine algorithm problem. A TLE where the process was sleeping might be a broken test case.
 

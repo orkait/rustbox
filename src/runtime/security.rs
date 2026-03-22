@@ -52,11 +52,11 @@ pub mod command_validation {
         "/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
         "/usr/bin/javac",
         "/usr/lib/jvm/java-21-openjdk-amd64/bin/javac",
-        "/usr/local/bin/qjs",
         "/usr/local/bin/bun",
         "/usr/bin/node",
-        "/usr/bin/go",
-        "/usr/lib/go-1.22/bin/go",
+        "/usr/local/go/bin/go",
+        "/usr/local/bin/rustc",
+        "/usr/local/bin/zig",
         "/bin/sh",
         "/bin/bash",
         "/usr/bin/rustc",
@@ -124,7 +124,7 @@ pub mod command_validation {
     }
 
     fn resolve_command_in_path(command: &str) -> Result<PathBuf> {
-        let secure_paths = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/lib/go-1.22/bin"];
+        let secure_paths = ["/usr/local/bin", "/usr/local/go/bin", "/usr/bin", "/bin"];
 
         for path_dir in &secure_paths {
             let candidate = Path::new(path_dir).join(command);
@@ -149,8 +149,8 @@ pub mod command_validation {
         let secure_prefixes = [
             "/usr/bin/",
             "/usr/local/bin/",
+            "/usr/local/go/bin/",
             "/bin/",
-            "/usr/lib/go-1.22/bin/",
             "/usr/lib/jvm/",
             "/tmp/rustbox/",
             "/tmp/rustbox-uid-",

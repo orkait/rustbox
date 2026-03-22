@@ -13,11 +13,40 @@ export default defineConfig({
 			plugins: [
 				catppuccin({ dark: 'mocha-peach', light: 'latte-peach' }),
 			],
+			head: [
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'preconnect',
+						href: 'https://fonts.googleapis.com',
+					},
+				},
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'preconnect',
+						href: 'https://fonts.gstatic.com',
+						crossorigin: true,
+					},
+				},
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'stylesheet',
+						href: 'https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&display=swap',
+					},
+				},
+				{
+					tag: 'style',
+					content: 'code, pre, pre code, .expressive-code code { font-family: "Fira Code", monospace !important; }',
+				},
+			],
 			sidebar: [
 				{
 					label: 'Getting Started',
 					items: [
 						{ label: 'Configuration', slug: 'getting-started/configuration' },
+						{ label: 'Docker Deployment', slug: 'getting-started/docker' },
 					],
 				},
 				{

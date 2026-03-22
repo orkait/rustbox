@@ -49,6 +49,18 @@ async fn start_server() -> (String, Arc<dyn judge_service::database::Database>) 
         sync_wait_timeout_secs: 30,
         sync_poll_interval_ms: 200,
         webhook_timeout_secs: 10,
+        cgroup_backend: None,
+        namespace_support: false,
+        enforcement_mode: "none".to_string(),
+        available_languages: vec![
+            "python".to_string(),
+            "c".to_string(),
+            "cpp".to_string(),
+            "java".to_string(),
+            "javascript".to_string(),
+            "typescript".to_string(),
+        ],
+        rate_limiter: None,
     };
 
     let app = judge_service::api::router().with_state(state);

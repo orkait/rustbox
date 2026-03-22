@@ -245,9 +245,10 @@ pub fn run(mode: CliMode) -> Result<()> {
 
             let language = match language.to_lowercase().as_str() {
                 "py" => "python".to_string(),
-                "c" | "cc" | "c++" | "cxx" => "cpp".to_string(),
+                "cc" | "c++" => "cpp".to_string(),
                 "js" => "javascript".to_string(),
                 "ts" => "typescript".to_string(),
+                "rs" => "rust".to_string(),
                 other => other.to_string(),
             };
 

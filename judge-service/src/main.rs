@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+#[allow(unused_imports)]
+use tracing::warn;
+
 use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderValue, Method};
 use tower_http::cors::CorsLayer;
@@ -62,6 +65,31 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_secs(cfg.stale_timeout_secs),
     );
 
+    let db_for_shutdown = db.clone();
+
+    let available_languages = detect_installed_languages();
+    info!(languages = ?available_languages, "detected language runtimes");
+
+    let cgroup_backend = rustbox::kernel::cgroup::detect_cgroup_backend()
+        .map(rustbox::kernel::cgroup::backend_type_name)
+        .map(str::to_string);
+    let namespace_support = rustbox::kernel::namespace::NamespaceIsolation::is_supported();
+    let is_root = std::process::Command::new("id").arg("-u").output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+        .unwrap_or(false);
+    let enforcement_mode = match (&cgroup_backend, namespace_support, is_root) {
+        (Some(_), true, true) => "strict",
+        (Some(_), _, _) | (_, true, _) => "degraded",
+        _ => "none",
+    }
+    .to_string();
+    info!(
+        enforcement = %enforcement_mode,
+        cgroup = ?cgroup_backend,
+        namespaces = namespace_support,
+        "enforcement probed"
+    );
+
     let state = AppState {
         db,
         queue,
@@ -74,10 +102,23 @@ async fn main() -> anyhow::Result<()> {
         sync_wait_timeout_secs: cfg.sync_wait_timeout_secs,
         sync_poll_interval_ms: cfg.sync_poll_interval_ms,
         webhook_timeout_secs: cfg.webhook_timeout_secs,
+        cgroup_backend,
+        namespace_support,
+        enforcement_mode,
+        available_languages,
+        rate_limiter: if cfg.rate_limit_per_minute > 0 {
+            info!(rpm = cfg.rate_limit_per_minute, "rate limiting enabled");
+            Some(std::sync::Arc::new(judge_service::rate_limit::RateLimiter::new(cfg.rate_limit_per_minute)))
+        } else {
+            None
+        },
     };
 
     if state.api_key.is_some() {
         info!("API key authentication enabled");
+    } else {
+        warn!("WARNING: No API key set. API is open to anyone who can reach this port.");
+        warn!("Set RUSTBOX_API_KEY for production deployments.");
     }
 
     let cors_origin = std::env::var("RUSTBOX_CORS_ORIGIN")
@@ -97,7 +138,60 @@ async fn main() -> anyhow::Result<()> {
     info!(%addr, "listening");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
 
+    let shutdown_signal = async {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("failed to install SIGINT handler");
+        tokio::select! {
+            _ = sigterm.recv() => info!("SIGTERM received, shutting down..."),
+            _ = sigint.recv() => info!("SIGINT received, shutting down..."),
+        }
+    };
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+
+    info!("server stopped, draining in-flight workers...");
+
+    let drain_timeout = Duration::from_secs(35);
+    match tokio::time::timeout(drain_timeout, async {
+        for handle in _worker_handles {
+            let _ = handle.await;
+        }
+    })
+    .await
+    {
+        Ok(()) => info!("all workers drained cleanly"),
+        Err(_) => {
+            tracing::warn!("worker drain timed out after {}s, marking stale submissions", drain_timeout.as_secs());
+            if let Err(e) = db_for_shutdown.reap_stale(Duration::ZERO).await {
+                tracing::error!(error = %e, "failed to reap stale submissions on shutdown");
+            }
+        }
+    }
+
+    info!("shutdown complete");
     Ok(())
+}
+
+fn detect_installed_languages() -> Vec<String> {
+    let checks: &[(&str, &[&str])] = &[
+        ("python", &["/usr/bin/python3"]),
+        ("c", &["/usr/bin/gcc"]),
+        ("cpp", &["/usr/bin/g++"]),
+        ("java", &["/usr/bin/java", "/usr/bin/javac"]),
+        ("javascript", &["/usr/local/bin/bun"]),
+        ("typescript", &["/usr/local/bin/bun"]),
+        ("go", &["/usr/local/go/bin/go"]),
+        ("rust", &["/usr/local/bin/rustc"]),
+        ("zig", &["/usr/local/bin/zig"]),
+    ];
+    checks
+        .iter()
+        .filter(|(_, binaries)| binaries.iter().all(|b| std::path::Path::new(b).exists()))
+        .map(|(lang, _)| lang.to_string())
+        .collect()
 }

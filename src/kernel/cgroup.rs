@@ -115,9 +115,14 @@ pub fn select_cgroup_backend(
                 backend_type: CgroupBackendType::V1,
                 backend: Box::new(CgroupV1::new(instance_id, strict_mode)?),
             }),
-            None => Err(IsolateError::Cgroup(
-                "No cgroup backend available on this host".to_string(),
-            )),
+            None => {
+                let mut msg = "No cgroup backend available on this host".to_string();
+                if crate::utils::container::is_container() {
+                    msg.push_str(".\n");
+                    msg.push_str(crate::utils::container::docker_cgroup_hint());
+                }
+                Err(IsolateError::Cgroup(msg))
+            }
         },
         BackendSelector::ForceV1 => match detected {
             Some(CgroupBackendType::V1) => Ok(SelectedBackend {
@@ -137,9 +142,14 @@ pub fn select_cgroup_backend(
                     })
                 }
             }
-            None => Err(IsolateError::Cgroup(
-                "cgroup v1 forced, but no cgroup backend is available".to_string(),
-            )),
+            None => {
+                let mut msg = "cgroup v1 forced, but no cgroup backend is available".to_string();
+                if crate::utils::container::is_container() {
+                    msg.push_str(".\n");
+                    msg.push_str(crate::utils::container::docker_cgroup_hint());
+                }
+                Err(IsolateError::Cgroup(msg))
+            }
         },
     }
 }

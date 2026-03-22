@@ -1,0 +1,90 @@
+services:
+  judge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: judge-service
+    ports:
+      - "4096:4096"
+    environment:
+      RUSTBOX_DATABASE_URL: "sqlite:rustbox.db"
+      RUSTBOX_WORKERS: "2"
+      RUSTBOX_PORT: "4096"
+    cap_add:
+      - SYS_ADMIN
+      - SETUID
+      - SETGID
+      - NET_ADMIN
+      - MKNOD
+      - DAC_OVERRIDE
+    security_opt:
+      - seccomp=unconfined
+    cgroupns: host
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4096/api/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - judge-data:/data
+      - judge-config:/etc/rustbox
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+
+  judge-postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: judge-service
+    ports:
+      - "4096:4096"
+    environment:
+      RUSTBOX_DATABASE_URL: "postgresql://rustbox:rustbox@postgres:5432/rustbox"
+      RUSTBOX_WORKERS: "4"
+      RUSTBOX_PORT: "4096"
+    cap_add:
+      - SYS_ADMIN
+      - SETUID
+      - SETGID
+      - NET_ADMIN
+      - MKNOD
+      - DAC_OVERRIDE
+    security_opt:
+      - seccomp=unconfined
+    cgroupns: host
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4096/api/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - postgres
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rustbox
+      POSTGRES_PASSWORD: rustbox
+      POSTGRES_DB: rustbox
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rustbox"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles:
+      - postgres
+
+volumes:
+  judge-data:
+  judge-config:
+  pg-data:

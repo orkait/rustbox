@@ -62,6 +62,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/result/{id}", get(result))
         .route("/api/languages", get(languages))
         .route("/api/health", get(health))
+        .route("/api/health/ready", get(readiness))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -76,6 +77,24 @@ async fn submit(
     Query(query): Query<SubmitQuery>,
     Json(req): Json<SubmitRequest>,
 ) -> impl IntoResponse {
+    if let Some(ref limiter) = state.rate_limiter {
+        let ip = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        if !limiter.check(ip) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!(ErrorResponse {
+                    error: "rate limit exceeded, try again later".to_string(),
+                })),
+            )
+                .into_response();
+        }
+    }
+
     if let Some(ref key) = state.api_key {
         let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
         if !constant_time_eq(provided.as_bytes(), key.as_bytes()) {
@@ -132,11 +151,15 @@ async fn submit(
     }
 
     let lang = req.language.to_lowercase();
-    if !matches!(lang.as_str(), "python" | "py" | "cpp" | "c++" | "cxx" | "java") {
+    if !state.available_languages.iter().any(|l| l == &lang) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!(ErrorResponse {
-                error: format!("unsupported language: {}", req.language),
+                error: format!(
+                    "unsupported language: {}. available: {}",
+                    req.language,
+                    state.available_languages.join(", ")
+                ),
             })),
         )
             .into_response();
@@ -305,15 +328,47 @@ async fn result(
     }
 }
 
-async fn languages() -> Json<Vec<&'static str>> {
-    Json(vec!["python", "cpp", "java"])
+async fn languages(State(state): State<AppState>) -> Json<Vec<String>> {
+    Json(state.available_languages.clone())
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    Json(HealthResponse {
+    let mut resp = Json(serde_json::json!(HealthResponse {
         status: "ok".to_string(),
+        enforcement_mode: state.enforcement_mode.clone(),
+        cgroup_backend: state.cgroup_backend.clone(),
+        namespace_support: state.namespace_support,
         workers: state.worker_count,
         queue_depth: state.queue.depth(),
         node_id: state.node_id.clone(),
-    })
+    })).into_response();
+    if state.api_key.is_none() {
+        resp.headers_mut().insert(
+            "X-Rustbox-Warning",
+            "No API key configured. Set RUSTBOX_API_KEY for production.".parse().unwrap(),
+        );
+    }
+    resp
+}
+
+async fn readiness(State(state): State<AppState>) -> impl IntoResponse {
+    if state.enforcement_mode == "none" {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "not_ready",
+                "enforcement_mode": state.enforcement_mode,
+                "error": "no cgroup or namespace support available"
+            })),
+        ).into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ready",
+            "enforcement_mode": state.enforcement_mode,
+            "cgroup_backend": state.cgroup_backend,
+            "namespace_support": state.namespace_support,
+        })),
+    ).into_response()
 }

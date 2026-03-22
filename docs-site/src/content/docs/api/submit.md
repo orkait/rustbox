@@ -19,7 +19,7 @@ description: Submit source code for sandboxed execution
 |-------|------|----------|-------|
 | `language` | string | yes | `python`, `py`, `cpp`, `c++`, `cxx`, `java` |
 | `code` | string | yes | Source code (max 64KB) |
-| `stdin` | string | no | Input data (max 64KB) |
+| `stdin` | string | no | Input data (max 256KB) |
 | `webhook_url` | string | no | HTTPS URL for result delivery |
 | `webhook_secret` | string | conditional | Required if `webhook_url` is set (max 256 bytes) |
 

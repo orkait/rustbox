@@ -90,10 +90,28 @@ const ENVELOPES: &[EnvelopeDef] = &[
         memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 100,
     },
     EnvelopeDef {
-        id: "javascript-v1", name: "JavaScript (QuickJS)", language: "javascript",
+        id: "javascript-v1", name: "JavaScript (Bun)", language: "javascript",
         compiler: None,
-        runtime_exe: "/usr/bin/qjs", runtime_args: &["--std"],
-        memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 4, startup_overhead_ms: 5,
+        runtime_exe: "/usr/local/bin/bun", runtime_args: &["run"],
+        memory_mb: 512, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 16, startup_overhead_ms: 50,
+    },
+    EnvelopeDef {
+        id: "go-v1", name: "Go", language: "go",
+        compiler: Some(("/usr/local/go/bin/go", &["build", "-o", "solution"], "solution", 30)),
+        runtime_exe: "./solution", runtime_args: &[],
+        memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 50,
+    },
+    EnvelopeDef {
+        id: "rust-v1", name: "Rust", language: "rust",
+        compiler: Some(("/usr/local/bin/rustc", &["-O", "-o", "solution"], "solution", 30)),
+        runtime_exe: "./solution", runtime_args: &[],
+        memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 50,
+    },
+    EnvelopeDef {
+        id: "zig-v1", name: "Zig", language: "zig",
+        compiler: Some(("/usr/local/bin/zig", &["build-exe", "-OReleaseFast"], "solution", 30)),
+        runtime_exe: "./solution", runtime_args: &[],
+        memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 50,
     },
     EnvelopeDef {
         id: "typescript-v1", name: "TypeScript", language: "typescript",

@@ -2,6 +2,7 @@ pub mod api;
 pub mod config;
 pub mod database;
 pub mod job_queue;
+pub mod rate_limit;
 pub mod types;
 pub mod worker;
 
@@ -23,4 +24,9 @@ pub struct AppState {
     pub sync_wait_timeout_secs: u64,
     pub sync_poll_interval_ms: u64,
     pub webhook_timeout_secs: u64,
+    pub cgroup_backend: Option<String>,
+    pub namespace_support: bool,
+    pub enforcement_mode: String,
+    pub available_languages: Vec<String>,
+    pub rate_limiter: Option<std::sync::Arc<rate_limit::RateLimiter>>,
 }

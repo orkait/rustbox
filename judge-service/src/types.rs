@@ -90,6 +90,9 @@ pub fn decompress_meta(compressed: &str) -> Option<serde_json::Value> {
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
     pub status: String,
+    pub enforcement_mode: String,
+    pub cgroup_backend: Option<String>,
+    pub namespace_support: bool,
     pub workers: usize,
     pub queue_depth: usize,
     pub node_id: String,
