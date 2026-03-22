@@ -1,32 +1,113 @@
 ---
 title: rustbox
 description: Kernel-enforced sandboxing for untrusted code execution
-template: splash
-hero:
-  tagline: Run arbitrary code from strangers on the internet. Make sure they can't do anything interesting with your server.
-  actions:
-    - text: Get Started
-      link: /getting-started/
-      icon: right-arrow
-    - text: View on GitHub
-      link: https://github.com/orkait/rustbox
-      variant: minimal
-      icon: github
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+**rustbox** is a secure process isolation system for competitive programming judges, inspired by [IOI Isolate](https://github.com/ioi/isolate). It provides kernel-enforced sandboxing for untrusted code execution with deterministic resource enforcement and evidence-backed verdict provenance.
 
-<CardGrid>
-  <Card title="8 layers of isolation" icon="approve-check">
-    Namespaces, cgroups, seccomp, capabilities, chroot, rlimits, credential drop, NO_NEW_PRIVS. Not one layer - all eight.
-  </Card>
-  <Card title="Compile-time safety" icon="seti:lock">
-    The typestate chain makes it impossible to run code without applying all security controls first. Misordering is a compiler error.
-  </Card>
-  <Card title="Evidence-based verdicts" icon="document">
-    Every TLE, MLE, and RE is backed by kernel evidence. No guesswork, no heuristics - just what the kernel observed.
-  </Card>
-  <Card title="2.8MB binary" icon="rocket">
-    No Docker, no VMs, no JVM. A static binary that talks directly to the Linux kernel. Builds in seconds, deploys anywhere.
-  </Card>
-</CardGrid>
+Built for anyone running code from strangers on the internet - online judges, code playgrounds, interview platforms, educational tools.
+
+### What it does
+
+- Runs Python, C++, Java, JavaScript, and TypeScript in isolated sandboxes
+- Enforces CPU time, wall time, memory, and process limits via the kernel (not userspace polling)
+- Classifies verdicts (AC, TLE, MLE, RE, SIG) from kernel evidence, not guesswork
+- Exposes a REST API with async polling, sync `?wait=true`, and webhook delivery
+- Ships as a 2.8MB static binary. No Docker, no VMs, no JVM dependency.
+
+### How it's different
+
+| | rustbox | Judge0 | Isolate (IOI) |
+|---|---|---|---|
+| Isolation | 8 kernel layers | Docker container | cgroups + mount |
+| Compile-time safety | Typestate chain | None | None |
+| Verdict provenance | Kernel evidence bundle | Exit code heuristics | Exit code heuristics |
+| Webhook support | Standard Webhooks + HMAC | No | No |
+| Sync mode | `?wait=true` | No | No |
+| Binary size | 2.8MB | Docker image (~1GB) | ~200KB (C) |
+| Setup | `cargo build` | Docker Compose + Redis + PostgreSQL | `make install` |
+
+### Security model at a glance
+
+| Layer | Primitive | What it prevents |
+|-------|----------|-----------------|
+| 1 | PID namespace | Seeing host processes |
+| 2 | Mount namespace + chroot | Accessing host filesystem |
+| 3 | Network namespace | Network access |
+| 4 | Cgroups v1/v2 | Memory bombs, fork bombs, CPU hogging |
+| 5 | Seccomp-BPF | Dangerous syscalls (ptrace, mount, bpf) |
+| 6 | Capability drop | Privilege escalation |
+| 7 | Credential drop | Running as root |
+| 8 | NO_NEW_PRIVS | Regaining privileges via setuid |
+
+:::note[Design Note]
+Most sandboxing tools bolt security on as an afterthought. rustbox starts from the kernel and works up. The typestate chain makes it a compiler error to run code without applying all 8 layers first. See [Architecture](/architecture/) for the full story.
+:::
+
+---
+
+## Installation
+
+```bash
+cargo build --release
+```
+
+Three binaries, same codebase:
+- `target/release/judge` - judge-focused commands (recommended)
+- `target/release/isolate` - sandbox-only commands
+- `target/release/rustbox` - accepts all commands
+
+### System requirements
+
+- Linux with cgroups v2 (or v1 fallback)
+- Python 3, g++, OpenJDK 21 for the respective languages
+- Root access for strict mode (permissive works without it)
+
+```bash
+judge check-deps --verbose
+```
+
+## Your first execution
+
+No root needed. Start with permissive mode.
+
+```bash
+# Python
+judge execute-code --permissive --language python --code 'print(2 ** 10)'
+
+# C++
+judge execute-code --permissive --language cpp --code '#include<iostream>
+int main(){std::cout<<42<<std::endl;}'
+
+# Java
+judge execute-code --permissive --language java --code 'public class Main {
+    public static void main(String[] args) {
+        System.out.println(42);
+    }
+}'
+```
+
+The output is a JSON verdict with stdout, stderr, timing, memory usage, and exit code.
+
+## Permissive vs Strict
+
+| | Permissive | Strict |
+|---|---|---|
+| Needs root | No | Yes |
+| Namespaces | Skipped | PID + mount + network |
+| Cgroups | Best-effort | Enforced |
+| Seccomp | Applied | Applied |
+| Credential drop | Skipped (can't without root) | Enforced |
+| Use case | Development, CI | Production |
+
+:::note[Design Note]
+Permissive mode isn't "insecure mode". It still applies seccomp filters, rlimits, and whatever controls it can without root. It gracefully degrades instead of failing. This lets you develop and test without `sudo` while strict mode guarantees the full chain in production.
+:::
+
+## Strict mode
+
+```bash
+sudo judge execute-code --strict --language python --code 'print(1)'
+```
+
+Strict mode fails closed. If any security control can't be applied, the execution is rejected outright. There's no "try anyway" path.
