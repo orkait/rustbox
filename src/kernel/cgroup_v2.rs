@@ -32,42 +32,82 @@ impl CgroupV2 {
     /// fall back to the process's own cgroup subtree (for unprivileged
     /// containers with delegated cgroups).
     fn detect_cgroup_base() -> Result<String> {
-        let traditional = "/sys/fs/cgroup/rustbox";
+        // Strategy: find a cgroup path where we can create sub-cgroups AND
+        // write resource limits (memory.max, pids.max). Try in order:
+        //   1. /sys/fs/cgroup/rustbox (bare metal, Docker cgroup:host)
+        //   2. /sys/fs/cgroup/<self-cgroup>/rustbox (delegated container)
 
-        // Try creating the traditional path - this works on bare metal and
-        // with Docker `cgroup: host` + privileged.
-        if fs::create_dir_all(traditional).is_ok() {
-            // Verify we can actually enable controllers here
-            let parent_control = Path::new("/sys/fs/cgroup/cgroup.subtree_control");
-            if parent_control.exists() {
-                let _ = fs::write(parent_control, "+memory +pids +cpu");
+        let candidates = Self::cgroup_base_candidates();
+
+        for (base, parent_subtree_control) in &candidates {
+            // Can we create the directory?
+            if fs::create_dir_all(base).is_err() {
+                continue;
             }
-            return Ok(traditional.to_string());
-        }
 
-        // Fall back to process's own cgroup subtree (delegated container)
-        let cgroup_entry = fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
-        let self_path = cgroup_entry
-            .lines()
-            .find(|l| l.starts_with("0::"))
-            .and_then(|l| l.strip_prefix("0::"))
-            .unwrap_or("/")
-            .trim()
-            .to_string();
+            // Enable controllers on the parent so children get memory/pids/cpu
+            if let Err(e) = fs::write(parent_subtree_control, "+memory +pids +cpu") {
+                log::debug!(
+                    "could not enable controllers at {}: {} (may already be enabled)",
+                    parent_subtree_control, e
+                );
+            }
 
-        if self_path != "/" {
-            let base = format!("/sys/fs/cgroup{}/rustbox", self_path);
-            if fs::create_dir_all(&base).is_ok() {
-                // Enable controllers in our cgroup subtree
-                let parent_control = format!("/sys/fs/cgroup{}/cgroup.subtree_control", self_path);
-                let _ = fs::write(&parent_control, "+memory +pids +cpu");
-                return Ok(base);
+            // Also enable on the rustbox group itself so per-sandbox children get controllers
+            let rustbox_subtree = format!("{}/cgroup.subtree_control", base);
+            if Path::new(&rustbox_subtree).exists() {
+                if let Err(e) = fs::write(&rustbox_subtree, "+memory +pids +cpu") {
+                    log::debug!("could not enable controllers at {}: {}", rustbox_subtree, e);
+                }
+            }
+
+            // Probe: create a temp child and check if memory.max exists
+            let probe = format!("{}/probe_{}", base, std::process::id());
+            if fs::create_dir(&probe).is_ok() {
+                let has_memory = Path::new(&probe).join("memory.max").exists();
+                let _ = fs::remove_dir(&probe);
+                if has_memory {
+                    log::info!("cgroup v2 base: {}", base);
+                    return Ok(base.clone());
+                }
+                log::debug!("probe at {} has no memory.max - controllers not delegated", base);
             }
         }
 
         Err(IsolateError::Cgroup(
-            "cannot find writable cgroup v2 mount point".to_string(),
+            "cannot find writable cgroup v2 mount with memory+pids controllers".to_string(),
         ))
+    }
+
+    /// Build list of candidate cgroup base paths to try.
+    fn cgroup_base_candidates() -> Vec<(String, String)> {
+        let mut candidates = vec![
+            // Bare metal / Docker cgroup:host
+            (
+                "/sys/fs/cgroup/rustbox".to_string(),
+                "/sys/fs/cgroup/cgroup.subtree_control".to_string(),
+            ),
+        ];
+
+        // Container's own cgroup subtree (for delegated cgroups)
+        if let Ok(content) = fs::read_to_string("/proc/self/cgroup") {
+            let self_path = content
+                .lines()
+                .find(|l| l.starts_with("0::"))
+                .and_then(|l| l.strip_prefix("0::"))
+                .unwrap_or("/")
+                .trim()
+                .to_string();
+
+            if self_path != "/" {
+                candidates.push((
+                    format!("/sys/fs/cgroup{}/rustbox", self_path),
+                    format!("/sys/fs/cgroup{}/cgroup.subtree_control", self_path),
+                ));
+            }
+        }
+
+        candidates
     }
 
     pub fn with_base_path(base_path: &str, instance_id: &str, strict_mode: bool) -> Result<Self> {
