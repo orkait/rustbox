@@ -117,9 +117,15 @@ RUN apt-get update \
     && rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale \
     && rm -rf /var/lib/apt/lists/*
 
-# Sandbox user
+# Sandbox user (fallback for non-pool mode)
 RUN groupadd -r -g 65534 sandbox 2>/dev/null || true \
     && useradd -r -u 65534 -g 65534 -s /sbin/nologin sandbox 2>/dev/null || true
+
+# UID pool range (60000-60999) - one user per concurrent sandbox
+RUN for i in $(seq 60000 60099); do \
+        groupadd -r -g $i "sandbox-$i" 2>/dev/null || true; \
+        useradd -r -u $i -g $i -s /sbin/nologin -d /nonexistent "sandbox-$i" 2>/dev/null || true; \
+    done
 
 # Rustbox binaries
 COPY --from=builder /build/target/release/judge         /usr/local/bin/judge
@@ -130,6 +136,7 @@ COPY --from=builder /build/target/release/judge-service  /usr/local/bin/judge-se
 # Config and state dirs
 RUN mkdir -p /etc/rustbox /var/run/rustbox /tmp/rustbox
 COPY config.json /etc/rustbox/config.json
+RUN chmod 644 /etc/rustbox/config.json
 
 EXPOSE 4096
 
