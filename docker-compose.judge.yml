@@ -10,6 +10,8 @@ services:
       RUSTBOX_DATABASE_URL: "sqlite:rustbox.db"
       RUSTBOX_WORKERS: "2"
       RUSTBOX_PORT: "4096"
+    cap_drop:
+      - ALL
     cap_add:
       - SYS_ADMIN
       - SETUID
@@ -43,6 +45,8 @@ services:
       RUSTBOX_DATABASE_URL: "postgresql://rustbox:rustbox@postgres:5432/rustbox"
       RUSTBOX_WORKERS: "4"
       RUSTBOX_PORT: "4096"
+    cap_drop:
+      - ALL
     cap_add:
       - SYS_ADMIN
       - SETUID

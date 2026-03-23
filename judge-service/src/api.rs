@@ -21,9 +21,8 @@ fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
                 || v4.is_link_local()
                 || v4.is_broadcast()
                 || v4.is_unspecified()
-                || (v4.octets()[0] == 169 && v4.octets()[1] == 254)  // link-local
                 || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64)  // CGN 100.64/10
-                || (v4.octets()[0] == 198 && v4.octets()[1] == 18)  // benchmark 198.18/15
+                || (v4.octets()[0] == 198 && (v4.octets()[1] & 0xFE) == 18)  // benchmark 198.18/15
         }
         std::net::IpAddr::V6(v6) => {
             v6.is_loopback()
@@ -55,7 +54,7 @@ fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
     }
 }
 
-fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), String> {
+async fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), String> {
     let parsed: url::Url = url.parse().map_err(|_| "invalid webhook URL".to_string())?;
 
     if !allow_localhost && parsed.scheme() != "https" {
@@ -77,21 +76,19 @@ fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), String> 
                 return Err("webhook_url cannot target private/loopback IPs".to_string());
             }
         } else {
-            use std::net::ToSocketAddrs;
             let lookup = format!("{}:{}", host, parsed.port().unwrap_or(443));
-            match lookup.to_socket_addrs() {
-                Ok(addrs) => {
-                    for addr in addrs {
-                        if is_blocked_ip(addr.ip()) {
-                            return Err(format!(
-                                "webhook_url host '{}' resolves to blocked IP {}",
-                                host, addr.ip()
-                            ));
-                        }
-                    }
-                }
+            let resolved: Vec<std::net::SocketAddr> = match tokio::net::lookup_host(&lookup).await {
+                Ok(addrs) => addrs.collect(),
                 Err(_) => {
                     return Err(format!("webhook_url host '{}' could not be resolved", host));
+                }
+            };
+            for addr in &resolved {
+                if is_blocked_ip(addr.ip()) {
+                    return Err(format!(
+                        "webhook_url host '{}' resolves to blocked IP {}",
+                        host, addr.ip()
+                    ));
                 }
             }
         }
@@ -179,7 +176,7 @@ async fn submit(
     }
 
     if let Some(ref url) = req.webhook_url {
-        if let Err(msg) = validate_webhook_url(url, state.allow_localhost_webhooks) {
+        if let Err(msg) = validate_webhook_url(url, state.allow_localhost_webhooks).await {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!(ErrorResponse { error: msg })),
