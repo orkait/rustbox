@@ -266,7 +266,11 @@ fn sanitize_error(raw: &str) -> String {
     let sanitized = raw
         .replace("/home/", "/.../<redacted>/")
         .replace("/tmp/rustbox/", "/sandbox/")
-        .replace("/sys/fs/cgroup/", "/cgroup/");
+        .replace("/tmp/rustbox-uid-", "/sandbox-uid-")
+        .replace("/tmp/rustbox-strict-root-", "/sandbox-root-")
+        .replace("/sys/fs/cgroup/", "/cgroup/")
+        .replace("/proc/self/", "/proc/.../<redacted>/")
+        .replace("/etc/rustbox/", "/config/");
     if sanitized.len() > 512 {
         let end = sanitized
             .char_indices()
