@@ -34,6 +34,23 @@ jobs:
       - name: Compile-fail typestate invariants
         run: cargo test --test trybuild -- --nocapture
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all -- -D warnings -A clippy::too_many_arguments
+
   supply-chain-audit:
     runs-on: ubuntu-latest
     steps:
