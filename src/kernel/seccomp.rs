@@ -61,6 +61,20 @@ const BUILTIN_DENY_LIST: &[SyscallRule] = &[
     SyscallRule { name: "fsmount",        num: libc::SYS_fsmount as i64,        action: SeccompAction::KillProcess },
     SyscallRule { name: "fsconfig",       num: libc::SYS_fsconfig as i64,       action: SeccompAction::KillProcess },
     SyscallRule { name: "fspick",         num: libc::SYS_fspick as i64,         action: SeccompAction::KillProcess },
+    // DAC bypass (CVE-2014-0038): file handle manipulation
+    SyscallRule { name: "name_to_handle_at", num: libc::SYS_name_to_handle_at as i64, action: SeccompAction::KillProcess },
+    SyscallRule { name: "open_by_handle_at", num: libc::SYS_open_by_handle_at as i64, action: SeccompAction::KillProcess },
+    // Alternate kexec path
+    SyscallRule { name: "kexec_file_load",   num: libc::SYS_kexec_file_load as i64,   action: SeccompAction::KillProcess },
+    // System clock manipulation
+    SyscallRule { name: "reboot",         num: libc::SYS_reboot as i64,         action: SeccompAction::KillProcess },
+    SyscallRule { name: "settimeofday",   num: libc::SYS_settimeofday as i64,   action: SeccompAction::KillProcess },
+    SyscallRule { name: "clock_settime",  num: libc::SYS_clock_settime as i64,  action: SeccompAction::KillProcess },
+    SyscallRule { name: "acct",           num: libc::SYS_acct as i64,           action: SeccompAction::KillProcess },
+    // Kernel keyring (CVE-2016-0728, not namespaced)
+    SyscallRule { name: "add_key",        num: libc::SYS_add_key as i64,        action: SeccompAction::KillProcess },
+    SyscallRule { name: "keyctl",         num: libc::SYS_keyctl as i64,         action: SeccompAction::KillProcess },
+    SyscallRule { name: "request_key",    num: libc::SYS_request_key as i64,    action: SeccompAction::KillProcess },
 ];
 
 fn target_arch() -> Result<seccompiler::TargetArch> {
@@ -203,6 +217,9 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "fsmount"           => libc::SYS_fsmount,
         "fsconfig"          => libc::SYS_fsconfig,
         "fspick"            => libc::SYS_fspick,
+        "name_to_handle_at" => libc::SYS_name_to_handle_at,
+        "open_by_handle_at" => libc::SYS_open_by_handle_at,
+        "kexec_file_load"   => libc::SYS_kexec_file_load,
         "read" => libc::SYS_read, "write" => libc::SYS_write,
         "open" => libc::SYS_open, "close" => libc::SYS_close,
         "mmap" => libc::SYS_mmap, "mprotect" => libc::SYS_mprotect,
@@ -227,7 +244,7 @@ mod tests {
 
     #[test]
     fn builtin_deny_list_has_expected_count() {
-        assert_eq!(BUILTIN_DENY_LIST.len(), 28);
+        assert_eq!(BUILTIN_DENY_LIST.len(), 38);
     }
 
     #[test]

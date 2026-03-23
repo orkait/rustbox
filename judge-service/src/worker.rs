@@ -164,6 +164,14 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_tim
     let webhook_url = submission.webhook_url.clone();
     let webhook_secret = submission.webhook_secret.clone();
 
+    let code_hash = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(code.as_bytes());
+        format!("{:x}", h.finalize())[..16].to_string()
+    };
+    info!(%job_id, %language, code_hash, code_bytes = code.len(), "executing submission");
+
     let result =
         tokio::task::spawn_blocking(move || execute_in_sandbox(&language, &code, &stdin))
             .await;

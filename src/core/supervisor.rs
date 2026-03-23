@@ -215,7 +215,7 @@ pub fn launch_with_supervisor(
     let (launch_read, launch_write) = pipe().map_err(|e| to_process_error("pipe(launch)", e))?;
     let (status_read, status_write) = pipe().map_err(|e| to_process_error("pipe(status)", e))?;
 
-    let mut clone_flags = CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWIPC;
+    let mut clone_flags = CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
     if req.profile.enable_mount_namespace {
         clone_flags |= CloneFlags::CLONE_NEWNS;
     }
