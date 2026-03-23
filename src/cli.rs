@@ -148,6 +148,7 @@ extern "C" fn signal_handler(sig: i32) {
 }
 
 fn setup_signal_handlers() {
+    // SAFETY: signal_handler only performs atomic stores (async-signal-safe).
     unsafe {
         libc::signal(libc::SIGTERM, signal_handler as *const () as usize);
         libc::signal(libc::SIGINT, signal_handler as *const () as usize);

@@ -1,7 +1,8 @@
 # ============================================================================
 # Stage 1: builder — compiles rustbox/isolate/judge binaries + QuickJS
 # ============================================================================
-# TODO: Pin to SHA256 digest for production builds
+# For production: pin to digest with `docker pull ubuntu:22.04` then
+# `docker inspect --format='{{index .RepoDigests 0}}' ubuntu:22.04`
 FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
