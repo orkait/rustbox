@@ -230,6 +230,8 @@ async fn deliver_webhook(
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
+        .connect_timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default();
 

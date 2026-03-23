@@ -547,6 +547,19 @@ impl Sandbox<CredsDropped> {
     pub fn lock_privileges(self) -> Result<Sandbox<PrivsLocked>> {
         setup_parent_death_signal()?;
 
+        // SAFETY: PR_SET_DUMPABLE(0) prevents ptrace attach and /proc/pid access
+        // from other processes sharing the same UID. Standard sandbox hardening
+        // used by Chromium, nsjail, and Firejail.
+        #[cfg(target_os = "linux")]
+        {
+            let rc = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+            if rc != 0 && self.strict_mode {
+                return Err(IsolateError::Privilege(
+                    "failed to set PR_SET_DUMPABLE(0)".to_string(),
+                ));
+            }
+        }
+
         capabilities::drop_process_caps_and_verify(self.strict_mode)?;
 
         set_no_new_privs()?;

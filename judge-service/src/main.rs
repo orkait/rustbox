@@ -114,6 +114,16 @@ async fn main() -> anyhow::Result<()> {
         },
     };
 
+    if let Some(ref limiter) = state.rate_limiter {
+        let limiter = limiter.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(300)).await;
+                limiter.cleanup_stale();
+            }
+        });
+    }
+
     if state.api_key.is_some() {
         info!("API key authentication enabled");
     } else {

@@ -626,6 +626,50 @@ impl FilesystemSecurity {
             self.mount_hardened_procfs(&proc_path)?;
         }
 
+        let shm_path = chroot_path.join("dev").join("shm");
+        if !shm_path.exists() {
+            let _ = fs::create_dir_all(&shm_path);
+        }
+        if shm_path.exists() {
+            self.mount_limited_shm(&shm_path)?;
+        }
+
+        let tmp_path = chroot_path.join("tmp");
+        if tmp_path.exists() {
+            self.mount_hardened_tmp(&tmp_path)?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn mount_limited_shm(&self, shm_path: &Path) -> Result<()> {
+        let shm_size = (self.tmpfs_size_bytes / 16).max(1024 * 1024);
+        let flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV | libc::MS_NOATIME;
+        let src = std::ffi::CString::new("tmpfs").unwrap();
+        let tgt = path_cstr(shm_path, "shm")?;
+        let fst = std::ffi::CString::new("tmpfs").unwrap();
+        let opts = format!("size={},nr_inodes=128,mode=1777", shm_size);
+        let opts_c = std::ffi::CString::new(opts.as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid shm options: {}", e)))?;
+        // SAFETY: mount(2) tmpfs on /dev/shm with bounded size.
+        let rc = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, opts_c.as_ptr() as *const libc::c_void) };
+        mount_result(rc, "Failed to mount limited /dev/shm", self.strict_mode)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn mount_hardened_tmp(&self, tmp_path: &Path) -> Result<()> {
+        let flags = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOATIME;
+        let src = std::ffi::CString::new("tmpfs").unwrap();
+        let tgt = path_cstr(tmp_path, "tmp")?;
+        let fst = std::ffi::CString::new("tmpfs").unwrap();
+        let opts = format!("size={},nr_inodes={},mode=1777", self.tmpfs_size_bytes, self.tmpfs_inode_limit);
+        let opts_c = std::ffi::CString::new(opts.as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid tmp options: {}", e)))?;
+        // SAFETY: mount(2) tmpfs on /tmp with bounded size.
+        let rc = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, opts_c.as_ptr() as *const libc::c_void) };
+        mount_result(rc, "Failed to mount hardened /tmp", self.strict_mode)?;
         Ok(())
     }
 
@@ -663,14 +707,31 @@ impl FilesystemSecurity {
         let src = std::ffi::CString::new("proc").unwrap();
         let tgt = path_cstr(proc_path, "proc")?;
         let fst = std::ffi::CString::new("proc").unwrap();
-        let hidepid = std::ffi::CString::new("hidepid=2").unwrap();
-        // SAFETY: mount(2) procfs with hidepid=2 for process isolation.
-        let rc = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, hidepid.as_ptr() as *const libc::c_void) };
-        if rc != 0 {
-            fs_warn_parts(&["procfs hidepid=2 failed, retrying without hidepid"]);
+
+        let opts_cascade = [
+            "hidepid=invisible,subset=pid",
+            "hidepid=invisible",
+            "hidepid=2,subset=pid",
+            "hidepid=2",
+        ];
+
+        let mut mounted = false;
+        for opts in &opts_cascade {
+            let opts_c = std::ffi::CString::new(*opts).unwrap();
+            // SAFETY: mount(2) procfs with hardened options.
+            let rc = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, opts_c.as_ptr() as *const libc::c_void) };
+            if rc == 0 {
+                fs_info_parts(&["Mounted procfs with options: ", opts]);
+                mounted = true;
+                break;
+            }
+        }
+
+        if !mounted {
+            fs_warn_parts(&["All hardened procfs options failed, mounting without hidepid"]);
             // SAFETY: mount(2) procfs fallback without hidepid.
-            let rc2 = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, std::ptr::null()) };
-            mount_result(rc2, "Failed to mount fallback procfs", self.strict_mode)?;
+            let rc = unsafe { libc::mount(src.as_ptr(), tgt.as_ptr(), fst.as_ptr(), flags, std::ptr::null()) };
+            mount_result(rc, "Failed to mount fallback procfs", self.strict_mode)?;
         }
         Ok(())
     }

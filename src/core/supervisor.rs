@@ -575,6 +575,16 @@ fn launch_degraded(
                     let nproc_limit = libc::rlimit { rlim_cur: 64, rlim_max: 64 };
                     libc::setrlimit(libc::RLIMIT_NPROC, &nproc_limit);
 
+                    let memlock_limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                    libc::setrlimit(libc::RLIMIT_MEMLOCK, &memlock_limit);
+
+                    if let Some(vm_limit) = req.profile.virtual_memory_limit {
+                        let as_limit = libc::rlimit { rlim_cur: vm_limit, rlim_max: vm_limit };
+                        libc::setrlimit(libc::RLIMIT_AS, &as_limit);
+                    }
+
+                    libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+
                     for fd in 3..1024 {
                         libc::close(fd);
                     }

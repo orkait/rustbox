@@ -53,6 +53,14 @@ const BUILTIN_DENY_LIST: &[SyscallRule] = &[
     SyscallRule { name: "unshare",    num: libc::SYS_unshare as i64,    action: SeccompAction::KillProcess },
     SyscallRule { name: "chroot",     num: libc::SYS_chroot as i64,     action: SeccompAction::KillProcess },
     SyscallRule { name: "setns",      num: libc::SYS_setns as i64,      action: SeccompAction::KillProcess },
+    // New mount API (Linux 5.2+/5.12+): block to prevent mount manipulation
+    SyscallRule { name: "move_mount",     num: libc::SYS_move_mount as i64,     action: SeccompAction::KillProcess },
+    SyscallRule { name: "open_tree",      num: libc::SYS_open_tree as i64,      action: SeccompAction::KillProcess },
+    SyscallRule { name: "mount_setattr",  num: libc::SYS_mount_setattr as i64,  action: SeccompAction::KillProcess },
+    SyscallRule { name: "fsopen",         num: libc::SYS_fsopen as i64,         action: SeccompAction::KillProcess },
+    SyscallRule { name: "fsmount",        num: libc::SYS_fsmount as i64,        action: SeccompAction::KillProcess },
+    SyscallRule { name: "fsconfig",       num: libc::SYS_fsconfig as i64,       action: SeccompAction::KillProcess },
+    SyscallRule { name: "fspick",         num: libc::SYS_fspick as i64,         action: SeccompAction::KillProcess },
 ];
 
 fn target_arch() -> Result<seccompiler::TargetArch> {
@@ -188,6 +196,13 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "unshare"           => libc::SYS_unshare,
         "chroot"            => libc::SYS_chroot,
         "setns"             => libc::SYS_setns,
+        "move_mount"        => libc::SYS_move_mount,
+        "open_tree"         => libc::SYS_open_tree,
+        "mount_setattr"     => libc::SYS_mount_setattr,
+        "fsopen"            => libc::SYS_fsopen,
+        "fsmount"           => libc::SYS_fsmount,
+        "fsconfig"          => libc::SYS_fsconfig,
+        "fspick"            => libc::SYS_fspick,
         "read" => libc::SYS_read, "write" => libc::SYS_write,
         "open" => libc::SYS_open, "close" => libc::SYS_close,
         "mmap" => libc::SYS_mmap, "mprotect" => libc::SYS_mprotect,
@@ -212,7 +227,7 @@ mod tests {
 
     #[test]
     fn builtin_deny_list_has_expected_count() {
-        assert_eq!(BUILTIN_DENY_LIST.len(), 21);
+        assert_eq!(BUILTIN_DENY_LIST.len(), 28);
     }
 
     #[test]

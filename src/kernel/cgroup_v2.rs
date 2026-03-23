@@ -357,6 +357,9 @@ impl CgroupBackend for CgroupV2 {
 
         self.write_permissive(&path.join("memory.swap.max"), "0", "memory.swap.max=0")?;
 
+        let high = (limit_bytes as f64 * 0.9) as u64;
+        self.write_permissive(&path.join("memory.high"), &high.to_string(), "memory.high")?;
+
         Ok(())
     }
 
