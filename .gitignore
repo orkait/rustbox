@@ -115,4 +115,14 @@ skills/
 skills-lock.json
 mcp.json
 
-CLAUDE.mdjudge-service/rustbox-test-*.db*
+CLAUDE.md
+
+## Test artifacts
+judge-service/rustbox-test-*.db*
+judge-service/*.db-shm
+judge-service/*.db-wal
+*.db-shm
+*.db-wal
+
+## Docker
+.wrangler/

@@ -18,7 +18,7 @@ services:
       - MKNOD
       - DAC_OVERRIDE
     security_opt:
-      - seccomp=unconfined
+      - no-new-privileges:true
     cgroupns: host
     stop_grace_period: 45s
     healthcheck:
@@ -51,7 +51,7 @@ services:
       - MKNOD
       - DAC_OVERRIDE
     security_opt:
-      - seccomp=unconfined
+      - no-new-privileges:true
     cgroupns: host
     stop_grace_period: 45s
     healthcheck:

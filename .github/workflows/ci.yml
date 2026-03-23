@@ -110,7 +110,7 @@ jobs:
           docker run -d --name test-${{ matrix.name }} -p 4096:4096 \
             --cap-add SYS_ADMIN --cap-add SETUID --cap-add SETGID \
             --cap-add NET_ADMIN --cap-add MKNOD --cap-add DAC_OVERRIDE \
-            --security-opt seccomp=unconfined \
+            --security-opt no-new-privileges:true \
             --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             rustbox:${{ matrix.name }}
           sleep 3
