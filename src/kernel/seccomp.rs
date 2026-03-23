@@ -75,6 +75,12 @@ const BUILTIN_DENY_LIST: &[SyscallRule] = &[
     SyscallRule { name: "add_key",        num: libc::SYS_add_key as i64,        action: SeccompAction::KillProcess },
     SyscallRule { name: "keyctl",         num: libc::SYS_keyctl as i64,         action: SeccompAction::KillProcess },
     SyscallRule { name: "request_key",    num: libc::SYS_request_key as i64,    action: SeccompAction::KillProcess },
+    // Execution domain: personality(READ_IMPLIES_EXEC) marks all readable pages executable
+    SyscallRule { name: "personality",    num: libc::SYS_personality as i64,    action: SeccompAction::Errno(libc::EPERM as u32) },
+    // NUMA: memory policy manipulation
+    SyscallRule { name: "mbind",          num: libc::SYS_mbind as i64,          action: SeccompAction::KillProcess },
+    SyscallRule { name: "set_mempolicy",  num: libc::SYS_set_mempolicy as i64,  action: SeccompAction::KillProcess },
+    SyscallRule { name: "move_pages",     num: libc::SYS_move_pages as i64,     action: SeccompAction::KillProcess },
 ];
 
 fn target_arch() -> Result<seccompiler::TargetArch> {
@@ -244,7 +250,7 @@ mod tests {
 
     #[test]
     fn builtin_deny_list_has_expected_count() {
-        assert_eq!(BUILTIN_DENY_LIST.len(), 38);
+        assert_eq!(BUILTIN_DENY_LIST.len(), 42);
     }
 
     #[test]
