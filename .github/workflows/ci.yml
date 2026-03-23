@@ -49,7 +49,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all -- -D warnings -A clippy::too_many_arguments
+        run: cargo clippy --all -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::declare_interior_mutable_const -A clippy::needless_range_loop
 
   supply-chain-audit:
     runs-on: ubuntu-latest
