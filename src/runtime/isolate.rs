@@ -235,7 +235,7 @@ impl Isolate {
         let mut command: Vec<String> = prefix_args.iter().map(|s| s.to_string()).collect();
         command.push(source_file.to_string_lossy().to_string());
 
-        fs::write(&source_file, code)?;
+        write_source_no_follow(&source_file, code)?;
         let result = self.execute_with_overrides(&command, overrides);
         let _ = fs::remove_file(&source_file);
         result
@@ -293,7 +293,7 @@ impl Isolate {
     {
         self.ensure_workdir()?;
         self.wipe_workdir();
-        fs::write(&source_file, code)?;
+        write_source_no_follow(&source_file, code)?;
 
         let saved = self.config.clone();
         configure(&mut self.config, &saved, overrides);
@@ -472,6 +472,29 @@ impl Drop for Isolate {
             let _ = cg.remove(&self.config.instance_id);
         }
     }
+}
+
+fn write_source_no_follow(path: &std::path::Path, code: &str) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if path.is_symlink() {
+        return Err(IsolateError::Filesystem(format!(
+            "symlink at source path rejected: {}",
+            path.display()
+        )));
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|e| IsolateError::Filesystem(format!(
+            "failed to create source file {}: {}",
+            path.display(), e
+        )))?;
+    use std::io::Write;
+    file.write_all(code.as_bytes())?;
+    Ok(())
 }
 
 fn extract_java_class_name(code: &str) -> Option<String> {
