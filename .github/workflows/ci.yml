@@ -15,6 +15,21 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Symlink Bun to /usr/local/bin
+        run: sudo ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
+
+      - name: Verify language runtimes
+        run: |
+          python3 --version
+          g++ --version | head -1
+          java -version 2>&1 | head -1
+          javac -version 2>&1 | head -1
+          bun --version
+          ls -la /usr/local/bin/bun
+
       - name: Build all targets
         run: cargo test --all --no-run
 
