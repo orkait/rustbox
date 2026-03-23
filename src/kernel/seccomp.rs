@@ -4,17 +4,14 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub enum SeccompPolicy {
     Disabled,
+    #[default]
     BuiltinDenyList,
     CustomFile(std::path::PathBuf),
 }
 
-impl Default for SeccompPolicy {
-    fn default() -> Self {
-        Self::BuiltinDenyList
-    }
-}
 
 struct SyscallRule {
     name: &'static str,
@@ -27,60 +24,60 @@ struct SyscallRule {
 // Everything else gets KILL_PROCESS.
 const BUILTIN_DENY_LIST: &[SyscallRule] = &[
     // io_uring: kernel LPE history (CVE-2021-41073, CVE-2023-2598)
-    SyscallRule { name: "io_uring_setup",    num: libc::SYS_io_uring_setup as i64,    action: SeccompAction::Errno(libc::ENOSYS as u32) },
-    SyscallRule { name: "io_uring_enter",    num: libc::SYS_io_uring_enter as i64,    action: SeccompAction::Errno(libc::ENOSYS as u32) },
-    SyscallRule { name: "io_uring_register", num: libc::SYS_io_uring_register as i64, action: SeccompAction::Errno(libc::ENOSYS as u32) },
+    SyscallRule { name: "io_uring_setup",    num: libc::SYS_io_uring_setup,    action: SeccompAction::Errno(libc::ENOSYS as u32) },
+    SyscallRule { name: "io_uring_enter",    num: libc::SYS_io_uring_enter,    action: SeccompAction::Errno(libc::ENOSYS as u32) },
+    SyscallRule { name: "io_uring_register", num: libc::SYS_io_uring_register, action: SeccompAction::Errno(libc::ENOSYS as u32) },
     // Tracing: cross-process inspection
-    SyscallRule { name: "ptrace",            num: libc::SYS_ptrace as i64,            action: SeccompAction::KillProcess },
-    SyscallRule { name: "process_vm_readv",  num: libc::SYS_process_vm_readv as i64,  action: SeccompAction::KillProcess },
-    SyscallRule { name: "process_vm_writev", num: libc::SYS_process_vm_writev as i64, action: SeccompAction::KillProcess },
+    SyscallRule { name: "ptrace",            num: libc::SYS_ptrace,            action: SeccompAction::KillProcess },
+    SyscallRule { name: "process_vm_readv",  num: libc::SYS_process_vm_readv,  action: SeccompAction::KillProcess },
+    SyscallRule { name: "process_vm_writev", num: libc::SYS_process_vm_writev, action: SeccompAction::KillProcess },
     // Kernel subsystems
-    SyscallRule { name: "bpf",              num: libc::SYS_bpf as i64,              action: SeccompAction::KillProcess },
-    SyscallRule { name: "userfaultfd",      num: libc::SYS_userfaultfd as i64,      action: SeccompAction::KillProcess },
-    SyscallRule { name: "perf_event_open",  num: libc::SYS_perf_event_open as i64,  action: SeccompAction::KillProcess },
+    SyscallRule { name: "bpf",              num: libc::SYS_bpf,              action: SeccompAction::KillProcess },
+    SyscallRule { name: "userfaultfd",      num: libc::SYS_userfaultfd,      action: SeccompAction::KillProcess },
+    SyscallRule { name: "perf_event_open",  num: libc::SYS_perf_event_open,  action: SeccompAction::KillProcess },
     // Module/boot
-    SyscallRule { name: "kexec_load",       num: libc::SYS_kexec_load as i64,       action: SeccompAction::KillProcess },
-    SyscallRule { name: "init_module",      num: libc::SYS_init_module as i64,      action: SeccompAction::KillProcess },
-    SyscallRule { name: "finit_module",     num: libc::SYS_finit_module as i64,     action: SeccompAction::KillProcess },
-    SyscallRule { name: "delete_module",    num: libc::SYS_delete_module as i64,    action: SeccompAction::KillProcess },
+    SyscallRule { name: "kexec_load",       num: libc::SYS_kexec_load,       action: SeccompAction::KillProcess },
+    SyscallRule { name: "init_module",      num: libc::SYS_init_module,      action: SeccompAction::KillProcess },
+    SyscallRule { name: "finit_module",     num: libc::SYS_finit_module,     action: SeccompAction::KillProcess },
+    SyscallRule { name: "delete_module",    num: libc::SYS_delete_module,    action: SeccompAction::KillProcess },
     // Mount/swap
-    SyscallRule { name: "mount",      num: libc::SYS_mount as i64,      action: SeccompAction::KillProcess },
-    SyscallRule { name: "umount2",    num: libc::SYS_umount2 as i64,    action: SeccompAction::KillProcess },
-    SyscallRule { name: "pivot_root", num: libc::SYS_pivot_root as i64, action: SeccompAction::KillProcess },
-    SyscallRule { name: "swapon",     num: libc::SYS_swapon as i64,     action: SeccompAction::KillProcess },
-    SyscallRule { name: "swapoff",    num: libc::SYS_swapoff as i64,    action: SeccompAction::KillProcess },
+    SyscallRule { name: "mount",      num: libc::SYS_mount,      action: SeccompAction::KillProcess },
+    SyscallRule { name: "umount2",    num: libc::SYS_umount2,    action: SeccompAction::KillProcess },
+    SyscallRule { name: "pivot_root", num: libc::SYS_pivot_root, action: SeccompAction::KillProcess },
+    SyscallRule { name: "swapon",     num: libc::SYS_swapon,     action: SeccompAction::KillProcess },
+    SyscallRule { name: "swapoff",    num: libc::SYS_swapoff,    action: SeccompAction::KillProcess },
     // Namespace/chroot escape: block nested user namespaces and chroot
-    SyscallRule { name: "unshare",    num: libc::SYS_unshare as i64,    action: SeccompAction::KillProcess },
-    SyscallRule { name: "chroot",     num: libc::SYS_chroot as i64,     action: SeccompAction::KillProcess },
-    SyscallRule { name: "setns",      num: libc::SYS_setns as i64,      action: SeccompAction::KillProcess },
+    SyscallRule { name: "unshare",    num: libc::SYS_unshare,    action: SeccompAction::KillProcess },
+    SyscallRule { name: "chroot",     num: libc::SYS_chroot,     action: SeccompAction::KillProcess },
+    SyscallRule { name: "setns",      num: libc::SYS_setns,      action: SeccompAction::KillProcess },
     // New mount API (Linux 5.2+/5.12+): block to prevent mount manipulation
-    SyscallRule { name: "move_mount",     num: libc::SYS_move_mount as i64,     action: SeccompAction::KillProcess },
-    SyscallRule { name: "open_tree",      num: libc::SYS_open_tree as i64,      action: SeccompAction::KillProcess },
-    SyscallRule { name: "mount_setattr",  num: libc::SYS_mount_setattr as i64,  action: SeccompAction::KillProcess },
-    SyscallRule { name: "fsopen",         num: libc::SYS_fsopen as i64,         action: SeccompAction::KillProcess },
-    SyscallRule { name: "fsmount",        num: libc::SYS_fsmount as i64,        action: SeccompAction::KillProcess },
-    SyscallRule { name: "fsconfig",       num: libc::SYS_fsconfig as i64,       action: SeccompAction::KillProcess },
-    SyscallRule { name: "fspick",         num: libc::SYS_fspick as i64,         action: SeccompAction::KillProcess },
+    SyscallRule { name: "move_mount",     num: libc::SYS_move_mount,     action: SeccompAction::KillProcess },
+    SyscallRule { name: "open_tree",      num: libc::SYS_open_tree,      action: SeccompAction::KillProcess },
+    SyscallRule { name: "mount_setattr",  num: libc::SYS_mount_setattr,  action: SeccompAction::KillProcess },
+    SyscallRule { name: "fsopen",         num: libc::SYS_fsopen,         action: SeccompAction::KillProcess },
+    SyscallRule { name: "fsmount",        num: libc::SYS_fsmount,        action: SeccompAction::KillProcess },
+    SyscallRule { name: "fsconfig",       num: libc::SYS_fsconfig,       action: SeccompAction::KillProcess },
+    SyscallRule { name: "fspick",         num: libc::SYS_fspick,         action: SeccompAction::KillProcess },
     // DAC bypass (CVE-2014-0038): file handle manipulation
-    SyscallRule { name: "name_to_handle_at", num: libc::SYS_name_to_handle_at as i64, action: SeccompAction::KillProcess },
-    SyscallRule { name: "open_by_handle_at", num: libc::SYS_open_by_handle_at as i64, action: SeccompAction::KillProcess },
+    SyscallRule { name: "name_to_handle_at", num: libc::SYS_name_to_handle_at, action: SeccompAction::KillProcess },
+    SyscallRule { name: "open_by_handle_at", num: libc::SYS_open_by_handle_at, action: SeccompAction::KillProcess },
     // Alternate kexec path
-    SyscallRule { name: "kexec_file_load",   num: libc::SYS_kexec_file_load as i64,   action: SeccompAction::KillProcess },
+    SyscallRule { name: "kexec_file_load",   num: libc::SYS_kexec_file_load,   action: SeccompAction::KillProcess },
     // System clock manipulation
-    SyscallRule { name: "reboot",         num: libc::SYS_reboot as i64,         action: SeccompAction::KillProcess },
-    SyscallRule { name: "settimeofday",   num: libc::SYS_settimeofday as i64,   action: SeccompAction::KillProcess },
-    SyscallRule { name: "clock_settime",  num: libc::SYS_clock_settime as i64,  action: SeccompAction::KillProcess },
-    SyscallRule { name: "acct",           num: libc::SYS_acct as i64,           action: SeccompAction::KillProcess },
+    SyscallRule { name: "reboot",         num: libc::SYS_reboot,         action: SeccompAction::KillProcess },
+    SyscallRule { name: "settimeofday",   num: libc::SYS_settimeofday,   action: SeccompAction::KillProcess },
+    SyscallRule { name: "clock_settime",  num: libc::SYS_clock_settime,  action: SeccompAction::KillProcess },
+    SyscallRule { name: "acct",           num: libc::SYS_acct,           action: SeccompAction::KillProcess },
     // Kernel keyring (CVE-2016-0728, not namespaced)
-    SyscallRule { name: "add_key",        num: libc::SYS_add_key as i64,        action: SeccompAction::KillProcess },
-    SyscallRule { name: "keyctl",         num: libc::SYS_keyctl as i64,         action: SeccompAction::KillProcess },
-    SyscallRule { name: "request_key",    num: libc::SYS_request_key as i64,    action: SeccompAction::KillProcess },
+    SyscallRule { name: "add_key",        num: libc::SYS_add_key,        action: SeccompAction::KillProcess },
+    SyscallRule { name: "keyctl",         num: libc::SYS_keyctl,         action: SeccompAction::KillProcess },
+    SyscallRule { name: "request_key",    num: libc::SYS_request_key,    action: SeccompAction::KillProcess },
     // Execution domain: personality(READ_IMPLIES_EXEC) marks all readable pages executable
-    SyscallRule { name: "personality",    num: libc::SYS_personality as i64,    action: SeccompAction::Errno(libc::EPERM as u32) },
+    SyscallRule { name: "personality",    num: libc::SYS_personality,    action: SeccompAction::Errno(libc::EPERM as u32) },
     // NUMA: memory policy manipulation
-    SyscallRule { name: "mbind",          num: libc::SYS_mbind as i64,          action: SeccompAction::KillProcess },
-    SyscallRule { name: "set_mempolicy",  num: libc::SYS_set_mempolicy as i64,  action: SeccompAction::KillProcess },
-    SyscallRule { name: "move_pages",     num: libc::SYS_move_pages as i64,     action: SeccompAction::KillProcess },
+    SyscallRule { name: "mbind",          num: libc::SYS_mbind,          action: SeccompAction::KillProcess },
+    SyscallRule { name: "set_mempolicy",  num: libc::SYS_set_mempolicy,  action: SeccompAction::KillProcess },
+    SyscallRule { name: "move_pages",     num: libc::SYS_move_pages,     action: SeccompAction::KillProcess },
 ];
 
 fn target_arch() -> Result<seccompiler::TargetArch> {
@@ -237,7 +234,7 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "getcwd" => libc::SYS_getcwd, "getpid" => libc::SYS_getpid,
         _ => return None,
     };
-    Some(num as i64)
+    Some(num)
 }
 
 pub fn builtin_deny_list_names() -> Vec<&'static str> {

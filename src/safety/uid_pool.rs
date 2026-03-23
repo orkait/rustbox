@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const BASE_UID: u32 = 60000;
 const POOL_SIZE: u32 = 1000;
-const WORDS: usize = (POOL_SIZE as usize + 63) / 64;
+const WORDS: usize = (POOL_SIZE as usize).div_ceil(64);
 
 static POOL: [AtomicU64; WORDS] = {
     const ZERO: AtomicU64 = AtomicU64::new(0);
@@ -11,7 +11,7 @@ static POOL: [AtomicU64; WORDS] = {
 };
 
 pub fn is_pool_uid(uid: u32) -> bool {
-    uid >= BASE_UID && uid < BASE_UID + POOL_SIZE
+    (BASE_UID..BASE_UID + POOL_SIZE).contains(&uid)
 }
 
 pub fn allocate() -> Result<u32> {
