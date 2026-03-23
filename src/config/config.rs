@@ -105,10 +105,13 @@ impl RustBoxConfig {
                                     && (meta.mode() & 0o002) != 0
                                     && !is_wsl_mount
                                 {
-                                    log::warn!(
-                                        "Loading world-writable config file: {} (consider chmod 644)",
+                                    return Err(IsolateError::Config(format!(
+                                        "REFUSED: config file {} is world-writable (mode {:o}). \
+                                         Fix with: chmod 644 {}",
+                                        candidate.display(),
+                                        meta.mode() & 0o777,
                                         candidate.display()
-                                    );
+                                    )));
                                 }
                             }
                         }

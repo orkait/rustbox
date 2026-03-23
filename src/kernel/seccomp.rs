@@ -49,6 +49,10 @@ const BUILTIN_DENY_LIST: &[SyscallRule] = &[
     SyscallRule { name: "pivot_root", num: libc::SYS_pivot_root as i64, action: SeccompAction::KillProcess },
     SyscallRule { name: "swapon",     num: libc::SYS_swapon as i64,     action: SeccompAction::KillProcess },
     SyscallRule { name: "swapoff",    num: libc::SYS_swapoff as i64,    action: SeccompAction::KillProcess },
+    // Namespace/chroot escape: block nested user namespaces and chroot
+    SyscallRule { name: "unshare",    num: libc::SYS_unshare as i64,    action: SeccompAction::KillProcess },
+    SyscallRule { name: "chroot",     num: libc::SYS_chroot as i64,     action: SeccompAction::KillProcess },
+    SyscallRule { name: "setns",      num: libc::SYS_setns as i64,      action: SeccompAction::KillProcess },
 ];
 
 fn target_arch() -> Result<seccompiler::TargetArch> {
@@ -181,6 +185,9 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "set_mempolicy"     => libc::SYS_set_mempolicy,
         "move_pages"        => libc::SYS_move_pages,
         "personality"       => libc::SYS_personality,
+        "unshare"           => libc::SYS_unshare,
+        "chroot"            => libc::SYS_chroot,
+        "setns"             => libc::SYS_setns,
         "read" => libc::SYS_read, "write" => libc::SYS_write,
         "open" => libc::SYS_open, "close" => libc::SYS_close,
         "mmap" => libc::SYS_mmap, "mprotect" => libc::SYS_mprotect,
@@ -205,7 +212,7 @@ mod tests {
 
     #[test]
     fn builtin_deny_list_has_expected_count() {
-        assert_eq!(BUILTIN_DENY_LIST.len(), 18);
+        assert_eq!(BUILTIN_DENY_LIST.len(), 21);
     }
 
     #[test]

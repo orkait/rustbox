@@ -245,8 +245,11 @@ impl Isolate {
         config: &mut IsolateConfig, original: &IsolateConfig, overrides: &ExecutionOverrides,
         default_memory_mb: u64, min_process_limit: u32,
     ) {
-        config.strict_mode = false;
-        config.allow_degraded = unsafe { libc::geteuid() } != 0;
+        let is_root = unsafe { libc::geteuid() } == 0;
+        if !is_root {
+            config.strict_mode = false;
+            config.allow_degraded = true;
+        }
         config.process_limit = Some(min_process_limit);
         config.memory_limit = Some(
             overrides.max_memory.map(|mb| mb * 1024 * 1024).unwrap_or(default_memory_mb * 1024 * 1024),

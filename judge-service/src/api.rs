@@ -13,6 +13,48 @@ use crate::database::types::{Submission, STATUS_PENDING, STATUS_COMPLETED, STATU
 use crate::types::{ErrorResponse, HealthResponse, ResultResponse, SubmitRequest, SubmitResponse};
 use crate::AppState;
 
+fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || (v4.octets()[0] == 169 && v4.octets()[1] == 254)  // link-local
+                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64)  // CGN 100.64/10
+                || (v4.octets()[0] == 198 && v4.octets()[1] == 18)  // benchmark 198.18/15
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || {
+                    let seg = v6.segments();
+                    // fc00::/7 (unique local)
+                    (seg[0] & 0xFE00) == 0xFC00
+                    // fe80::/10 (link-local)
+                    || (seg[0] & 0xFFC0) == 0xFE80
+                    // ::ffff:0:0/96 (IPv4-mapped) - check the mapped IPv4
+                    || (seg[0..5] == [0, 0, 0, 0, 0] && seg[5] == 0xFFFF && {
+                        let v4 = std::net::Ipv4Addr::new(
+                            (seg[6] >> 8) as u8, seg[6] as u8,
+                            (seg[7] >> 8) as u8, seg[7] as u8,
+                        );
+                        is_blocked_ip(std::net::IpAddr::V4(v4))
+                    })
+                    // ::ffff:0:0:0/96 (IPv4-translated)
+                    || (seg[0..4] == [0, 0, 0, 0] && seg[4] == 0xFFFF && seg[5] == 0 && {
+                        let v4 = std::net::Ipv4Addr::new(
+                            (seg[6] >> 8) as u8, seg[6] as u8,
+                            (seg[7] >> 8) as u8, seg[7] as u8,
+                        );
+                        is_blocked_ip(std::net::IpAddr::V4(v4))
+                    })
+                }
+        }
+    }
+}
+
 fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), String> {
     let parsed: url::Url = url.parse().map_err(|_| "invalid webhook URL".to_string())?;
 
@@ -29,15 +71,28 @@ fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), String> 
         if host == "localhost" || host == "[::1]" {
             return Err("webhook_url cannot target localhost".to_string());
         }
+
         if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-            let blocked = match ip {
-                std::net::IpAddr::V4(v4) =>
-                    v4.is_loopback() || v4.is_private() || v4.is_link_local()
-                    || (v4.octets()[0] == 169 && v4.octets()[1] == 254),
-                std::net::IpAddr::V6(v6) => v6.is_loopback(),
-            };
-            if blocked {
+            if is_blocked_ip(ip) {
                 return Err("webhook_url cannot target private/loopback IPs".to_string());
+            }
+        } else {
+            use std::net::ToSocketAddrs;
+            let lookup = format!("{}:{}", host, parsed.port().unwrap_or(443));
+            match lookup.to_socket_addrs() {
+                Ok(addrs) => {
+                    for addr in addrs {
+                        if is_blocked_ip(addr.ip()) {
+                            return Err(format!(
+                                "webhook_url host '{}' resolves to blocked IP {}",
+                                host, addr.ip()
+                            ));
+                        }
+                    }
+                }
+                Err(_) => {
+                    return Err(format!("webhook_url host '{}' could not be resolved", host));
+                }
             }
         }
     }
@@ -46,11 +101,11 @@ fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), String> 
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
+    use sha2::{Digest, Sha256};
+    let hash_a = Sha256::digest(a);
+    let hash_b = Sha256::digest(b);
     let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
+    for (x, y) in hash_a.iter().zip(hash_b.iter()) {
         diff |= x ^ y;
     }
     diff == 0

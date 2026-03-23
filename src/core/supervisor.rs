@@ -529,6 +529,17 @@ fn launch_degraded(
         cmd.env_remove(key);
     }
 
+    const JAVA_AGENT_FLAGS: &[&str] = &["-javaagent:", "-agentpath:", "-agentlib:"];
+    for (key, value) in &req.profile.environment {
+        if key == "JAVA_TOOL_OPTIONS" {
+            let lower = value.to_lowercase();
+            if JAVA_AGENT_FLAGS.iter().any(|flag| lower.contains(flag)) {
+                cmd.env_remove("JAVA_TOOL_OPTIONS");
+                log::warn!("Removed JAVA_TOOL_OPTIONS containing agent flag in degraded mode");
+            }
+        }
+    }
+
     if unsafe { libc::geteuid() } == 0 {
         if let (Some(uid), Some(gid)) = (req.profile.uid, req.profile.gid) {
             use std::os::unix::process::CommandExt;
