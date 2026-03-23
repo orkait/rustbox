@@ -37,7 +37,8 @@ impl RateLimiter {
             bucket.tokens = self.max_requests;
             bucket.last_refill = now;
         } else {
-            let refill = ((elapsed as f64 / self.window_secs as f64) * self.max_requests as f64) as u32;
+            let refill =
+                ((elapsed as f64 / self.window_secs as f64) * self.max_requests as f64) as u32;
             bucket.tokens = (bucket.tokens + refill).min(self.max_requests);
             if refill > 0 {
                 bucket.last_refill = now;
@@ -52,7 +53,7 @@ impl RateLimiter {
         }
     }
 
-        pub fn cleanup_stale(&self) {
+    pub fn cleanup_stale(&self) {
         let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         buckets.retain(|_, b| now.duration_since(b.last_refill).as_secs() < 300);

@@ -55,13 +55,11 @@ impl OutputCollector {
         let stderr_limit = self.limits.stderr_limit;
         let combined_limit = self.limits.combined_limit;
 
-        let stdout_handle = stdout.map(|stdout| {
-            thread::spawn(move || collect_stream(stdout, stdout_limit, stdout_tx))
-        });
+        let stdout_handle = stdout
+            .map(|stdout| thread::spawn(move || collect_stream(stdout, stdout_limit, stdout_tx)));
 
-        let stderr_handle = stderr.map(|stderr| {
-            thread::spawn(move || collect_stream(stderr, stderr_limit, stderr_tx))
-        });
+        let stderr_handle = stderr
+            .map(|stderr| thread::spawn(move || collect_stream(stderr, stderr_limit, stderr_tx)));
 
         let timeout = Duration::from_millis(self.limits.collection_timeout_ms);
         let start = Instant::now();

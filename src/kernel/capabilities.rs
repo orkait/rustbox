@@ -142,13 +142,8 @@ fn drop_process_capabilities() -> Result<()> {
         compile_error!("SYS_capset number not defined for this architecture");
 
         // SAFETY: syscall with initialized header/data structures and valid pointers.
-        let rc = unsafe {
-            libc::syscall(
-                SYS_CAPSET,
-                &header as *const CapUserHeader,
-                data.as_ptr(),
-            )
-        };
+        let rc =
+            unsafe { libc::syscall(SYS_CAPSET, &header as *const CapUserHeader, data.as_ptr()) };
 
         if rc != 0 {
             let err = std::io::Error::last_os_error();
@@ -158,9 +153,7 @@ fn drop_process_capabilities() -> Result<()> {
                 fs_debug_parts(&["capset returned EPERM after privilege drop: errno=", eno]);
                 return Ok(());
             }
-            return Err(IsolateError::Privilege(format!(
-                "capset failed: {}", err
-            )));
+            return Err(IsolateError::Privilege(format!("capset failed: {}", err)));
         }
     }
     Ok(())
@@ -176,7 +169,10 @@ fn verify_capabilities_zeroed(strict_mode: bool) -> Result<()> {
 
     let mut non_zero = Vec::new();
     for line in status.lines() {
-        if REQUIRED_CAP_LINES.iter().any(|prefix| line.starts_with(prefix)) {
+        if REQUIRED_CAP_LINES
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        {
             let value = line.split_whitespace().nth(1).unwrap_or_default();
             if value != CAP_ZERO_HEX {
                 non_zero.push(line.trim().to_string());
@@ -241,7 +237,10 @@ pub fn get_bounding_set() -> Result<Vec<CapabilityNumber>> {
 pub fn get_capability_status() -> Result<String> {
     let status = fs::read_to_string("/proc/self/status")
         .map_err(|e| IsolateError::Privilege(format!("failed to read /proc/self/status: {}", e)))?;
-    let lines: Vec<&str> = status.lines().filter(|line| line.starts_with("Cap")).collect();
+    let lines: Vec<&str> = status
+        .lines()
+        .filter(|line| line.starts_with("Cap"))
+        .collect();
     Ok(lines.join("\n"))
 }
 

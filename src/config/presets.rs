@@ -72,46 +72,120 @@ struct EnvelopeDef {
 
 const ENVELOPES: &[EnvelopeDef] = &[
     EnvelopeDef {
-        id: "cpp17-v1", name: "C++17 (GCC)", language: "cpp",
-        compiler: Some(("/usr/bin/g++", &["-std=c++17", "-O2", "-Wall", "-Wextra", "-static"], "solution", 30)),
-        runtime_exe: "./solution", runtime_args: &[],
-        memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 50,
+        id: "cpp17-v1",
+        name: "C++17 (GCC)",
+        language: "cpp",
+        compiler: Some((
+            "/usr/bin/g++",
+            &["-std=c++17", "-O2", "-Wall", "-Wextra", "-static"],
+            "solution",
+            30,
+        )),
+        runtime_exe: "./solution",
+        runtime_args: &[],
+        memory_mb: 256,
+        cpu_time_sec: 10,
+        wall_time_sec: 15,
+        process_limit: 1,
+        startup_overhead_ms: 50,
     },
     EnvelopeDef {
-        id: "java21-v1", name: "Java 21 (OpenJDK)", language: "java",
-        compiler: Some(("/usr/bin/javac", &["-encoding", "UTF-8"], "Solution.class", 30)),
-        runtime_exe: "/usr/bin/java", runtime_args: &["-Xmx256m", "-Xss1m", "-XX:+UseSerialGC", "-Dfile.encoding=UTF-8"],
-        memory_mb: 512, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 256, startup_overhead_ms: 200,
+        id: "java21-v1",
+        name: "Java 21 (OpenJDK)",
+        language: "java",
+        compiler: Some((
+            "/usr/bin/javac",
+            &["-encoding", "UTF-8"],
+            "Solution.class",
+            30,
+        )),
+        runtime_exe: "/usr/bin/java",
+        runtime_args: &[
+            "-Xmx256m",
+            "-Xss1m",
+            "-XX:+UseSerialGC",
+            "-Dfile.encoding=UTF-8",
+        ],
+        memory_mb: 512,
+        cpu_time_sec: 10,
+        wall_time_sec: 15,
+        process_limit: 256,
+        startup_overhead_ms: 200,
     },
     EnvelopeDef {
-        id: "python3.11-v1", name: "Python 3.11", language: "python",
+        id: "python3.11-v1",
+        name: "Python 3.11",
+        language: "python",
         compiler: None,
-        runtime_exe: "/usr/bin/python3", runtime_args: &["-u", "-B"],
-        memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 100,
+        runtime_exe: "/usr/bin/python3",
+        runtime_args: &["-u", "-B"],
+        memory_mb: 256,
+        cpu_time_sec: 10,
+        wall_time_sec: 15,
+        process_limit: 1,
+        startup_overhead_ms: 100,
     },
     EnvelopeDef {
-        id: "javascript-v1", name: "JavaScript (Bun)", language: "javascript",
+        id: "javascript-v1",
+        name: "JavaScript (Bun)",
+        language: "javascript",
         compiler: None,
-        runtime_exe: "/usr/local/bin/bun", runtime_args: &["run"],
-        memory_mb: 512, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 16, startup_overhead_ms: 50,
+        runtime_exe: "/usr/local/bin/bun",
+        runtime_args: &["run"],
+        memory_mb: 512,
+        cpu_time_sec: 10,
+        wall_time_sec: 15,
+        process_limit: 16,
+        startup_overhead_ms: 50,
     },
     EnvelopeDef {
-        id: "go-v1", name: "Go", language: "go",
-        compiler: Some(("/usr/local/go/bin/go", &["build", "-o", "solution"], "solution", 30)),
-        runtime_exe: "./solution", runtime_args: &[],
-        memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 50,
+        id: "go-v1",
+        name: "Go",
+        language: "go",
+        compiler: Some((
+            "/usr/local/go/bin/go",
+            &["build", "-o", "solution"],
+            "solution",
+            30,
+        )),
+        runtime_exe: "./solution",
+        runtime_args: &[],
+        memory_mb: 256,
+        cpu_time_sec: 10,
+        wall_time_sec: 15,
+        process_limit: 1,
+        startup_overhead_ms: 50,
     },
     EnvelopeDef {
-        id: "rust-v1", name: "Rust", language: "rust",
-        compiler: Some(("/usr/local/bin/rustc", &["-O", "--edition", "2021", "-o", "solution"], "solution", 30)),
-        runtime_exe: "./solution", runtime_args: &[],
-        memory_mb: 256, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 1, startup_overhead_ms: 50,
+        id: "rust-v1",
+        name: "Rust",
+        language: "rust",
+        compiler: Some((
+            "/usr/local/bin/rustc",
+            &["-O", "--edition", "2021", "-o", "solution"],
+            "solution",
+            30,
+        )),
+        runtime_exe: "./solution",
+        runtime_args: &[],
+        memory_mb: 256,
+        cpu_time_sec: 10,
+        wall_time_sec: 15,
+        process_limit: 1,
+        startup_overhead_ms: 50,
     },
     EnvelopeDef {
-        id: "typescript-v1", name: "TypeScript", language: "typescript",
+        id: "typescript-v1",
+        name: "TypeScript",
+        language: "typescript",
         compiler: None,
-        runtime_exe: "/usr/local/bin/bun", runtime_args: &["run"],
-        memory_mb: 512, cpu_time_sec: 10, wall_time_sec: 15, process_limit: 16, startup_overhead_ms: 150,
+        runtime_exe: "/usr/local/bin/bun",
+        runtime_args: &["run"],
+        memory_mb: 512,
+        cpu_time_sec: 10,
+        wall_time_sec: 15,
+        process_limit: 16,
+        startup_overhead_ms: 150,
     },
 ];
 
@@ -121,12 +195,14 @@ fn build_envelope(def: &EnvelopeDef) -> LanguageEnvelope {
         name: def.name.to_string(),
         version: "1.0".to_string(),
         language: def.language.to_string(),
-        compiler: def.compiler.map(|(exe, args, out, timeout)| CompilerConfig {
-            executable: exe.to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            output: out.to_string(),
-            timeout,
-        }),
+        compiler: def
+            .compiler
+            .map(|(exe, args, out, timeout)| CompilerConfig {
+                executable: exe.to_string(),
+                args: args.iter().map(|s| s.to_string()).collect(),
+                output: out.to_string(),
+                timeout,
+            }),
         runtime: RuntimeConfig {
             executable: def.runtime_exe.to_string(),
             args: def.runtime_args.iter().map(|s| s.to_string()).collect(),
@@ -148,8 +224,12 @@ pub struct LanguagePresets {
 
 impl LanguagePresets {
     pub fn new() -> Self {
-        let envelopes = ENVELOPES.iter()
-            .map(|def| { let e = build_envelope(def); (e.id.clone(), e) })
+        let envelopes = ENVELOPES
+            .iter()
+            .map(|def| {
+                let e = build_envelope(def);
+                (e.id.clone(), e)
+            })
             .collect();
         Self { envelopes }
     }
@@ -172,7 +252,9 @@ impl LanguagePresets {
 }
 
 impl Default for LanguagePresets {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub fn get_presets() -> &'static LanguagePresets {

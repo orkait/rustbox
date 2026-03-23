@@ -71,7 +71,10 @@ pub struct UidGuard {
 impl UidGuard {
     pub fn allocate() -> Result<Self> {
         let uid = allocate()?;
-        Ok(Self { uid, released: false })
+        Ok(Self {
+            uid,
+            released: false,
+        })
     }
 
     pub fn uid(&self) -> u32 {

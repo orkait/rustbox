@@ -157,7 +157,10 @@ pub mod command_validation {
             "/tmp/rustbox-uid-",
         ];
 
-        if !secure_prefixes.iter().any(|prefix| path_str.starts_with(prefix)) {
+        if !secure_prefixes
+            .iter()
+            .any(|prefix| path_str.starts_with(prefix))
+        {
             return Err(SecurityError::CommandNotAllowed(format!(
                 "Path not under secure prefix: {}",
                 path_str

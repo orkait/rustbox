@@ -219,7 +219,12 @@ impl CgroupV1 {
         })
     }
 
-    fn write_value(path: &Path, value: &impl ToString, strict_mode: bool, name: &str) -> Result<()> {
+    fn write_value(
+        path: &Path,
+        value: &impl ToString,
+        strict_mode: bool,
+        name: &str,
+    ) -> Result<()> {
         if let Err(err) = fs::write(path, value.to_string()) {
             if strict_mode {
                 return Err(IsolateError::Cgroup(format!(
@@ -249,9 +254,12 @@ impl CgroupBackend for CgroupV1 {
         if !self.enabled {
             return Ok(());
         }
-        self.foreach_controller("failed to create cgroup v1 directories", |controller, path| {
-            fs::create_dir_all(path).map_err(|err| format!("{}: {}", controller, err))
-        })
+        self.foreach_controller(
+            "failed to create cgroup v1 directories",
+            |controller, path| {
+                fs::create_dir_all(path).map_err(|err| format!("{}: {}", controller, err))
+            },
+        )
     }
 
     fn remove(&self, _instance_id: &str) -> Result<()> {
@@ -342,11 +350,29 @@ impl CgroupBackend for CgroupV1 {
         let memsw = memory_path.join("memory.memsw.limit_in_bytes");
         let has_memsw = memsw.exists();
 
-        Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
+        Self::write_value(
+            &mem_file,
+            &limit_bytes,
+            self.strict_mode,
+            "memory.limit_in_bytes",
+        )?;
 
-        if has_memsw && Self::write_value(&memsw, &limit_bytes, self.strict_mode, "memory.memsw.limit_in_bytes").is_err() {
+        if has_memsw
+            && Self::write_value(
+                &memsw,
+                &limit_bytes,
+                self.strict_mode,
+                "memory.memsw.limit_in_bytes",
+            )
+            .is_err()
+        {
             let _ = Self::write_value(&memsw, &limit_bytes, false, "memory.memsw.limit_in_bytes");
-            Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
+            Self::write_value(
+                &mem_file,
+                &limit_bytes,
+                self.strict_mode,
+                "memory.limit_in_bytes",
+            )?;
         }
 
         let swappiness = memory_path.join("memory.swappiness");
@@ -472,7 +498,9 @@ impl CgroupBackend for CgroupV1 {
             Some(raw) => match u32::try_from(raw) {
                 Ok(parsed) => Some(parsed),
                 Err(_) if self.strict_mode => {
-                    return Err(IsolateError::Cgroup("pids.max exceeds u32 limit".to_string()));
+                    return Err(IsolateError::Cgroup(
+                        "pids.max exceeds u32 limit".to_string(),
+                    ));
                 }
                 Err(_) => {
                     log::warn!("pids.max exceeds u32 limit in permissive mode");
@@ -487,18 +515,14 @@ impl CgroupBackend for CgroupV1 {
             self.get_memory_peak().map(Some),
             None,
         )?;
-        let cpu_usage_usec = self.collect_metric(
-            "cpuacct.usage",
-            self.get_cpu_usage().map(Some),
-            None,
-        )?;
+        let cpu_usage_usec =
+            self.collect_metric("cpuacct.usage", self.get_cpu_usage().map(Some), None)?;
         let process_count = self.collect_metric(
             "pids.current/tasks",
             self.get_process_count().map(Some),
             None,
         )?;
-        let oom_kill_count =
-            self.collect_metric("memory.failcnt", self.get_oom_kill_count(), 0)?;
+        let oom_kill_count = self.collect_metric("memory.failcnt", self.get_oom_kill_count(), 0)?;
 
         Ok(CgroupEvidence {
             memory_peak,

@@ -1,4 +1,3 @@
-
 #[inline]
 pub fn raw_write(buf: &[u8]) {
     unsafe {
@@ -85,7 +84,10 @@ mod tests {
         let mut buf = [0u8; 20];
         assert_eq!(itoa_buf(65534, &mut buf), "65534");
         assert_eq!(itoa_buf(1, &mut buf), "1");
-        assert_eq!(itoa_buf(18446744073709551615, &mut buf), "18446744073709551615");
+        assert_eq!(
+            itoa_buf(18446744073709551615, &mut buf),
+            "18446744073709551615"
+        );
     }
 
     #[test]

@@ -47,12 +47,24 @@ fn detect_pidfd_mode() -> crate::config::types::PidfdMode {
 
 fn build_configured_controls(req: &SandboxLaunchRequest) -> Vec<String> {
     let mut controls = Vec::with_capacity(8);
-    if req.profile.enable_pid_namespace { controls.push("pid_namespace".into()); }
-    if req.profile.enable_mount_namespace { controls.push("mount_namespace".into()); }
-    if req.profile.enable_network_namespace { controls.push("network_namespace".into()); }
-    if req.profile.enable_user_namespace { controls.push("user_namespace".into()); }
-    if req.profile.memory_limit.is_some() { controls.push("memory_limit".into()); }
-    if req.profile.process_limit.is_some() { controls.push("process_limit".into()); }
+    if req.profile.enable_pid_namespace {
+        controls.push("pid_namespace".into());
+    }
+    if req.profile.enable_mount_namespace {
+        controls.push("mount_namespace".into());
+    }
+    if req.profile.enable_network_namespace {
+        controls.push("network_namespace".into());
+    }
+    if req.profile.enable_user_namespace {
+        controls.push("user_namespace".into());
+    }
+    if req.profile.memory_limit.is_some() {
+        controls.push("memory_limit".into());
+    }
+    if req.profile.process_limit.is_some() {
+        controls.push("process_limit".into());
+    }
     controls.push("no_new_privileges".into());
     controls
 }
@@ -92,11 +104,19 @@ fn build_launch_evidence(
     for control in &configured {
         let dest = match control.as_str() {
             "memory_limit" | "process_limit" => {
-                if cgroup_enforced { &mut applied } else { &mut missing }
+                if cgroup_enforced {
+                    &mut applied
+                } else {
+                    &mut missing
+                }
             }
             "pid_namespace" | "mount_namespace" | "network_namespace" | "user_namespace"
             | "no_new_privileges" => {
-                if setup_controls_applied { &mut applied } else { &mut missing }
+                if setup_controls_applied {
+                    &mut applied
+                } else {
+                    &mut missing
+                }
             }
             _ => &mut applied,
         };
@@ -109,15 +129,29 @@ fn build_launch_evidence(
 
     let reaped = proxy_status.reaped_descendants;
     let process_lifecycle = ProcessLifecycleEvidence {
-        reap_summary: if reaped == 0 { "clean".into() } else { format!("reaped_{reaped}_descendants") },
-        descendant_containment: if cleanup_verified { "ok".into() } else { "baseline_verification_failed".into() },
+        reap_summary: if reaped == 0 {
+            "clean".into()
+        } else {
+            format!("reaped_{reaped}_descendants")
+        },
+        descendant_containment: if cleanup_verified {
+            "ok".into()
+        } else {
+            "baseline_verification_failed".into()
+        },
         zombie_count: 0,
     };
 
     let mode_decision_reason = match (missing.is_empty(), req.profile.strict_mode) {
         (true, _) => "All configured controls applied".to_string(),
-        (false, true) => format!("Strict mode requested but mandatory controls missing: {}", missing.join(", ")),
-        (false, false) => format!("Execution degraded; missing controls: {}", missing.join(", ")),
+        (false, true) => format!(
+            "Strict mode requested but mandatory controls missing: {}",
+            missing.join(", ")
+        ),
+        (false, false) => format!(
+            "Execution degraded; missing controls: {}",
+            missing.join(", ")
+        ),
     };
 
     let unsafe_execution_reason = (!missing.is_empty()).then(|| mode_decision_reason.clone());
@@ -132,14 +166,26 @@ fn build_launch_evidence(
     let mut judge_actions = Vec::new();
     if let Some(report) = kill_report {
         if report.term_sent {
-            push_action(&mut judge_actions, JudgeActionType::SignalSent, "SIGTERM sent to proxy group");
+            push_action(
+                &mut judge_actions,
+                JudgeActionType::SignalSent,
+                "SIGTERM sent to proxy group",
+            );
         }
         if report.kill_sent {
-            push_action(&mut judge_actions, JudgeActionType::ForcedKill, "SIGKILL sent to proxy group");
+            push_action(
+                &mut judge_actions,
+                JudgeActionType::ForcedKill,
+                "SIGKILL sent to proxy group",
+            );
         }
     }
     if timed_out && kill_report.is_none() {
-        push_action(&mut judge_actions, JudgeActionType::ForcedKill, "SIGKILL sent to child process (degraded mode)");
+        push_action(
+            &mut judge_actions,
+            JudgeActionType::ForcedKill,
+            "SIGKILL sent to child process (degraded mode)",
+        );
     }
 
     LaunchEvidence {
@@ -152,7 +198,12 @@ fn build_launch_evidence(
         unsafe_execution_reason,
         cgroup_backend_selected,
         pidfd_mode: detect_pidfd_mode(),
-        proc_policy_applied: if req.profile.enable_mount_namespace { "hardened" } else { "default" }.into(),
+        proc_policy_applied: if req.profile.enable_mount_namespace {
+            "hardened"
+        } else {
+            "default"
+        }
+        .into(),
         sys_policy_applied: "disabled".to_string(),
         judge_actions,
         cgroup_evidence,
@@ -215,7 +266,8 @@ pub fn launch_with_supervisor(
     let (launch_read, launch_write) = pipe().map_err(|e| to_process_error("pipe(launch)", e))?;
     let (status_read, status_write) = pipe().map_err(|e| to_process_error("pipe(status)", e))?;
 
-    let mut clone_flags = CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
+    let mut clone_flags =
+        CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
     if req.profile.enable_mount_namespace {
         clone_flags |= CloneFlags::CLONE_NEWNS;
     }
@@ -520,10 +572,24 @@ fn launch_degraded(
     }
 
     const DEGRADED_ENV_BLOCKLIST: &[&str] = &[
-        "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG", "LD_PROFILE",
-        "LD_BIND_NOW", "LD_BIND_NOT", "LD_DYNAMIC_WEAK", "LD_USE_LOAD_BIAS",
-        "BASH_ENV", "ENV", "CDPATH", "PYTHONSTARTUP", "PERL5OPT", "RUBYOPT",
-        "NODE_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "LD_AUDIT",
+        "LD_DEBUG",
+        "LD_PROFILE",
+        "LD_BIND_NOW",
+        "LD_BIND_NOT",
+        "LD_DYNAMIC_WEAK",
+        "LD_USE_LOAD_BIAS",
+        "BASH_ENV",
+        "ENV",
+        "CDPATH",
+        "PYTHONSTARTUP",
+        "PERL5OPT",
+        "RUBYOPT",
+        "NODE_OPTIONS",
+        "_JAVA_OPTIONS",
+        "JDK_JAVA_OPTIONS",
     ];
     for key in DEGRADED_ENV_BLOCKLIST {
         cmd.env_remove(key);
@@ -563,23 +629,41 @@ fn launch_degraded(
                         let _ = libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0);
                     }
 
-                    let zero_limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                    let zero_limit = libc::rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
                     libc::setrlimit(libc::RLIMIT_CORE, &zero_limit);
 
-                    let fsize_limit = libc::rlimit { rlim_cur: 256 * 1024 * 1024, rlim_max: 256 * 1024 * 1024 };
+                    let fsize_limit = libc::rlimit {
+                        rlim_cur: 256 * 1024 * 1024,
+                        rlim_max: 256 * 1024 * 1024,
+                    };
                     libc::setrlimit(libc::RLIMIT_FSIZE, &fsize_limit);
 
-                    let nofile_limit = libc::rlimit { rlim_cur: 256, rlim_max: 256 };
+                    let nofile_limit = libc::rlimit {
+                        rlim_cur: 256,
+                        rlim_max: 256,
+                    };
                     libc::setrlimit(libc::RLIMIT_NOFILE, &nofile_limit);
 
-                    let nproc_limit = libc::rlimit { rlim_cur: 64, rlim_max: 64 };
+                    let nproc_limit = libc::rlimit {
+                        rlim_cur: 64,
+                        rlim_max: 64,
+                    };
                     libc::setrlimit(libc::RLIMIT_NPROC, &nproc_limit);
 
-                    let memlock_limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                    let memlock_limit = libc::rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
                     libc::setrlimit(libc::RLIMIT_MEMLOCK, &memlock_limit);
 
                     if let Some(vm_limit) = req.profile.virtual_memory_limit {
-                        let as_limit = libc::rlimit { rlim_cur: vm_limit, rlim_max: vm_limit };
+                        let as_limit = libc::rlimit {
+                            rlim_cur: vm_limit,
+                            rlim_max: vm_limit,
+                        };
                         libc::setrlimit(libc::RLIMIT_AS, &as_limit);
                     }
 
@@ -651,7 +735,11 @@ fn launch_degraded(
     let status = ProxyStatus {
         payload_pid: Some(child_pid),
         exit_code,
-        term_signal: if interrupted_by_signal { Some(sig_code) } else { None },
+        term_signal: if interrupted_by_signal {
+            Some(sig_code)
+        } else {
+            None
+        },
         timed_out,
         wall_time_ms: started.elapsed().as_millis() as u64,
         stdout,

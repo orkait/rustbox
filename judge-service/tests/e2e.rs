@@ -9,10 +9,21 @@ fn assert_verdict(r: &Value, expected: &str, test_name: &str) {
     let err = r["error_message"].as_str().unwrap_or("");
     let stderr = r["stderr"].as_str().unwrap_or("");
     let combined = format!("{} {}", err, stderr);
-    let skip_patterns = ["not found", "not allowed", "Command not", "cannot find",
-        "No such file", "isolate creation", "not available", "Path not under"];
+    let skip_patterns = [
+        "not found",
+        "not allowed",
+        "Command not",
+        "cannot find",
+        "No such file",
+        "isolate creation",
+        "not available",
+        "Path not under",
+    ];
     if skip_patterns.iter().any(|p| combined.contains(p)) {
-        eprintln!("SKIPPED {}: runtime not available in this environment", test_name);
+        eprintln!(
+            "SKIPPED {}: runtime not available in this environment",
+            test_name
+        );
         return;
     }
     let verdict = r["verdict"].as_str().unwrap_or("null");
@@ -35,7 +46,10 @@ impl TestServer {
         let binary = env!("CARGO_BIN_EXE_judge-service");
         let mut cmd = Command::new(binary);
         cmd.env("RUSTBOX_PORT", port.to_string())
-            .env("RUSTBOX_DATABASE_URL", format!("sqlite:rustbox-test-{}.db", port))
+            .env(
+                "RUSTBOX_DATABASE_URL",
+                format!("sqlite:rustbox-test-{}.db", port),
+            )
             .env("RUSTBOX_WORKERS", "2")
             .env("RUSTBOX_SYNC_WAIT_TIMEOUT_SECS", "30")
             .env("RUSTBOX_SYNC_POLL_INTERVAL_MS", "100")
@@ -55,7 +69,12 @@ impl TestServer {
             .build()
             .unwrap();
 
-        let server = Self { child, port, base_url, client };
+        let server = Self {
+            child,
+            port,
+            base_url,
+            client,
+        };
         server.wait_ready().await;
         server
     }
@@ -64,7 +83,10 @@ impl TestServer {
         let start = Instant::now();
         loop {
             if start.elapsed() > Duration::from_secs(10) {
-                panic!("judge-service did not become ready within 10s on port {}", self.port);
+                panic!(
+                    "judge-service did not become ready within 10s on port {}",
+                    self.port
+                );
             }
             let url = format!("{}/api/health", self.base_url);
             if let Ok(resp) = reqwest::get(&url).await {
@@ -90,7 +112,8 @@ impl TestServer {
             "code": code,
             "stdin": stdin,
         });
-        let resp = self.client
+        let resp = self
+            .client
             .post(self.url("/api/submit?wait=true"))
             .json(&body)
             .send()
@@ -99,7 +122,12 @@ impl TestServer {
         resp.json().await.expect("response not json")
     }
 
-    async fn submit_sync_with_key(&self, language: &str, code: &str, key: &str) -> reqwest::Response {
+    async fn submit_sync_with_key(
+        &self,
+        language: &str,
+        code: &str,
+        key: &str,
+    ) -> reqwest::Response {
         let body = serde_json::json!({
             "language": language,
             "code": code,
@@ -170,7 +198,10 @@ async fn no_auth_warning_header() {
     let server = TestServer::start(None).await;
     let resp = server.get("/api/health").await;
     let warning = resp.headers().get("x-rustbox-warning");
-    assert!(warning.is_some(), "should have warning header when no API key set");
+    assert!(
+        warning.is_some(),
+        "should have warning header when no API key set"
+    );
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -181,7 +212,8 @@ async fn no_auth_warning_header() {
 async fn auth_reject_without_key() {
     let server = TestServer::start(Some("test-secret-key")).await;
     let body = serde_json::json!({"language": "python", "code": "print(1)"});
-    let resp = server.client
+    let resp = server
+        .client
         .post(server.url("/api/submit"))
         .json(&body)
         .send()
@@ -193,7 +225,9 @@ async fn auth_reject_without_key() {
 #[tokio::test]
 async fn auth_accept_with_key() {
     let server = TestServer::start(Some("test-secret-key")).await;
-    let resp = server.submit_sync_with_key("python", "print(1)", "test-secret-key").await;
+    let resp = server
+        .submit_sync_with_key("python", "print(1)", "test-secret-key")
+        .await;
     assert_ne!(resp.status().as_u16(), 401);
 }
 
@@ -205,7 +239,8 @@ async fn auth_accept_with_key() {
 async fn unsupported_language_rejected() {
     let server = TestServer::start(None).await;
     let body = serde_json::json!({"language": "brainfuck", "code": "+++"});
-    let resp = server.client
+    let resp = server
+        .client
         .post(server.url("/api/submit"))
         .json(&body)
         .send()
@@ -214,8 +249,16 @@ async fn unsupported_language_rejected() {
     assert_eq!(resp.status().as_u16(), 400);
     let json: Value = resp.json().await.unwrap();
     let err = json["error"].as_str().unwrap_or("");
-    assert!(err.contains("unsupported language"), "error should mention unsupported: {}", err);
-    assert!(err.contains("available"), "error should list available languages: {}", err);
+    assert!(
+        err.contains("unsupported language"),
+        "error should mention unsupported: {}",
+        err
+    );
+    assert!(
+        err.contains("available"),
+        "error should list available languages: {}",
+        err
+    );
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -235,18 +278,22 @@ async fn python_ac() {
 #[tokio::test]
 async fn python_re() {
     let server = TestServer::start(None).await;
-    let r = server.submit_sync("python", "raise ValueError('boom')").await;
+    let r = server
+        .submit_sync("python", "raise ValueError('boom')")
+        .await;
     assert_verdict(&r, "RE", "python_re");
 }
 
 #[tokio::test]
 async fn python_stdin() {
     let server = TestServer::start(None).await;
-    let r = server.submit_sync_with_stdin(
-        "python",
-        "import sys; print(sys.stdin.read().strip())",
-        "hello\n"
-    ).await;
+    let r = server
+        .submit_sync_with_stdin(
+            "python",
+            "import sys; print(sys.stdin.read().strip())",
+            "hello\n",
+        )
+        .await;
     assert_verdict(&r, "AC", "python_stdin");
     if r["verdict"] == "AC" {
         assert_eq!(r["stdout"].as_str().unwrap().trim(), "hello");
@@ -260,7 +307,12 @@ async fn python_stdin() {
 #[tokio::test]
 async fn c_ac() {
     let server = TestServer::start(None).await;
-    let r = server.submit_sync("c", "#include<stdio.h>\nint main(){printf(\"%d\\n\",42);return 0;}").await;
+    let r = server
+        .submit_sync(
+            "c",
+            "#include<stdio.h>\nint main(){printf(\"%d\\n\",42);return 0;}",
+        )
+        .await;
     assert_verdict(&r, "AC", "c_ac");
 }
 
@@ -271,7 +323,12 @@ async fn c_ac() {
 #[tokio::test]
 async fn cpp_ac() {
     let server = TestServer::start(None).await;
-    let r = server.submit_sync("cpp", "#include<iostream>\nint main(){std::cout<<42<<std::endl;}").await;
+    let r = server
+        .submit_sync(
+            "cpp",
+            "#include<iostream>\nint main(){std::cout<<42<<std::endl;}",
+        )
+        .await;
     assert_verdict(&r, "AC", "cpp_ac");
 }
 
@@ -289,7 +346,8 @@ async fn cpp_compile_error() {
 #[tokio::test]
 async fn java_ac() {
     let server = TestServer::start(None).await;
-    let code = "public class Main { public static void main(String[] args) { System.out.println(42); } }";
+    let code =
+        "public class Main { public static void main(String[] args) { System.out.println(42); } }";
     let r = server.submit_sync("java", code).await;
     assert_verdict(&r, "AC", "java_ac");
 }

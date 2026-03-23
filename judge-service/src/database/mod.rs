@@ -1,11 +1,11 @@
-pub mod types;
-pub mod sqlite;
 pub mod postgres;
+pub mod sqlite;
+pub mod types;
 
 use async_trait::async_trait;
 use std::time::Duration;
-use uuid::Uuid;
 use types::{ExecutionOutput, Submission};
+use uuid::Uuid;
 
 #[async_trait]
 pub trait Database: Send + Sync {

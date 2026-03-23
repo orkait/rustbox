@@ -14,7 +14,10 @@ pub fn validate_ids(uid: u32, gid: u32, strict_mode: bool) -> Result<()> {
         let uid_s = itoa_buf(uid as u64, &mut ubuf);
         let gid_s = itoa_buf(gid as u64, &mut gbuf);
         fs_warn_parts(&[
-            "cannot transition to root UID/GID (uid=", uid_s, ", gid=", gid_s,
+            "cannot transition to root UID/GID (uid=",
+            uid_s,
+            ", gid=",
+            gid_s,
             ") (permissive mode)",
         ]);
     }
@@ -39,12 +42,16 @@ fn clear_supplementary_groups(strict_mode: bool) -> Result<()> {
             Err(err) => {
                 if strict_mode {
                     Err(IsolateError::Privilege(format!(
-                        "failed to clear supplementary groups: {}", err
+                        "failed to clear supplementary groups: {}",
+                        err
                     )))
                 } else {
                     let mut ebuf = [0u8; 20];
                     let eno = itoa_i32(err as i32, &mut ebuf);
-                    fs_warn_parts(&["failed to clear supplementary groups in permissive mode: errno=", eno]);
+                    fs_warn_parts(&[
+                        "failed to clear supplementary groups in permissive mode: errno=",
+                        eno,
+                    ]);
                     Ok(())
                 }
             }
@@ -54,7 +61,9 @@ fn clear_supplementary_groups(strict_mode: bool) -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     {
         if strict_mode {
-            Err(IsolateError::Privilege("setgroups is only supported on Linux".to_string()))
+            Err(IsolateError::Privilege(
+                "setgroups is only supported on Linux".to_string(),
+            ))
         } else {
             Ok(())
         }
@@ -74,33 +83,58 @@ fn set_resid(kind: &str, id: u32, strict_mode: bool) -> Result<()> {
         };
         if rc != 0 {
             let err = std::io::Error::last_os_error();
-            let syscall = if kind == "uid" { "setresuid" } else { "setresgid" };
+            let syscall = if kind == "uid" {
+                "setresuid"
+            } else {
+                "setresgid"
+            };
             if strict_mode {
                 return Err(IsolateError::Privilege(format!(
-                    "failed to {}({}): {}", syscall, id, err
+                    "failed to {}({}): {}",
+                    syscall, id, err
                 )));
             }
             let mut ibuf = [0u8; 20];
             let mut ebuf = [0u8; 20];
             let id_s = itoa_buf(id as u64, &mut ibuf);
             let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-            fs_warn_parts(&["failed to ", syscall, "(", id_s, ") in permissive mode: errno=", eno]);
+            fs_warn_parts(&[
+                "failed to ",
+                syscall,
+                "(",
+                id_s,
+                ") in permissive mode: errno=",
+                eno,
+            ]);
         }
         Ok(())
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        let syscall = if kind == "uid" { "setresuid" } else { "setresgid" };
+        let syscall = if kind == "uid" {
+            "setresuid"
+        } else {
+            "setresgid"
+        };
         if strict_mode {
-            Err(IsolateError::Privilege(format!("{} is only supported on Linux", syscall)))
+            Err(IsolateError::Privilege(format!(
+                "{} is only supported on Linux",
+                syscall
+            )))
         } else {
             Ok(())
         }
     }
 }
 
-fn verify_id_pair(label: &str, expected: u32, real: u32, effective: u32, strict_mode: bool) -> Result<()> {
+fn verify_id_pair(
+    label: &str,
+    expected: u32,
+    real: u32,
+    effective: u32,
+    strict_mode: bool,
+) -> Result<()> {
     if real != expected || effective != expected {
         if strict_mode {
             return Err(IsolateError::Privilege(format!(
@@ -115,8 +149,14 @@ fn verify_id_pair(label: &str, expected: u32, real: u32, effective: u32, strict_
         let real_s = itoa_buf(real as u64, &mut rbuf);
         let eff_s = itoa_buf(effective as u64, &mut efbuf);
         fs_warn_parts(&[
-            label, " verification failed: expected ", exp_s,
-            ", got real=", real_s, ", effective=", eff_s, " (permissive mode)",
+            label,
+            " verification failed: expected ",
+            exp_s,
+            ", got real=",
+            real_s,
+            ", effective=",
+            eff_s,
+            " (permissive mode)",
         ]);
     }
     Ok(())
@@ -135,8 +175,13 @@ fn verify_saved_id(label: &str, expected: u32, saved: u32, strict_mode: bool) ->
         let exp_s = itoa_buf(expected as u64, &mut ebuf);
         let saved_s = itoa_buf(saved as u64, &mut sbuf);
         fs_warn_parts(&[
-            "saved-set-", label, " mismatch: expected ", exp_s,
-            ", got ", saved_s, " (permissive mode)",
+            "saved-set-",
+            label,
+            " mismatch: expected ",
+            exp_s,
+            ", got ",
+            saved_s,
+            " (permissive mode)",
         ]);
     }
     Ok(())
@@ -147,8 +192,20 @@ fn verify_transition(expected_uid: u32, expected_gid: u32, strict_mode: bool) ->
     {
         use nix::unistd::{getegid, geteuid, getgid, getuid};
 
-        verify_id_pair("UID", expected_uid, getuid().as_raw(), geteuid().as_raw(), strict_mode)?;
-        verify_id_pair("GID", expected_gid, getgid().as_raw(), getegid().as_raw(), strict_mode)?;
+        verify_id_pair(
+            "UID",
+            expected_uid,
+            getuid().as_raw(),
+            geteuid().as_raw(),
+            strict_mode,
+        )?;
+        verify_id_pair(
+            "GID",
+            expected_gid,
+            getgid().as_raw(),
+            getegid().as_raw(),
+            strict_mode,
+        )?;
 
         let mut ruid: libc::uid_t = 0;
         let mut euid: libc::uid_t = 0;
@@ -172,7 +229,9 @@ fn verify_transition(expected_uid: u32, expected_gid: u32, strict_mode: bool) ->
     #[cfg(not(target_os = "linux"))]
     {
         return if strict_mode {
-            Err(IsolateError::Privilege("credential verification not supported on non-Linux".to_string()))
+            Err(IsolateError::Privilege(
+                "credential verification not supported on non-Linux".to_string(),
+            ))
         } else {
             Ok(())
         };

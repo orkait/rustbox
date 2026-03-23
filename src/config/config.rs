@@ -149,7 +149,6 @@ impl IsolateConfig {
             ..Self::default()
         };
 
-
         if let Ok(rustbox_config) = RustBoxConfig::load_default() {
             if let Some(lang_config) = rustbox_config.get_language_config(language) {
                 config.memory_limit = Some(lang_config.memory.limit_mb * 1024 * 1024);
@@ -224,8 +223,14 @@ mod tests {
 
     #[test]
     fn virtual_memory_limits_per_language() {
-        assert_eq!(load("java").virtual_memory_limit, Some(4 * 1024 * 1024 * 1024));
-        assert_eq!(load("python").virtual_memory_limit, Some(1024 * 1024 * 1024));
+        assert_eq!(
+            load("java").virtual_memory_limit,
+            Some(4 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            load("python").virtual_memory_limit,
+            Some(1024 * 1024 * 1024)
+        );
         assert_eq!(load("cpp").virtual_memory_limit, Some(1024 * 1024 * 1024));
     }
 

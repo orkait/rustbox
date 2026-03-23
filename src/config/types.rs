@@ -135,7 +135,6 @@ impl IsolateConfig {
         let euid = unsafe { libc::geteuid() };
         std::env::temp_dir().join(format!("rustbox-uid-{}", euid))
     }
-
 }
 
 impl Default for IsolateConfig {
@@ -339,7 +338,6 @@ pub enum IsolateError {
 
     #[error("Privilege error: {0}")]
     Privilege(String),
-
 }
 
 pub type Result<T> = std::result::Result<T, IsolateError>;

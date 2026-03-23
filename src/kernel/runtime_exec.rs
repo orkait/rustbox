@@ -384,8 +384,8 @@ pub fn exec_payload(req: &SandboxLaunchRequest) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_non_zero_capability_lines, validate_preexec_stage_plan, STAGE_SESSION_LEADERSHIP,
-        STAGE_SECCOMP,
+        parse_non_zero_capability_lines, validate_preexec_stage_plan, STAGE_SECCOMP,
+        STAGE_SESSION_LEADERSHIP,
     };
     use crate::kernel::EnforcementMode;
 

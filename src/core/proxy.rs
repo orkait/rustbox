@@ -229,7 +229,9 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
 pub fn run_proxy_main_from_fds(launch_fd: RawFd, status_fd: RawFd) -> ! {
     let _ = fcntl(status_fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC));
 
-    let outcome = match read_json_from_fd::<SandboxLaunchRequest>(launch_fd).and_then(|req| run_proxy(&req)) {
+    let outcome = match read_json_from_fd::<SandboxLaunchRequest>(launch_fd)
+        .and_then(|req| run_proxy(&req))
+    {
         Ok(status) => status,
         Err(err) => ProxyStatus {
             internal_error: Some(err.to_string()),

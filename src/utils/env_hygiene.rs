@@ -191,7 +191,12 @@ impl EnvHygiene {
 
         let mut obuf = [0u8; 12];
         let ostr = octal_buf(perms, &mut obuf);
-        fs_info_parts(&["Set permissions ", ostr, " on ", path.to_str().unwrap_or("<?>")]);
+        fs_info_parts(&[
+            "Set permissions ",
+            ostr,
+            " on ",
+            path.to_str().unwrap_or("<?>"),
+        ]);
 
         Ok(())
     }

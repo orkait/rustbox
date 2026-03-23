@@ -28,8 +28,16 @@ impl VerdictClassifier {
                 if let Some(cg) = &evidence.cgroup_evidence {
                     if cg.oom_events > 0 || cg.oom_kill_events > 0 {
                         let mut prov = Self::provenance(
-                            evidence, limits, VerdictActor::Kernel, VerdictCause::MleKernelOom,
-                            vec!["wait_outcome".into(), "cgroup_evidence".into(), "oom_events".into()], None,
+                            evidence,
+                            limits,
+                            VerdictActor::Kernel,
+                            VerdictCause::MleKernelOom,
+                            vec![
+                                "wait_outcome".into(),
+                                "cgroup_evidence".into(),
+                                "oom_events".into(),
+                            ],
+                            None,
                         );
                         prov.memory_peak = cg.memory_peak.unwrap_or(0);
                         return (ExecutionStatus::MemoryLimit, prov);
@@ -38,15 +46,29 @@ impl VerdictClassifier {
             }
 
             if exit_code == 0 {
-                return (ExecutionStatus::Ok, Self::provenance(
-                    evidence, limits, VerdictActor::Runtime,
-                    VerdictCause::NormalExit, vec!["wait_outcome".into()], None,
-                ));
+                return (
+                    ExecutionStatus::Ok,
+                    Self::provenance(
+                        evidence,
+                        limits,
+                        VerdictActor::Runtime,
+                        VerdictCause::NormalExit,
+                        vec!["wait_outcome".into()],
+                        None,
+                    ),
+                );
             } else {
-                return (ExecutionStatus::RuntimeError, Self::provenance(
-                    evidence, limits, VerdictActor::Runtime,
-                    VerdictCause::ReNonzeroExit, vec!["wait_outcome".into(), "exit_code".into()], None,
-                ));
+                return (
+                    ExecutionStatus::RuntimeError,
+                    Self::provenance(
+                        evidence,
+                        limits,
+                        VerdictActor::Runtime,
+                        VerdictCause::ReNonzeroExit,
+                        vec!["wait_outcome".into(), "exit_code".into()],
+                        None,
+                    ),
+                );
             }
         }
 
@@ -92,26 +114,50 @@ impl VerdictClassifier {
         let wall_limit_ms = limits.wall_limit_ms.unwrap_or(u64::MAX);
 
         if cpu_time_ms >= cpu_limit_ms {
-            return (ExecutionStatus::TimeLimit, Self::provenance(
-                evidence, limits, VerdictActor::Judge, VerdictCause::TleCpuJudge,
-                vec!["judge_actions".into(), "timing_evidence".into(), "cpu_time".into()],
-                Some(9),
-            ));
+            return (
+                ExecutionStatus::TimeLimit,
+                Self::provenance(
+                    evidence,
+                    limits,
+                    VerdictActor::Judge,
+                    VerdictCause::TleCpuJudge,
+                    vec![
+                        "judge_actions".into(),
+                        "timing_evidence".into(),
+                        "cpu_time".into(),
+                    ],
+                    Some(9),
+                ),
+            );
         }
 
         if wall_time_ms >= wall_limit_ms {
-            return (ExecutionStatus::TimeLimit, Self::provenance(
-                evidence, limits, VerdictActor::Judge, VerdictCause::TleWallJudge,
-                vec!["judge_actions".into(), "timing_evidence".into(), "wall_time".into()],
-                Some(9),
-            ));
+            return (
+                ExecutionStatus::TimeLimit,
+                Self::provenance(
+                    evidence,
+                    limits,
+                    VerdictActor::Judge,
+                    VerdictCause::TleWallJudge,
+                    vec![
+                        "judge_actions".into(),
+                        "timing_evidence".into(),
+                        "wall_time".into(),
+                    ],
+                    Some(9),
+                ),
+            );
         }
 
         if let Some(cg) = &evidence.cgroup_evidence {
             if cg.oom_events > 0 || cg.oom_kill_events > 0 {
                 let mut prov = Self::provenance(
-                    evidence, limits, VerdictActor::Kernel, VerdictCause::MleKernelOom,
-                    vec!["cgroup_evidence".into(), "oom_events".into()], Some(9),
+                    evidence,
+                    limits,
+                    VerdictActor::Kernel,
+                    VerdictCause::MleKernelOom,
+                    vec!["cgroup_evidence".into(), "oom_events".into()],
+                    Some(9),
                 );
                 prov.memory_peak = cg.memory_peak.unwrap_or(0);
                 return (ExecutionStatus::MemoryLimit, prov);
@@ -130,8 +176,15 @@ impl VerdictClassifier {
             if let Some(cg) = &evidence.cgroup_evidence {
                 if cg.oom_events > 0 || cg.oom_kill_events > 0 {
                     let mut prov = Self::provenance(
-                        evidence, limits, VerdictActor::Kernel, VerdictCause::MleKernelOom,
-                        vec!["wait_outcome".into(), "cgroup_evidence".into(), "oom_events".into()],
+                        evidence,
+                        limits,
+                        VerdictActor::Kernel,
+                        VerdictCause::MleKernelOom,
+                        vec![
+                            "wait_outcome".into(),
+                            "cgroup_evidence".into(),
+                            "oom_events".into(),
+                        ],
                         Some(signal),
                     );
                     prov.memory_peak = cg.memory_peak.unwrap_or(0);
@@ -140,11 +193,17 @@ impl VerdictClassifier {
             }
         }
 
-        (ExecutionStatus::Signaled, Self::provenance(
-            evidence, limits, VerdictActor::Runtime, VerdictCause::ReFatalSignal,
-            vec!["wait_outcome".into(), "signal".into()],
-            Some(signal),
-        ))
+        (
+            ExecutionStatus::Signaled,
+            Self::provenance(
+                evidence,
+                limits,
+                VerdictActor::Runtime,
+                VerdictCause::ReFatalSignal,
+                vec!["wait_outcome".into(), "signal".into()],
+                Some(signal),
+            ),
+        )
     }
 
     fn classify_internal_error(
@@ -152,15 +211,28 @@ impl VerdictClassifier {
         limits: &LimitSnapshot,
     ) -> (ExecutionStatus, VerdictProvenance) {
         let (cause, sources) = if !evidence.evidence_collection_errors.is_empty() {
-            (VerdictCause::IeMissingEvidence, vec!["internal_error".into(), "evidence_collection_errors".into()])
+            (
+                VerdictCause::IeMissingEvidence,
+                vec!["internal_error".into(), "evidence_collection_errors".into()],
+            )
         } else {
-            (VerdictCause::IeSupervisorFailure, vec!["internal_error".into()])
+            (
+                VerdictCause::IeSupervisorFailure,
+                vec!["internal_error".into()],
+            )
         };
 
-        (ExecutionStatus::InternalError, Self::provenance(
-            evidence, limits, VerdictActor::Judge, cause, sources,
-            evidence.wait_outcome.terminating_signal,
-        ))
+        (
+            ExecutionStatus::InternalError,
+            Self::provenance(
+                evidence,
+                limits,
+                VerdictActor::Judge,
+                cause,
+                sources,
+                evidence.wait_outcome.terminating_signal,
+            ),
+        )
     }
 
     fn classify_cleanup_failure(
@@ -168,7 +240,10 @@ impl VerdictClassifier {
         limits: &LimitSnapshot,
     ) -> (ExecutionStatus, VerdictProvenance) {
         let mut prov = Self::provenance(
-            evidence, limits, VerdictActor::Judge, VerdictCause::IeCleanupFailure,
+            evidence,
+            limits,
+            VerdictActor::Judge,
+            VerdictCause::IeCleanupFailure,
             vec!["process_lifecycle".into(), "cleanup_verification".into()],
             evidence.wait_outcome.terminating_signal,
         );
@@ -254,7 +329,8 @@ mod tests {
 
     #[test]
     fn test_classify_ok() {
-        let (status, prov) = VerdictClassifier::classify(&base_evidence(Some(0), None), &test_limits());
+        let (status, prov) =
+            VerdictClassifier::classify(&base_evidence(Some(0), None), &test_limits());
         assert_eq!(status, ExecutionStatus::Ok);
         assert_eq!(prov.verdict_actor, VerdictActor::Runtime);
         assert_eq!(prov.verdict_cause, VerdictCause::NormalExit);
@@ -262,7 +338,8 @@ mod tests {
 
     #[test]
     fn test_classify_runtime_error() {
-        let (status, prov) = VerdictClassifier::classify(&base_evidence(Some(1), None), &test_limits());
+        let (status, prov) =
+            VerdictClassifier::classify(&base_evidence(Some(1), None), &test_limits());
         assert_eq!(status, ExecutionStatus::RuntimeError);
         assert_eq!(prov.verdict_cause, VerdictCause::ReNonzeroExit);
     }
@@ -277,8 +354,16 @@ mod tests {
             divergence_class: Some(DivergenceClass::CpuBound),
         };
         evidence.judge_actions = vec![
-            JudgeAction { timestamp: SystemTime::now(), action_type: JudgeActionType::TimerExpiry, details: "CPU timeout".into() },
-            JudgeAction { timestamp: SystemTime::now(), action_type: JudgeActionType::ForcedKill, details: "SIGKILL".into() },
+            JudgeAction {
+                timestamp: SystemTime::now(),
+                action_type: JudgeActionType::TimerExpiry,
+                details: "CPU timeout".into(),
+            },
+            JudgeAction {
+                timestamp: SystemTime::now(),
+                action_type: JudgeActionType::ForcedKill,
+                details: "SIGKILL".into(),
+            },
         ];
         evidence.process_lifecycle.reap_summary = "forced".into();
 
@@ -297,8 +382,16 @@ mod tests {
             divergence_class: Some(DivergenceClass::SleepOrBlockBound),
         };
         evidence.judge_actions = vec![
-            JudgeAction { timestamp: SystemTime::now(), action_type: JudgeActionType::TimerExpiry, details: "wall timeout".into() },
-            JudgeAction { timestamp: SystemTime::now(), action_type: JudgeActionType::ForcedKill, details: "SIGKILL".into() },
+            JudgeAction {
+                timestamp: SystemTime::now(),
+                action_type: JudgeActionType::TimerExpiry,
+                details: "wall timeout".into(),
+            },
+            JudgeAction {
+                timestamp: SystemTime::now(),
+                action_type: JudgeActionType::ForcedKill,
+                details: "SIGKILL".into(),
+            },
         ];
         evidence.process_lifecycle.reap_summary = "forced".into();
 
@@ -342,8 +435,17 @@ mod tests {
 
     #[test]
     fn test_classify_divergence() {
-        assert_eq!(VerdictClassifier::classify_divergence(900, 1000), DivergenceClass::CpuBound);
-        assert_eq!(VerdictClassifier::classify_divergence(100, 1000), DivergenceClass::SleepOrBlockBound);
-        assert_eq!(VerdictClassifier::classify_divergence(500, 1000), DivergenceClass::HostInterferenceSuspected);
+        assert_eq!(
+            VerdictClassifier::classify_divergence(900, 1000),
+            DivergenceClass::CpuBound
+        );
+        assert_eq!(
+            VerdictClassifier::classify_divergence(100, 1000),
+            DivergenceClass::SleepOrBlockBound
+        );
+        assert_eq!(
+            VerdictClassifier::classify_divergence(500, 1000),
+            DivergenceClass::HostInterferenceSuspected
+        );
     }
 }

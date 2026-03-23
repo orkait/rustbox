@@ -131,10 +131,9 @@ pub fn init_security_logger(audit_path: Option<PathBuf>) -> Result<()> {
         Err(e) => {
             if audit_path.is_none() {
                 let fallback_paths = [
-                    std::env::temp_dir().join(format!(
-                        "rustbox-security-audit-{}.log",
-                        unsafe { libc::geteuid() }
-                    )),
+                    std::env::temp_dir().join(format!("rustbox-security-audit-{}.log", unsafe {
+                        libc::geteuid()
+                    })),
                     std::env::var_os("HOME")
                         .map(PathBuf::from)
                         .unwrap_or_else(std::env::temp_dir)
@@ -208,10 +207,7 @@ mod tests {
 
     #[test]
     fn test_security_event_serialization() {
-        let event = SecurityEvent::new(
-            SecurityEventType::CommandInjectionAttempt,
-            "test",
-        );
+        let event = SecurityEvent::new(SecurityEventType::CommandInjectionAttempt, "test");
         assert!(serde_json::to_string(&event).is_ok());
     }
 

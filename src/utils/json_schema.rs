@@ -167,8 +167,10 @@ impl JudgeResultV1 {
             output_limit_bytes: config.file_size_limit,
         };
 
-        let (status, provenance) =
-            crate::verdict::classifier::VerdictClassifier::classify(&evidence_bundle, &limit_snapshot);
+        let (status, provenance) = crate::verdict::classifier::VerdictClassifier::classify(
+            &evidence_bundle,
+            &limit_snapshot,
+        );
         let verdict_provenance = if status == ExecutionStatus::Ok {
             None
         } else {

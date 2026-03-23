@@ -9,7 +9,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::database::types::{Submission, STATUS_PENDING, STATUS_COMPLETED, STATUS_ERROR};
+use crate::database::types::{Submission, STATUS_COMPLETED, STATUS_ERROR, STATUS_PENDING};
 use crate::types::{ErrorResponse, HealthResponse, ResultResponse, SubmitRequest, SubmitResponse};
 use crate::AppState;
 
@@ -22,15 +22,13 @@ fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
                 || v4.is_broadcast()
                 || v4.is_unspecified()
                 || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64)  // CGN 100.64/10
-                || (v4.octets()[0] == 198 && (v4.octets()[1] & 0xFE) == 18)  // benchmark 198.18/15
+                || (v4.octets()[0] == 198 && (v4.octets()[1] & 0xFE) == 18) // benchmark 198.18/15
         }
         std::net::IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || {
-                    let seg = v6.segments();
-                    // fc00::/7 (unique local)
-                    (seg[0] & 0xFE00) == 0xFC00
+            v6.is_loopback() || v6.is_unspecified() || {
+                let seg = v6.segments();
+                // fc00::/7 (unique local)
+                (seg[0] & 0xFE00) == 0xFC00
                     // fe80::/10 (link-local)
                     || (seg[0] & 0xFFC0) == 0xFE80
                     // ::ffff:0:0/96 (IPv4-mapped) - check the mapped IPv4
@@ -49,7 +47,7 @@ fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
                         );
                         is_blocked_ip(std::net::IpAddr::V4(v4))
                     })
-                }
+            }
         }
     }
 }
@@ -58,7 +56,10 @@ async fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), St
     let parsed: url::Url = url.parse().map_err(|_| "invalid webhook URL".to_string())?;
 
     if !allow_localhost && parsed.scheme() != "https" {
-        return Err("webhook_url must use HTTPS (set RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS=true for dev mode)".to_string());
+        return Err(
+            "webhook_url must use HTTPS (set RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS=true for dev mode)"
+                .to_string(),
+        );
     }
     if allow_localhost && !matches!(parsed.scheme(), "https" | "http") {
         return Err("webhook_url must use HTTP or HTTPS".to_string());
@@ -87,7 +88,8 @@ async fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), St
                 if is_blocked_ip(addr.ip()) {
                     return Err(format!(
                         "webhook_url host '{}' resolves to blocked IP {}",
-                        host, addr.ip()
+                        host,
+                        addr.ip()
                     ));
                 }
             }
@@ -148,7 +150,10 @@ async fn submit(
     }
 
     if let Some(ref key) = state.api_key {
-        let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+        let provided = headers
+            .get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
         if !constant_time_eq(provided.as_bytes(), key.as_bytes()) {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -190,7 +195,8 @@ async fn submit(
                 Json(serde_json::json!(ErrorResponse {
                     error: "webhook_secret is required when webhook_url is provided".to_string(),
                 })),
-            ).into_response();
+            )
+                .into_response();
         }
         if secret.len() > 256 {
             return (
@@ -198,7 +204,8 @@ async fn submit(
                 Json(serde_json::json!(ErrorResponse {
                     error: "webhook_secret must be 256 bytes or less".to_string(),
                 })),
-            ).into_response();
+            )
+                .into_response();
         }
     }
 
@@ -309,7 +316,11 @@ async fn submit(
     tracing::info!(%id, language = %lang, "submission queued");
 
     if !query.wait {
-        return (StatusCode::ACCEPTED, Json(serde_json::json!(SubmitResponse { id }))).into_response();
+        return (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!(SubmitResponse { id })),
+        )
+            .into_response();
     }
 
     let poll_interval = std::time::Duration::from_millis(state.sync_poll_interval_ms);
@@ -332,7 +343,8 @@ async fn submit(
                     "id": id,
                     "error": "execution did not complete within 30s, poll GET /api/result/{id}"
                 })),
-            ).into_response();
+            )
+                .into_response();
         }
     }
 }
@@ -343,7 +355,10 @@ async fn result(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     if let Some(ref key) = state.api_key {
-        let provided = headers.get("x-api-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+        let provided = headers
+            .get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
         if !constant_time_eq(provided.as_bytes(), key.as_bytes()) {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -393,11 +408,14 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         workers: state.worker_count,
         queue_depth: state.queue.depth(),
         node_id: state.node_id.clone(),
-    })).into_response();
+    }))
+    .into_response();
     if state.api_key.is_none() {
         resp.headers_mut().insert(
             "X-Rustbox-Warning",
-            "No API key configured. Set RUSTBOX_API_KEY for production.".parse().unwrap(),
+            "No API key configured. Set RUSTBOX_API_KEY for production."
+                .parse()
+                .unwrap(),
         );
     }
     resp
@@ -412,7 +430,8 @@ async fn readiness(State(state): State<AppState>) -> impl IntoResponse {
                 "enforcement_mode": state.enforcement_mode,
                 "error": "no cgroup or namespace support available"
             })),
-        ).into_response();
+        )
+            .into_response();
     }
     (
         StatusCode::OK,
@@ -422,5 +441,6 @@ async fn readiness(State(state): State<AppState>) -> impl IntoResponse {
             "cgroup_backend": state.cgroup_backend,
             "namespace_support": state.namespace_support,
         })),
-    ).into_response()
+    )
+        .into_response()
 }

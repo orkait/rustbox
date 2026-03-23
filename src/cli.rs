@@ -31,15 +31,11 @@ impl CliMode {
             Self::Compat => true,
             Self::Isolate => matches!(
                 command,
-                Commands::ExecuteCode { .. }
-                    | Commands::CheckDeps { .. }
-                    | Commands::Status
+                Commands::ExecuteCode { .. } | Commands::CheckDeps { .. } | Commands::Status
             ),
             Self::Judge => matches!(
                 command,
-                Commands::ExecuteCode { .. }
-                    | Commands::CheckDeps { .. }
-                    | Commands::Status
+                Commands::ExecuteCode { .. } | Commands::CheckDeps { .. } | Commands::Status
             ),
         }
     }
@@ -139,9 +135,6 @@ fn validate_command_mode(mode: CliMode, command: &Commands) {
 
 static SIGNAL_RECEIVED: AtomicI32 = AtomicI32::new(0);
 
-
-
-
 extern "C" fn signal_handler(sig: i32) {
     SIGNAL_RECEIVED.store(sig, Ordering::SeqCst);
     crate::kernel::signal::request_shutdown(sig);
@@ -174,7 +167,6 @@ pub fn run(mode: CliMode) -> Result<()> {
         eprintln!("Failed to initialize security logger: {}", e);
         std::process::exit(1);
     }
-
 
     if !cfg!(unix) {
         eprintln!("Error: rustbox requires Unix-like systems for security features");
@@ -257,7 +249,13 @@ pub fn run(mode: CliMode) -> Result<()> {
                 eprintln!("Warning: Running without root - no isolation enforced");
             }
 
-            let mode_label = if strict { "STRICT" } else if is_root { "ROOT" } else { "DEV" };
+            let mode_label = if strict {
+                "STRICT"
+            } else if is_root {
+                "ROOT"
+            } else {
+                "DEV"
+            };
             eprintln!("Executing {} code ({})", language, mode_label);
 
             let mut config = crate::config::types::IsolateConfig::with_language_defaults(
@@ -568,7 +566,9 @@ fn check_language_dependencies(verbose: bool, primary_binary: &str) -> Result<()
                 "Python" => println!("  • Python: sudo apt install python3 python3-pip"),
                 "C++" => println!("  • C++: sudo apt install build-essential gcc g++"),
                 "Java" => println!("  • Java: sudo apt install openjdk-21-jdk-headless"),
-                "JavaScript/TypeScript" => println!("  • Bun runtime: curl -fsSL https://bun.sh/install | bash"),
+                "JavaScript/TypeScript" => {
+                    println!("  • Bun runtime: curl -fsSL https://bun.sh/install | bash")
+                }
                 _ => {}
             }
         }
@@ -576,4 +576,3 @@ fn check_language_dependencies(verbose: bool, primary_binary: &str) -> Result<()
         std::process::exit(1);
     }
 }
-

@@ -89,11 +89,7 @@ async fn poll_until_done(client: &reqwest::Client, base_url: &str, id: &str) -> 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
 
     loop {
-        let resp = client
-            .get(&url)
-            .send()
-            .await
-            .expect("poll request failed");
+        let resp = client.get(&url).send().await.expect("poll request failed");
         assert_eq!(resp.status(), 200, "expected 200 from result endpoint");
 
         let body: Value = resp.json().await.expect("failed to parse result JSON");

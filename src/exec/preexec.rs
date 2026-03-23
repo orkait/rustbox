@@ -1,10 +1,8 @@
 use crate::config::types::{IsolateError, Result};
 use crate::core::types::ExecutionProfile;
-use crate::utils::fork_safe_log::{
-    fs_debug, fs_info_parts, fs_warn_parts, itoa_buf, itoa_i32,
-};
 use crate::kernel::capabilities::{self, check_no_new_privs, set_no_new_privs};
 use crate::kernel::credentials::transition_to_unprivileged;
+use crate::utils::fork_safe_log::{fs_debug, fs_info_parts, fs_warn_parts, itoa_buf, itoa_i32};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::marker::PhantomData;
@@ -42,8 +40,14 @@ fn apply_rlimit_value(
         let hard_s = itoa_buf(hard, &mut hbuf);
         let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
         fs_warn_parts(&[
-            "Failed to apply ", name, "=", soft_s, " (hard=", hard_s,
-            ") in permissive mode: errno=", eno,
+            "Failed to apply ",
+            name,
+            "=",
+            soft_s,
+            " (hard=",
+            hard_s,
+            ") in permissive mode: errno=",
+            eno,
         ]);
         Ok(())
     }
@@ -76,7 +80,8 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
             }
             Err(_) => {
                 fs_warn_parts(&[
-                    "Skipping environment key with NUL byte in permissive mode: ", key,
+                    "Skipping environment key with NUL byte in permissive mode: ",
+                    key,
                 ]);
                 continue;
             }
@@ -92,7 +97,8 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
             }
             Err(_) => {
                 fs_warn_parts(&[
-                    "Skipping environment value with NUL byte in permissive mode: ", key,
+                    "Skipping environment value with NUL byte in permissive mode: ",
+                    key,
                 ]);
                 continue;
             }
@@ -109,7 +115,12 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
             }
             let mut ebuf = [0u8; 20];
             let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-            fs_warn_parts(&["setenv failed for ", key, " in permissive mode: errno=", eno]);
+            fs_warn_parts(&[
+                "setenv failed for ",
+                key,
+                " in permissive mode: errno=",
+                eno,
+            ]);
         }
     }
 
@@ -299,14 +310,24 @@ impl Sandbox<MountsPrivate> {
                 let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
                 let path_s = path;
                 fs_warn_parts(&[
-                    "Failed to attach PID ", pid_s, " to cgroup ", path_s,
-                    " (permissive mode): errno=", eno,
+                    "Failed to attach PID ",
+                    pid_s,
+                    " to cgroup ",
+                    path_s,
+                    " (permissive mode): errno=",
+                    eno,
                 ]);
             } else {
                 let mut pbuf = [0u8; 20];
                 let pid_s = itoa_buf(current_pid as u64, &mut pbuf);
                 let path_s = path;
-                fs_info_parts(&["Attached PID ", pid_s, " to cgroup ", path_s, " before exec"]);
+                fs_info_parts(&[
+                    "Attached PID ",
+                    pid_s,
+                    " to cgroup ",
+                    path_s,
+                    " before exec",
+                ]);
             }
         }
 
@@ -372,17 +393,48 @@ impl Sandbox<RootTransitioned> {
         #[cfg(unix)]
         {
             let rlimits: &[(&str, libc::__rlimit_resource_t, Option<(u64, u64)>)] = &[
-                ("RLIMIT_AS", libc::RLIMIT_AS, profile.virtual_memory_limit.map(|v| (v, v))),
-                ("RLIMIT_FSIZE", libc::RLIMIT_FSIZE, profile.file_size_limit.map(|v| (v, v))),
-                ("RLIMIT_CORE", libc::RLIMIT_CORE, Some((profile.core_limit.unwrap_or(0), profile.core_limit.unwrap_or(0)))),
+                (
+                    "RLIMIT_AS",
+                    libc::RLIMIT_AS,
+                    profile.virtual_memory_limit.map(|v| (v, v)),
+                ),
+                (
+                    "RLIMIT_FSIZE",
+                    libc::RLIMIT_FSIZE,
+                    profile.file_size_limit.map(|v| (v, v)),
+                ),
+                (
+                    "RLIMIT_CORE",
+                    libc::RLIMIT_CORE,
+                    Some((
+                        profile.core_limit.unwrap_or(0),
+                        profile.core_limit.unwrap_or(0),
+                    )),
+                ),
                 ("RLIMIT_MEMLOCK", libc::RLIMIT_MEMLOCK, Some((0, 0))),
-                ("RLIMIT_NPROC", libc::RLIMIT_NPROC, profile.process_limit.map(|v| (v as u64, v as u64))),
-                ("RLIMIT_STACK", libc::RLIMIT_STACK, profile.stack_limit.map(|v| (v, v))),
-                ("RLIMIT_NOFILE", libc::RLIMIT_NOFILE, profile.fd_limit.map(|v| (v, v))),
-                ("RLIMIT_CPU", libc::RLIMIT_CPU, profile.cpu_time_limit_ms.map(|ms| {
-                    let s = (ms / 1000).max(1);
-                    (s, s + 1)
-                })),
+                (
+                    "RLIMIT_NPROC",
+                    libc::RLIMIT_NPROC,
+                    profile.process_limit.map(|v| (v as u64, v as u64)),
+                ),
+                (
+                    "RLIMIT_STACK",
+                    libc::RLIMIT_STACK,
+                    profile.stack_limit.map(|v| (v, v)),
+                ),
+                (
+                    "RLIMIT_NOFILE",
+                    libc::RLIMIT_NOFILE,
+                    profile.fd_limit.map(|v| (v, v)),
+                ),
+                (
+                    "RLIMIT_CPU",
+                    libc::RLIMIT_CPU,
+                    profile.cpu_time_limit_ms.map(|ms| {
+                        let s = (ms / 1000).max(1);
+                        (s, s + 1)
+                    }),
+                ),
             ];
             for &(name, resource, ref limits) in rlimits {
                 if let Some((soft, hard)) = *limits {
@@ -474,9 +526,7 @@ impl Sandbox<RootTransitioned> {
                 let lower = jto.to_lowercase();
                 if JAVA_AGENT_FLAGS.iter().any(|flag| lower.contains(flag)) {
                     env_map.remove("JAVA_TOOL_OPTIONS");
-                    fs_warn_parts(&[
-                        "Removed JAVA_TOOL_OPTIONS containing agent flag",
-                    ]);
+                    fs_warn_parts(&["Removed JAVA_TOOL_OPTIONS containing agent flag"]);
                 }
             }
 
@@ -494,7 +544,10 @@ impl Sandbox<RootTransitioned> {
                 let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
                 let wdir = profile.workdir.to_str().unwrap_or("<?>");
                 fs_warn_parts(&[
-                    "Failed to chdir to workdir ", wdir, " (permissive mode): errno=", eno,
+                    "Failed to chdir to workdir ",
+                    wdir,
+                    " (permissive mode): errno=",
+                    eno,
                 ]);
             }
 
@@ -706,7 +759,11 @@ mod typestate_tests {
         let result = ready.exec_payload(&[]);
         assert!(result.is_err(), "exec_payload must reject empty command");
         let msg = format!("{:?}", result.unwrap_err());
-        assert!(msg.contains("Empty"), "expected 'Empty' in error, got: {}", msg);
+        assert!(
+            msg.contains("Empty"),
+            "expected 'Empty' in error, got: {}",
+            msg
+        );
     }
 
     #[test]

@@ -5,8 +5,10 @@ use std::thread;
 
 fn test_config() -> rustbox::config::types::IsolateConfig {
     let mut config = rustbox::config::types::IsolateConfig::with_language_defaults(
-        "python", "rustbox/0".to_string(),
-    ).unwrap();
+        "python",
+        "rustbox/0".to_string(),
+    )
+    .unwrap();
     config.strict_mode = false;
     config.allow_degraded = true;
     config
@@ -19,7 +21,11 @@ fn single_allocation_per_isolate_lifecycle() {
     let before = uid_pool::active_count();
 
     let config = test_config();
-    assert_eq!(uid_pool::active_count(), before, "config creation must not allocate from pool");
+    assert_eq!(
+        uid_pool::active_count(),
+        before,
+        "config creation must not allocate from pool"
+    );
 
     // Step 2: Isolate::new allocates exactly 1
     let isolate = rustbox::runtime::isolate::Isolate::new(config).unwrap();
@@ -30,7 +36,11 @@ fn single_allocation_per_isolate_lifecycle() {
     );
 
     let uid = isolate.config().uid.unwrap();
-    assert!(uid_pool::is_pool_uid(uid), "allocated uid {} must be in pool range", uid);
+    assert!(
+        uid_pool::is_pool_uid(uid),
+        "allocated uid {} must be in pool range",
+        uid
+    );
     assert_eq!(isolate.config().gid, Some(uid), "gid must match uid");
     assert_eq!(
         isolate.config().instance_id,
@@ -108,7 +118,11 @@ fn uid_propagates_through_execution_profile() {
         &["/bin/true".to_string()],
         None,
     );
-    assert_eq!(profile.uid, Some(uid), "ExecutionProfile must carry the pool uid");
+    assert_eq!(
+        profile.uid,
+        Some(uid),
+        "ExecutionProfile must carry the pool uid"
+    );
     assert_eq!(profile.gid, Some(uid), "ExecutionProfile gid must match");
 
     let request = rustbox::core::types::SandboxLaunchRequest::from_config(
@@ -117,7 +131,11 @@ fn uid_propagates_through_execution_profile() {
         None,
         None,
     );
-    assert_eq!(request.profile.uid, Some(uid), "SandboxLaunchRequest must carry the pool uid");
+    assert_eq!(
+        request.profile.uid,
+        Some(uid),
+        "SandboxLaunchRequest must carry the pool uid"
+    );
     assert_eq!(request.instance_id, format!("rustbox/{}", uid));
 
     isolate.cleanup().unwrap();
@@ -186,7 +204,11 @@ fn concurrent_isolate_creation_no_uid_collision() {
 
     let uids = results.lock().unwrap();
     let unique: HashSet<u32> = uids.iter().copied().collect();
-    assert_eq!(uids.len(), unique.len(), "simultaneously held UIDs must be unique");
+    assert_eq!(
+        uids.len(),
+        unique.len(),
+        "simultaneously held UIDs must be unique"
+    );
     assert_eq!(uids.len(), thread_count);
 }
 
@@ -209,7 +231,8 @@ fn rapid_create_destroy_cycles_hold_under_load() {
                 let isolate = rustbox::runtime::isolate::Isolate::new(config)
                     .unwrap_or_else(|e| panic!("Isolate::new failed cycle {}: {}", cycle, e));
                 assert!(uid_pool::is_pool_uid(isolate.config().uid.unwrap()));
-                isolate.cleanup()
+                isolate
+                    .cleanup()
                     .unwrap_or_else(|e| panic!("cleanup failed cycle {}: {}", cycle, e));
             }
         }));

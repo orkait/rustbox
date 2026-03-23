@@ -26,7 +26,8 @@ async fn main() -> anyhow::Result<()> {
         "starting judge-service"
     );
 
-    let db: Arc<dyn Database> = Arc::from(judge_service::database::connect(&cfg.database_url).await?);
+    let db: Arc<dyn Database> =
+        Arc::from(judge_service::database::connect(&cfg.database_url).await?);
     info!("database ready");
 
     let is_postgres = cfg.database_url.starts_with("postgres://")
@@ -44,7 +45,11 @@ async fn main() -> anyhow::Result<()> {
             cfg.node_id.clone(),
             cfg.webhook_timeout_secs,
         );
-        info!(count = cfg.workers, mode = "postgres", "worker pool started");
+        info!(
+            count = cfg.workers,
+            mode = "postgres",
+            "worker pool started"
+        );
         (queue, handles)
     } else {
         let queue = Arc::new(JobQueue::channel(cfg.queue_size));
@@ -74,7 +79,9 @@ async fn main() -> anyhow::Result<()> {
         .map(rustbox::kernel::cgroup::backend_type_name)
         .map(str::to_string);
     let namespace_support = rustbox::kernel::namespace::NamespaceIsolation::is_supported();
-    let is_root = std::process::Command::new("id").arg("-u").output()
+    let is_root = std::process::Command::new("id")
+        .arg("-u")
+        .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
         .unwrap_or(false);
     let enforcement_mode = match (&cgroup_backend, namespace_support, is_root) {
@@ -108,7 +115,9 @@ async fn main() -> anyhow::Result<()> {
         available_languages,
         rate_limiter: if cfg.rate_limit_per_minute > 0 {
             info!(rpm = cfg.rate_limit_per_minute, "rate limiting enabled");
-            Some(std::sync::Arc::new(judge_service::rate_limit::RateLimiter::new(cfg.rate_limit_per_minute)))
+            Some(std::sync::Arc::new(
+                judge_service::rate_limit::RateLimiter::new(cfg.rate_limit_per_minute),
+            ))
         } else {
             None
         },
@@ -135,7 +144,11 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     let cors = CorsLayer::new()
-        .allow_origin(cors_origin.parse::<HeaderValue>().expect("invalid CORS origin"))
+        .allow_origin(
+            cors_origin
+                .parse::<HeaderValue>()
+                .expect("invalid CORS origin"),
+        )
         .allow_methods([Method::GET, Method::POST])
         .allow_headers([header::CONTENT_TYPE]);
 
@@ -176,7 +189,10 @@ async fn main() -> anyhow::Result<()> {
     {
         Ok(()) => info!("all workers drained cleanly"),
         Err(_) => {
-            tracing::warn!("worker drain timed out after {}s, marking stale submissions", drain_timeout.as_secs());
+            tracing::warn!(
+                "worker drain timed out after {}s, marking stale submissions",
+                drain_timeout.as_secs()
+            );
             if let Err(e) = db_for_shutdown.reap_stale(Duration::ZERO).await {
                 tracing::error!(error = %e, "failed to reap stale submissions on shutdown");
             }

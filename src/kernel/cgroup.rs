@@ -7,7 +7,13 @@ use super::cgroup_v2::CgroupV2;
 pub(crate) fn sanitize_instance_id(instance_id: &str) -> String {
     let sanitized: String = instance_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let trimmed = sanitized.trim_matches('_').to_string();
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." || trimmed.contains("..") {
@@ -180,7 +186,10 @@ mod tests {
             BackendSelector::from_force_v1(false),
             BackendSelector::AutoPreferV2
         );
-        assert_eq!(BackendSelector::from_force_v1(true), BackendSelector::ForceV1);
+        assert_eq!(
+            BackendSelector::from_force_v1(true),
+            BackendSelector::ForceV1
+        );
     }
 
     #[test]

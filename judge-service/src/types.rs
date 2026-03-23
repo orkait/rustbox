@@ -80,7 +80,9 @@ pub fn decompress_meta(compressed: &str) -> Option<serde_json::Value> {
     use flate2::read::DeflateDecoder;
     use std::io::Read;
 
-    let bytes = base64::engine::general_purpose::STANDARD.decode(compressed).ok()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(compressed)
+        .ok()?;
     let mut decoder = DeflateDecoder::new(&bytes[..]);
     let mut json_str = String::new();
     decoder.read_to_string(&mut json_str).ok()?;
