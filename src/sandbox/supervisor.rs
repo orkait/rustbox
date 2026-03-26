@@ -373,11 +373,17 @@ pub fn launch_with_supervisor(
         ));
     }
 
+    // Setup budget: how long we allow for sandbox setup (namespaces, mounts,
+    // chroot, creds, caps, seccomp) before declaring it hung. Normal setup
+    // takes <100ms. If it takes >3s, a kernel operation is blocked and
+    // waiting longer won't help - kill fast and free the worker.
+    const SETUP_BUDGET: Duration = Duration::from_secs(3);
     let wall_limit = req
         .profile
         .wall_time_limit_ms
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_secs(30));
+    let kill_timeout = wall_limit + SETUP_BUDGET;
     let started = Instant::now();
 
     let mut timed_out = false;
@@ -397,7 +403,7 @@ pub fn launch_with_supervisor(
                     interrupted_by_signal = true;
                     interrupt_signal = Some(crate::kernel::signal::received_signal());
                     kill_report = Some(terminate_proxy_group(proxy_pid));
-                } else if started.elapsed() > wall_limit {
+                } else if started.elapsed() > kill_timeout {
                     timed_out = true;
                     kill_report = Some(terminate_proxy_group(proxy_pid));
                 } else if let (Some(limit_usec), Some(controller)) = (cpu_limit_usec, cgroup) {
@@ -458,7 +464,7 @@ pub fn launch_with_supervisor(
     let mut status = read_proxy_status_from_fd(status_read).unwrap_or_else(|e| ProxyStatus {
         exit_code: proxy_exit_code,
         term_signal: proxy_signal,
-        timed_out,
+        timed_out: false, // Proxy never reported - don't pretend it did
         wall_time_ms: started.elapsed().as_millis() as u64,
         stdout: String::new(),
         stderr: String::new(),
@@ -468,8 +474,17 @@ pub fn launch_with_supervisor(
         reaped_descendants: 0,
     });
     let sig_code = interrupt_signal.unwrap_or(0) as i32;
-    if timed_out {
-        status.timed_out = true;
+    // The proxy has its own wall timer (starts after fork, kills payload on timeout).
+    // If proxy reports timed_out=true, it's a real TLE - code ran too long.
+    // If the SUPERVISOR's kill_timeout fires but proxy didn't report timeout,
+    // it means sandbox setup hung - report as InternalError, not TLE.
+    let proxy_reported_timeout = status.timed_out;
+    let supervisor_safety_timeout = timed_out && !proxy_reported_timeout;
+
+    if supervisor_safety_timeout {
+        status.timed_out = false;
+        status.internal_error =
+            Some("sandbox setup exceeded safety timeout (proxy did not respond)".to_string());
     }
     if interrupted_by_signal {
         status.timed_out = false;
@@ -478,8 +493,11 @@ pub fn launch_with_supervisor(
     }
 
     let mut result = status.to_execution_result();
-    if timed_out {
+    if proxy_reported_timeout {
         result.status = ExecutionStatus::TimeLimit;
+        result.success = false;
+    } else if supervisor_safety_timeout {
+        result.status = ExecutionStatus::InternalError;
         result.success = false;
     }
 
@@ -554,11 +572,13 @@ fn launch_degraded(
     let cgroup_backend_selected = cgroup.map(|c| c.backend_name().to_string());
     let started = Instant::now();
 
+    const SETUP_BUDGET: Duration = Duration::from_secs(3);
     let wall_limit = req
         .profile
         .wall_time_limit_ms
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_secs(30));
+    let kill_timeout = wall_limit + SETUP_BUDGET;
 
     let mut cmd = Command::new(&req.profile.command[0]);
     if req.profile.command.len() > 1 {
@@ -692,7 +712,7 @@ fn launch_degraded(
                     interrupt_signal = Some(crate::kernel::signal::received_signal());
                     early_exit = true;
                     break;
-                } else if started.elapsed() > wall_limit {
+                } else if started.elapsed() > kill_timeout {
                     timed_out = true;
                     early_exit = true;
                     break;

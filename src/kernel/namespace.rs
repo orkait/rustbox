@@ -165,19 +165,34 @@ impl NamespaceIsolation {
 pub fn harden_mount_propagation() -> Result<()> {
     use nix::mount::{mount, MsFlags};
 
+    // Make / private non-recursively first (fast, single mount point).
+    // Then make /tmp private recursively (where sandbox workdirs live).
+    // Avoids the expensive MS_REC on / which walks ALL mounts (15+ cgroup
+    // controllers on v1) and contends on the kernel mount lock under
+    // concurrent sandbox creation.
     mount(
         None::<&str>,
         "/",
         None::<&str>,
-        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+        MsFlags::MS_PRIVATE,
         None::<&str>,
     )
     .map_err(|e| {
         IsolateError::Namespace(format!(
-            "CRITICAL: Failed to harden mount propagation (MS_PRIVATE|MS_REC on /): {}",
+            "CRITICAL: Failed to harden mount propagation (MS_PRIVATE on /): {}",
             e
         ))
     })?;
+
+    if std::path::Path::new("/tmp").exists() {
+        let _ = mount(
+            None::<&str>,
+            "/tmp",
+            None::<&str>,
+            MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+            None::<&str>,
+        );
+    }
 
     Ok(())
 }

@@ -337,12 +337,12 @@ pub fn exec_payload(req: &SandboxLaunchRequest) -> Result<()> {
     }
 
     let sandbox = Sandbox::<FreshChild>::new(req.instance_id.clone(), req.profile.strict_mode);
-    let sandbox = sandbox.setup_namespaces(
-        false,
-        req.profile.enable_mount_namespace,
-        req.profile.enable_network_namespace,
-        req.profile.enable_user_namespace,
-    )?;
+    // Namespace creation is handled by the supervisor's clone() call which already
+    // creates PID, IPC, UTS, mount, and network namespaces. The payload child
+    // inherits these - no need to unshare() again. Redundant unshare creates
+    // nested namespaces that double kernel work and can cause hangs under
+    // concurrent load with cgroup v1's coarse locking.
+    let sandbox = sandbox.setup_namespaces(false, false, false, false)?;
     mark_stage(&mut report, STAGE_NAMESPACE_SETUP);
     let sandbox = sandbox.harden_mount_propagation()?;
     mark_stage(&mut report, STAGE_MOUNT_HARDENING);

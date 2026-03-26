@@ -541,6 +541,8 @@ impl FilesystemSecurity {
 
     #[cfg(unix)]
     fn create_chroot_structure(&self, chroot_path: &Path) -> Result<()> {
+        // Only create dirs needed for code execution. "sys" is excluded
+        // (not needed, saves 1 mount syscall and avoids sysfs contention).
         let essential_dirs = [
             "tmp", "dev", "proc", "usr/bin", "bin", "lib", "lib64", "etc",
         ];
@@ -609,10 +611,9 @@ impl FilesystemSecurity {
 
     #[cfg(unix)]
     fn setup_hardened_mounts(&self, chroot_path: &Path) -> Result<()> {
-        let sys_path = chroot_path.join("sys");
-        if sys_path.exists() {
-            self.mount_hardened_sysfs(&sys_path)?;
-        }
+        // Minimal mounts for code execution. Skipped: sysfs (not needed),
+        // shm (not needed). procfs is mounted without hidepid cascade
+        // (single mount instead of 1-4 attempts that contend on mount lock).
 
         let dev_path = chroot_path.join("dev");
         if dev_path.exists() {
@@ -621,15 +622,7 @@ impl FilesystemSecurity {
 
         let proc_path = chroot_path.join("proc");
         if proc_path.exists() {
-            self.mount_hardened_procfs(&proc_path)?;
-        }
-
-        let shm_path = chroot_path.join("dev").join("shm");
-        if !shm_path.exists() {
-            let _ = fs::create_dir_all(&shm_path);
-        }
-        if shm_path.exists() {
-            self.mount_limited_shm(&shm_path)?;
+            self.mount_minimal_procfs(&proc_path)?;
         }
 
         let tmp_path = chroot_path.join("tmp");
@@ -637,6 +630,20 @@ impl FilesystemSecurity {
             self.mount_hardened_tmp(&tmp_path)?;
         }
 
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn mount_minimal_procfs(&self, proc_path: &Path) -> Result<()> {
+        let flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
+        mount_special_fs(
+            proc_path,
+            "proc",
+            flags,
+            None,
+            "minimal procfs",
+            self.strict_mode,
+        )?;
         Ok(())
     }
 

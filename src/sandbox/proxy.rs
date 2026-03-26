@@ -125,8 +125,6 @@ fn wait_for_payload_and_reap(payload_pid: Pid) -> Result<(Option<i32>, Option<i3
 }
 
 fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
-    let start = Instant::now();
-
     let _ = setpgid(Pid::from_raw(0), Pid::from_raw(0));
     crate::exec::preexec::setup_parent_death_signal()?;
 
@@ -164,6 +162,30 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
             ForkResult::Parent { child } => child,
         };
 
+    // Wall timer starts AFTER fork - measures payload execution only,
+    // not proxy setup (namespaces, mounts, creds, caps, seccomp).
+    let start = Instant::now();
+
+    // Proxy-side wall timer: kills the payload at exactly wall_limit.
+    // This is the authoritative timeout - the supervisor's kill_timeout is
+    // only a safety net for when the proxy itself hangs during setup.
+    let wall_limit_ms = req.profile.wall_time_limit_ms;
+    let payload_raw_pid = payload_pid.as_raw();
+    let timer_fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let timer_fired_clone = timer_fired.clone();
+    let _watchdog = wall_limit_ms.map(|ms| {
+        thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(ms));
+            timer_fired_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            // SAFETY: SIGKILL to payload process group. After child exits,
+            // kill returns ESRCH harmlessly (no PID reuse risk in PID namespace).
+            unsafe {
+                libc::kill(-payload_raw_pid, libc::SIGKILL);
+                libc::kill(payload_raw_pid, libc::SIGKILL);
+            }
+        })
+    });
+
     let _ = close(stdin_read);
     let _ = close(stdout_write);
     let _ = close(stderr_write);
@@ -187,6 +209,7 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
         .join()
         .unwrap_or_else(|_| (Vec::new(), OutputIntegrity::WriteError));
 
+    let timed_out = timer_fired.load(std::sync::atomic::Ordering::SeqCst);
     let output_integrity = OutputIntegrity::resolve_combined(&stdout_integrity, &stderr_integrity);
 
     let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
@@ -196,7 +219,7 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
         payload_pid: Some(payload_pid.as_raw()),
         exit_code,
         term_signal,
-        timed_out: false,
+        timed_out,
         wall_time_ms: start.elapsed().as_millis() as u64,
         stdout,
         stderr,
