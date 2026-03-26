@@ -46,7 +46,12 @@ impl CgroupV2 {
                 }
             }
 
-            let probe = format!("{}/probe_{}", base, std::process::id());
+            let probe = format!(
+                "{}/probe_{}_{:?}",
+                base,
+                std::process::id(),
+                std::thread::current().id()
+            );
             if fs::create_dir(&probe).is_ok() {
                 let has_memory = Path::new(&probe).join("memory.max").exists();
                 let _ = fs::remove_dir(&probe);
