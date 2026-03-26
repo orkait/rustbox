@@ -6,6 +6,76 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+pub const DANGEROUS_ENV_VARS: &[&str] = &[
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+    "LD_DEBUG",
+    "LD_PROFILE",
+    "LD_BIND_NOW",
+    "LD_BIND_NOT",
+    "LD_DYNAMIC_WEAK",
+    "LD_USE_LOAD_BIAS",
+    "BASH_ENV",
+    "ENV",
+    "CDPATH",
+    "PYTHONSTARTUP",
+    "PERL5OPT",
+    "RUBYOPT",
+    "NODE_OPTIONS",
+    "IFS",
+    "GCONV_PATH",
+    "HOSTALIASES",
+    "LOCALDOMAIN",
+    "RES_OPTIONS",
+    "http_proxy",
+    "https_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ftp_proxy",
+    "FTP_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "no_proxy",
+    "NO_PROXY",
+    "_JAVA_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+];
+
+pub const JAVA_AGENT_FLAGS: &[&str] = &["-javaagent:", "-agentpath:", "-agentlib:"];
+
+pub fn strip_dangerous_env(env_map: &mut HashMap<String, String>) {
+    for key in DANGEROUS_ENV_VARS {
+        if env_map.remove(*key).is_some() {
+            fs_warn_parts(&[
+                "Removed dangerous environment variable after profile merge: ",
+                key,
+            ]);
+        }
+    }
+
+    let bash_func_keys: Vec<String> = env_map
+        .keys()
+        .filter(|k| k.starts_with("BASH_FUNC_"))
+        .cloned()
+        .collect();
+    for key in &bash_func_keys {
+        env_map.remove(key);
+        fs_warn_parts(&[
+            "Removed dangerous BASH_FUNC_ variable after profile merge: ",
+            key,
+        ]);
+    }
+
+    if let Some(jto) = env_map.get("JAVA_TOOL_OPTIONS") {
+        let lower = jto.to_lowercase();
+        if JAVA_AGENT_FLAGS.iter().any(|flag| lower.contains(flag)) {
+            env_map.remove("JAVA_TOOL_OPTIONS");
+            fs_warn_parts(&["Removed JAVA_TOOL_OPTIONS containing agent flag"]);
+        }
+    }
+}
+
 #[inline]
 fn octal_buf(value: u32, buf: &mut [u8; 12]) -> &str {
     if value == 0 {
@@ -78,11 +148,7 @@ impl EnvHygiene {
     }
 
     pub fn sanitize_environment(&self) -> Result<HashMap<String, String>> {
-        let mut env_map = HashMap::new();
-
-        for (key, value) in env::vars() {
-            env_map.insert(key, value);
-        }
+        let mut env_map: HashMap<String, String> = env::vars().collect();
 
         if self.env_policy.sanitize_ld_vars {
             let ld_vars: &[&str] = &[

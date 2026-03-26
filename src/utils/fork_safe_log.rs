@@ -49,10 +49,37 @@ pub fn fs_warn_parts(parts: &[&str]) {
 }
 
 #[inline]
-pub fn fs_info_parts(_parts: &[&str]) {}
+pub fn fs_info_parts(parts: &[&str]) {
+    if cfg!(debug_assertions) || verbose_sandbox_log() {
+        raw_write(b"[INFO] ");
+        for part in parts {
+            raw_write(part.as_bytes());
+        }
+        raw_write(b"\n");
+    }
+}
 
 #[inline]
-pub fn fs_debug_parts(_parts: &[&str]) {}
+pub fn fs_debug_parts(parts: &[&str]) {
+    if verbose_sandbox_log() {
+        raw_write(b"[DEBUG] ");
+        for part in parts {
+            raw_write(part.as_bytes());
+        }
+        raw_write(b"\n");
+    }
+}
+
+fn verbose_sandbox_log() -> bool {
+    static ENABLED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+    let cached = ENABLED.load(std::sync::atomic::Ordering::Relaxed);
+    if cached != 2 {
+        return cached == 1;
+    }
+    let val = std::env::var_os("RUSTBOX_VERBOSE_LOG").is_some();
+    ENABLED.store(val as u8, std::sync::atomic::Ordering::Relaxed);
+    val
+}
 
 #[inline]
 pub fn fs_warn(msg: &str) {

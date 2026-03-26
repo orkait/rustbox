@@ -268,24 +268,39 @@ async fn deliver_webhook(
         .build()
         .unwrap_or_default();
 
-    let result = client
-        .post(&url)
-        .header("webhook-id", &msg_id)
-        .header("webhook-timestamp", timestamp.to_string())
-        .header("webhook-signature", format!("v1,{}", signature))
-        .header("content-type", "application/json")
-        .body(body)
-        .send()
-        .await;
-
-    match result {
-        Ok(resp) => {
-            info!(%job_id, status = %resp.status(), "webhook delivered");
+    let delays = [0, 1, 5];
+    for (attempt, delay_secs) in delays.iter().enumerate() {
+        if *delay_secs > 0 {
+            tokio::time::sleep(Duration::from_secs(*delay_secs)).await;
         }
-        Err(e) => {
-            warn!(%job_id, url, error = %e, "webhook delivery failed");
+
+        let result = client
+            .post(&url)
+            .header("webhook-id", &msg_id)
+            .header("webhook-timestamp", timestamp.to_string())
+            .header("webhook-signature", format!("v1,{}", signature))
+            .header("content-type", "application/json")
+            .body(body.clone())
+            .send()
+            .await;
+
+        match result {
+            Ok(resp) if resp.status().is_success() || resp.status().is_redirection() => {
+                info!(%job_id, status = %resp.status(), attempt, "webhook delivered");
+                return;
+            }
+            Ok(resp) => {
+                warn!(%job_id, status = %resp.status(), attempt, "webhook rejected by server");
+                if resp.status().as_u16() < 500 {
+                    return;
+                }
+            }
+            Err(e) => {
+                warn!(%job_id, attempt, error = %e, "webhook delivery failed");
+            }
         }
     }
+    error!(%job_id, url, "webhook delivery failed after 3 attempts");
 }
 
 fn sanitize_error(raw: &str) -> String {
@@ -321,11 +336,7 @@ fn execute_in_sandbox(language: &str, code: &str, stdin: &str) -> Result<Executi
 
     let mut config = IsolateConfig::with_language_defaults(language, "rustbox/0".to_string())
         .map_err(|e| format!("config error: {e}"))?;
-    let is_root = std::process::Command::new("id")
-        .arg("-u")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
-        .unwrap_or(false);
+    let is_root = unsafe { libc::geteuid() } == 0;
     if !is_root {
         config.strict_mode = false;
         config.allow_degraded = true;

@@ -1,7 +1,7 @@
 /// This test should FAIL to compile
 /// Attempting to skip cgroup attach and go directly to credential drop
 
-use rustbox::preexec::{Sandbox, FreshChild};
+use rustbox::exec::preexec::{Sandbox, FreshChild};
 
 fn main() {
     let sandbox = Sandbox::<FreshChild>::new("test".to_string(), false);

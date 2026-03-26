@@ -61,34 +61,6 @@ impl From<Submission> for ResultResponse {
     }
 }
 
-#[allow(dead_code)]
-pub fn compress_meta(json: &str) -> String {
-    use base64::Engine;
-    use flate2::write::DeflateEncoder;
-    use flate2::Compression;
-    use std::io::Write;
-
-    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::fast());
-    encoder.write_all(json.as_bytes()).unwrap();
-    let compressed = encoder.finish().unwrap();
-    base64::engine::general_purpose::STANDARD.encode(&compressed)
-}
-
-#[allow(dead_code)]
-pub fn decompress_meta(compressed: &str) -> Option<serde_json::Value> {
-    use base64::Engine;
-    use flate2::read::DeflateDecoder;
-    use std::io::Read;
-
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(compressed)
-        .ok()?;
-    let mut decoder = DeflateDecoder::new(&bytes[..]);
-    let mut json_str = String::new();
-    decoder.read_to_string(&mut json_str).ok()?;
-    serde_json::from_str(&json_str).ok()
-}
-
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
     pub status: String,

@@ -137,40 +137,11 @@ impl CgroupV1 {
     }
 
     fn collect_metric<T>(&self, field_name: &str, result: Result<T>, fallback: T) -> Result<T> {
-        match result {
-            Ok(value) => Ok(value),
-            Err(err) if self.strict_mode => Err(IsolateError::Cgroup(format!(
-                "failed collecting {} in strict mode: {}",
-                field_name, err
-            ))),
-            Err(err) => {
-                log::warn!(
-                    "failed collecting {} in permissive mode: {}",
-                    field_name,
-                    err
-                );
-                Ok(fallback)
-            }
-        }
+        super::cgroup::collect_cgroup_metric(self.strict_mode, field_name, result, fallback)
     }
 
     fn read_u64(path: &Path, field_name: &str) -> Result<u64> {
-        let raw = fs::read_to_string(path).map_err(|e| {
-            IsolateError::Cgroup(format!(
-                "failed to read {} ({}): {}",
-                field_name,
-                path.display(),
-                e
-            ))
-        })?;
-        raw.trim().parse::<u64>().map_err(|e| {
-            IsolateError::Cgroup(format!(
-                "failed to parse {} ({}): {}",
-                field_name,
-                path.display(),
-                e
-            ))
-        })
+        super::cgroup::read_cgroup_u64(path, field_name)
     }
 
     fn read_controller_u64(&self, controller: &str, file: &str) -> Result<u64> {
@@ -192,31 +163,7 @@ impl CgroupV1 {
     }
 
     fn read_optional_limit(path: &Path, field_name: &str) -> Result<Option<u64>> {
-        let raw = match fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => {
-                return Err(IsolateError::Cgroup(format!(
-                    "failed to read {} ({}): {}",
-                    field_name,
-                    path.display(),
-                    err
-                )));
-            }
-        };
-
-        let value = raw.trim();
-        if value == "max" {
-            return Ok(None);
-        }
-        value.parse::<u64>().map(Some).map_err(|err| {
-            IsolateError::Cgroup(format!(
-                "failed to parse {} ({}): {}",
-                field_name,
-                path.display(),
-                err
-            ))
-        })
+        super::cgroup::read_cgroup_optional_limit(path, field_name)
     }
 
     fn write_value(
@@ -225,23 +172,7 @@ impl CgroupV1 {
         strict_mode: bool,
         name: &str,
     ) -> Result<()> {
-        if let Err(err) = fs::write(path, value.to_string()) {
-            if strict_mode {
-                return Err(IsolateError::Cgroup(format!(
-                    "failed to write {} ({}): {}",
-                    name,
-                    path.display(),
-                    err
-                )));
-            }
-            log::warn!(
-                "failed to write {} ({}), continuing in permissive mode: {}",
-                name,
-                path.display(),
-                err
-            );
-        }
-        Ok(())
+        super::cgroup::write_cgroup_value(path, value, strict_mode, name)
     }
 }
 

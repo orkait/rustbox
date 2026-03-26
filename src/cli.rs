@@ -183,7 +183,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             let status_fd = cli.status_fd.ok_or_else(|| {
                 anyhow::anyhow!("--status-fd is required for --internal-role=proxy")
             })?;
-            return crate::core::proxy::run_proxy_role(launch_fd, status_fd).map_err(Into::into);
+            return crate::sandbox::proxy::run_proxy_role(launch_fd, status_fd).map_err(Into::into);
         }
         return Err(anyhow::anyhow!("unsupported internal role: {}", role));
     }
@@ -379,7 +379,7 @@ fn emit_judge_json(
     result: &crate::config::types::ExecutionResult,
     config: &crate::config::types::IsolateConfig,
     language_runtime_envelope: Option<&str>,
-    launch_evidence: Option<&crate::core::types::LaunchEvidence>,
+    launch_evidence: Option<&crate::sandbox::types::LaunchEvidence>,
 ) -> Result<crate::config::types::ExecutionStatus> {
     let evidence = launch_evidence.ok_or_else(|| {
         anyhow::anyhow!(
@@ -388,7 +388,7 @@ fn emit_judge_json(
     })?;
     let capability_report = evidence.to_capability_report();
     let envelope_id = build_envelope_id(config, &capability_report, language_runtime_envelope);
-    let judge_result = crate::utils::json_schema::JudgeResultV1::from_execution_result(
+    let judge_result = crate::verdict::json_schema::JudgeResultV1::from_execution_result(
         result,
         config,
         evidence,

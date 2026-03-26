@@ -1,6 +1,6 @@
 use crate::config::types::{ExecutionResult, IsolateConfig, IsolateError, Result};
 use crate::config::validator::validate_config;
-use crate::core::types::{LaunchEvidence, SandboxLaunchRequest};
+use crate::sandbox::types::{LaunchEvidence, SandboxLaunchRequest};
 use crate::kernel::cgroup::{self, CgroupBackend};
 use crate::observability::audit::events;
 use crate::runtime::security::command_validation;
@@ -220,10 +220,16 @@ impl Isolate {
         );
 
         let outcome =
-            crate::core::supervisor::launch_with_supervisor(request, self.cgroup.as_deref())?;
+            crate::sandbox::supervisor::launch_with_supervisor(request, self.cgroup.as_deref())?;
 
         self.last_launch_evidence = Some(outcome.evidence);
         Ok(outcome.result)
+    }
+
+    fn load_language_config(language: &str) -> Option<crate::config::loader::LanguageConfig> {
+        crate::config::loader::RustBoxConfig::load_default()
+            .ok()
+            .and_then(|cfg| cfg.languages.get(&language.to_lowercase()).cloned())
     }
 
     pub fn execute_code_string(
@@ -232,49 +238,46 @@ impl Isolate {
         code: &str,
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
-        match language.to_lowercase().as_str() {
-            "python" | "py" => self.execute_interpreted(
-                code,
-                "solution.py",
-                &["/usr/bin/python3", "-u"],
-                overrides,
-            ),
-            "javascript" | "js" => self.execute_interpreted(
-                code,
-                "solution.js",
-                &["/usr/local/bin/bun", "run"],
-                overrides,
-            ),
-            "typescript" | "ts" => self.execute_interpreted(
-                code,
-                "solution.ts",
-                &["/usr/local/bin/bun", "run"],
-                overrides,
-            ),
-            "c" => self.compile_and_execute_c(code, overrides),
-            "cpp" | "c++" => self.compile_and_execute_cpp(code, overrides),
-            "go" => self.compile_and_execute_go(code, overrides),
-            "rust" | "rs" => self.compile_and_execute_rust(code, overrides),
-            "java" => self.compile_and_execute_java(code, overrides),
-            _ => Err(IsolateError::Config(format!(
-                "Unsupported language: {}",
-                language
-            ))),
+        let lang_key = match language.to_lowercase().as_str() {
+            "py" => "python".to_string(),
+            "c++" | "cxx" => "cpp".to_string(),
+            "js" => "javascript".to_string(),
+            "ts" => "typescript".to_string(),
+            "rs" => "rust".to_string(),
+            other => other.to_string(),
+        };
+
+        let lang_cfg = Self::load_language_config(&lang_key)
+            .ok_or_else(|| IsolateError::Config(format!("Unsupported language: {}", language)))?;
+
+        if let Some(ref comp) = lang_cfg.compilation {
+            self.compile_and_execute_from_config(code, &lang_key, &lang_cfg, comp, overrides)
+        } else {
+            self.execute_interpreted_from_config(code, &lang_cfg, overrides)
         }
     }
 
-    fn execute_interpreted(
+    fn execute_interpreted_from_config(
         &mut self,
         code: &str,
-        filename: &str,
-        prefix_args: &[&str],
+        lang_cfg: &crate::config::loader::LanguageConfig,
         overrides: &ExecutionOverrides,
     ) -> Result<ExecutionResult> {
         self.ensure_workdir()?;
         self.wipe_workdir();
 
-        let source_file = self.config.workdir.join(filename);
-        let mut command: Vec<String> = prefix_args.iter().map(|s| s.to_string()).collect();
+        let source_file_name = lang_cfg
+            .runtime
+            .source_file
+            .as_deref()
+            .ok_or_else(|| {
+                IsolateError::Config(
+                    "interpreted language must have runtime.source_file".into(),
+                )
+            })?;
+        let source_file = self.config.workdir.join(source_file_name);
+
+        let mut command: Vec<String> = lang_cfg.runtime.command.clone();
         command.push(source_file.to_string_lossy().to_string());
 
         write_source_no_follow(&source_file, code)?;
@@ -283,36 +286,130 @@ impl Isolate {
         result
     }
 
-    fn configure_compile_phase(
+    fn compile_and_execute_from_config(
+        &mut self,
+        code: &str,
+        lang_key: &str,
+        lang_cfg: &crate::config::loader::LanguageConfig,
+        comp: &crate::config::loader::CompilationConfig,
+        overrides: &ExecutionOverrides,
+    ) -> Result<ExecutionResult> {
+        self.ensure_workdir()?;
+        self.wipe_workdir();
+
+        let class_name = if lang_key == "java" {
+            extract_java_class_name(code).unwrap_or_else(|| "Main".to_string())
+        } else {
+            "Main".to_string()
+        };
+
+        let source_name = comp
+            .source_file
+            .replace("{class}", &class_name)
+            .replace("{source}", "solution");
+        let source_file = self.config.workdir.join(&source_name);
+        write_source_no_follow(&source_file, code)?;
+
+        let compile_cmd: Vec<String> = comp
+            .command
+            .iter()
+            .map(|arg| {
+                arg.replace("{source}", &source_name)
+                    .replace("{class}", &class_name)
+            })
+            .collect();
+
+        let run_cmd: Vec<String> = lang_cfg
+            .runtime
+            .command
+            .iter()
+            .map(|arg| arg.replace("{class}", &class_name))
+            .collect();
+
+        let saved = self.config.clone();
+        Self::apply_compile_limits(&mut self.config, &saved, comp, overrides);
+        self.update_cgroup_limits();
+
+        let compile_result = match self.execute(&compile_cmd, None) {
+            Ok(r) => r,
+            Err(e) => {
+                self.config = saved;
+                self.update_cgroup_limits();
+                self.wipe_workdir();
+                return Err(e);
+            }
+        };
+
+        if !compile_result.success {
+            self.config = saved;
+            self.update_cgroup_limits();
+            self.wipe_workdir();
+            let prefix = format!("{} Compilation Error", lang_key);
+            return Ok(Self::build_compile_failure_result(
+                compile_result,
+                &prefix,
+                "compilation failed",
+            ));
+        }
+
+        let _ = fs::remove_file(&source_file);
+        self.config = saved;
+        self.update_cgroup_limits();
+        let result = self.execute_with_overrides(&run_cmd, overrides);
+        self.wipe_workdir();
+        result
+    }
+
+    fn apply_compile_limits(
         config: &mut IsolateConfig,
         original: &IsolateConfig,
+        comp: &crate::config::loader::CompilationConfig,
         overrides: &ExecutionOverrides,
-        default_memory_mb: u64,
-        min_process_limit: u32,
     ) {
+        let limits = comp.limits.as_ref();
         let is_root = unsafe { libc::geteuid() } == 0;
         if !is_root {
             config.strict_mode = false;
             config.allow_degraded = true;
         }
-        config.process_limit = Some(min_process_limit);
+
+        use crate::config::loader::{
+            default_compile_cpu_time_sec, default_compile_max_processes,
+            default_compile_memory_mb, default_compile_wall_time_sec,
+        };
+        let mem_mb = limits.map(|l| l.memory_mb).unwrap_or_else(default_compile_memory_mb);
         config.memory_limit = Some(
             overrides
                 .max_memory
                 .map(|mb| mb * 1024 * 1024)
-                .unwrap_or(default_memory_mb * 1024 * 1024),
+                .unwrap_or(mem_mb * 1024 * 1024),
         );
+        config.process_limit =
+            Some(limits.map(|l| l.max_processes).unwrap_or_else(default_compile_max_processes));
+
+        let cpu = limits.map(|l| l.cpu_time_sec).unwrap_or_else(default_compile_cpu_time_sec);
+        let wall = limits.map(|l| l.wall_time_sec).unwrap_or_else(default_compile_wall_time_sec);
         let orig_cpu = original.cpu_time_limit.map(|d| d.as_secs()).unwrap_or(8);
-        let orig_wall = original.wall_time_limit.map(|d| d.as_secs()).unwrap_or(10);
-        let cpu = overrides
+        let orig_wall = original
+            .wall_time_limit
+            .map(|d| d.as_secs())
+            .unwrap_or(10);
+        let final_cpu = overrides
             .max_cpu
             .or(overrides.max_time)
             .unwrap_or(orig_cpu)
-            .max(15);
-        let wall = overrides.max_wall_time.unwrap_or(orig_wall).max(30);
-        config.cpu_time_limit = Some(Duration::from_secs(cpu));
-        config.time_limit = Some(Duration::from_secs(cpu));
-        config.wall_time_limit = Some(Duration::from_secs(wall));
+            .max(cpu);
+        let final_wall = overrides.max_wall_time.unwrap_or(orig_wall).max(wall);
+        config.cpu_time_limit = Some(Duration::from_secs(final_cpu));
+        config.time_limit = Some(Duration::from_secs(final_cpu));
+        config.wall_time_limit = Some(Duration::from_secs(final_wall));
+
+        if let Some(fd) = limits.and_then(|l| l.fd_limit) {
+            config.fd_limit = Some(fd);
+        }
+        if let Some(fs_mb) = limits.and_then(|l| l.file_size_mb) {
+            config.file_size_limit = Some(fs_mb * 1024 * 1024);
+        }
     }
 
     fn build_compile_failure_result(
@@ -352,230 +449,6 @@ impl Isolate {
             signal: None,
             error_message: Some(msg.to_string()),
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn compile_and_execute<F>(
-        &mut self,
-        code: &str,
-        source_file: PathBuf,
-        compile_cmd: Vec<String>,
-        run_cmd: Vec<String>,
-        overrides: &ExecutionOverrides,
-        prefix: &str,
-        msg: &str,
-        mut configure: F,
-    ) -> Result<ExecutionResult>
-    where
-        F: FnMut(&mut IsolateConfig, &IsolateConfig, &ExecutionOverrides),
-    {
-        self.ensure_workdir()?;
-        self.wipe_workdir();
-        write_source_no_follow(&source_file, code)?;
-
-        let saved = self.config.clone();
-        configure(&mut self.config, &saved, overrides);
-        self.update_cgroup_limits();
-
-        let compile_result = match self.execute(&compile_cmd, None) {
-            Ok(r) => r,
-            Err(e) => {
-                self.config = saved;
-                self.update_cgroup_limits();
-                self.wipe_workdir();
-                return Err(e);
-            }
-        };
-
-        if !compile_result.success {
-            self.config = saved;
-            self.update_cgroup_limits();
-            self.wipe_workdir();
-            return Ok(Self::build_compile_failure_result(
-                compile_result,
-                prefix,
-                msg,
-            ));
-        }
-
-        let _ = fs::remove_file(&source_file);
-        self.config = saved;
-        self.update_cgroup_limits();
-        let result = self.execute_with_overrides(&run_cmd, overrides);
-        self.wipe_workdir();
-        result
-    }
-
-    fn compile_and_execute_c(
-        &mut self,
-        code: &str,
-        overrides: &ExecutionOverrides,
-    ) -> Result<ExecutionResult> {
-        self.ensure_workdir()?;
-        let src = self.config.workdir.join("solution.c");
-        self.compile_and_execute(
-            code,
-            src,
-            vec![
-                "/usr/bin/gcc".into(),
-                "-pipe".into(),
-                "-o".into(),
-                "solution".into(),
-                "solution.c".into(),
-                "-std=c17".into(),
-                "-O2".into(),
-                "-lm".into(),
-                "-DONLINE_JUDGE".into(),
-            ],
-            vec!["./solution".into()],
-            overrides,
-            "Compilation Error",
-            "Compilation failed",
-            |c, o, v| Self::configure_compile_phase(c, o, v, 256, 120),
-        )
-    }
-
-    fn compile_and_execute_go(
-        &mut self,
-        code: &str,
-        overrides: &ExecutionOverrides,
-    ) -> Result<ExecutionResult> {
-        self.ensure_workdir()?;
-        let src = self.config.workdir.join("solution.go");
-        self.compile_and_execute(
-            code,
-            src,
-            vec![
-                "/usr/local/go/bin/go".into(),
-                "build".into(),
-                "-trimpath".into(),
-                "-ldflags".into(),
-                "-s -w".into(),
-                "-o".into(),
-                "solution".into(),
-                "solution.go".into(),
-            ],
-            vec!["./solution".into()],
-            overrides,
-            "Compilation Error",
-            "Compilation failed",
-            |c, o, v| {
-                Self::configure_compile_phase(c, o, v, 1024, 1024);
-                c.fd_limit = Some(1024);
-                c.file_size_limit = Some(256 * 1024 * 1024);
-                c.environment.push(("CGO_ENABLED".into(), "0".into()));
-                c.environment
-                    .push(("GOCACHE".into(), "/tmp/go-cache".into()));
-                c.environment.push(("GOPATH".into(), "/tmp/gopath".into()));
-                c.environment.push(("GOTMPDIR".into(), "/tmp".into()));
-                c.environment.push(("GONOSUMCHECK".into(), "*".into()));
-                c.environment
-                    .push(("GOFLAGS".into(), "-buildvcs=false".into()));
-                c.environment.push(("HOME".into(), "/tmp".into()));
-            },
-        )
-    }
-
-    fn compile_and_execute_rust(
-        &mut self,
-        code: &str,
-        overrides: &ExecutionOverrides,
-    ) -> Result<ExecutionResult> {
-        self.ensure_workdir()?;
-        let src = self.config.workdir.join("solution.rs");
-        self.compile_and_execute(
-            code,
-            src,
-            vec![
-                "/usr/local/bin/rustc".into(),
-                "-O".into(),
-                "--edition".into(),
-                "2021".into(),
-                "-C".into(),
-                "codegen-units=1".into(),
-                "-o".into(),
-                "solution".into(),
-                "solution.rs".into(),
-            ],
-            vec!["./solution".into()],
-            overrides,
-            "Compilation Error",
-            "Compilation failed",
-            |c, o, v| {
-                Self::configure_compile_phase(c, o, v, 1024, 64);
-                c.fd_limit = Some(512);
-                c.file_size_limit = Some(256 * 1024 * 1024);
-            },
-        )
-    }
-
-    fn compile_and_execute_cpp(
-        &mut self,
-        code: &str,
-        overrides: &ExecutionOverrides,
-    ) -> Result<ExecutionResult> {
-        self.ensure_workdir()?;
-        let src = self.config.workdir.join("solution.cpp");
-        self.compile_and_execute(
-            code,
-            src,
-            vec![
-                "/usr/bin/g++".into(),
-                "-pipe".into(),
-                "-o".into(),
-                "solution".into(),
-                "solution.cpp".into(),
-                "-std=c++17".into(),
-                "-O2".into(),
-                "-DONLINE_JUDGE".into(),
-            ],
-            vec!["./solution".into()],
-            overrides,
-            "Compilation Error",
-            "Compilation failed",
-            |c, o, v| Self::configure_compile_phase(c, o, v, 256, 120),
-        )
-    }
-
-    fn compile_and_execute_java(
-        &mut self,
-        code: &str,
-        overrides: &ExecutionOverrides,
-    ) -> Result<ExecutionResult> {
-        self.ensure_workdir()?;
-        let class = extract_java_class_name(code).unwrap_or_else(|| "Main".to_string());
-        let src = self.config.workdir.join(format!("{}.java", class));
-        self.compile_and_execute(
-            code,
-            src,
-            vec![
-                "javac".into(),
-                "-encoding".into(),
-                "UTF-8".into(),
-                "-proc:none".into(),
-                "-cp".into(),
-                ".".into(),
-                format!("{}.java", class),
-            ],
-            vec![
-                "java".into(),
-                "-Xmx256m".into(),
-                "-Xms32m".into(),
-                "-Xss64m".into(),
-                "-XX:+UseSerialGC".into(),
-                "-XX:+ExitOnOutOfMemoryError".into(),
-                "-XX:TieredStopAtLevel=1".into(),
-                "-XX:MaxMetaspaceSize=64m".into(),
-                "-Dfile.encoding=UTF-8".into(),
-                "-cp".into(),
-                ".".into(),
-                class,
-            ],
-            overrides,
-            "Java Compilation Error",
-            "Java compilation failed",
-            |c, o, v| Self::configure_compile_phase(c, o, v, 512, 1024),
-        )
     }
 
     fn wipe_workdir(&self) {

@@ -1,5 +1,5 @@
 use crate::config::types::{IsolateError, Result};
-use crate::core::types::SandboxLaunchRequest;
+use crate::sandbox::types::SandboxLaunchRequest;
 use crate::exec::preexec::{FreshChild, Sandbox};
 use crate::utils::fork_safe_log::{fs_debug_parts, fs_warn_parts, itoa_buf, itoa_i32, raw_write};
 

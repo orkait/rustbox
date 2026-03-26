@@ -100,11 +100,21 @@ async fn validate_webhook_url(url: &str, allow_localhost: bool) -> Result<(), St
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    use sha2::{Digest, Sha256};
-    let hash_a = Sha256::digest(a);
-    let hash_b = Sha256::digest(b);
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    // HMAC-based comparison: constant-time regardless of input length.
+    // Both sides are MACed with a fixed key so timing reveals nothing.
+    let fixed_key = b"rustbox-api-key-comparison";
+    let mut mac_a = Hmac::<Sha256>::new_from_slice(fixed_key).unwrap();
+    mac_a.update(a);
+    let tag_a = mac_a.finalize().into_bytes();
+
+    let mut mac_b = Hmac::<Sha256>::new_from_slice(fixed_key).unwrap();
+    mac_b.update(b);
+    let tag_b = mac_b.finalize().into_bytes();
+
     let mut diff = 0u8;
-    for (x, y) in hash_a.iter().zip(hash_b.iter()) {
+    for (x, y) in tag_a.iter().zip(tag_b.iter()) {
         diff |= x ^ y;
     }
     diff == 0
@@ -132,12 +142,20 @@ async fn submit(
     Json(req): Json<SubmitRequest>,
 ) -> impl IntoResponse {
     if let Some(ref limiter) = state.rate_limiter {
-        let ip = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split(',').next())
-            .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
-            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        let ip = if state.trust_proxy_headers {
+            headers
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.split(',').next())
+                .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+                .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
+        } else {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok())
+                .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
+        };
         if !limiter.check(ip) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
@@ -323,7 +341,8 @@ async fn submit(
             .into_response();
     }
 
-    let poll_interval = std::time::Duration::from_millis(state.sync_poll_interval_ms);
+    const SYNC_POLL_INTERVAL_MS: u64 = 200;
+    let poll_interval = std::time::Duration::from_millis(SYNC_POLL_INTERVAL_MS);
     let max_wait = std::time::Duration::from_secs(state.sync_wait_timeout_secs);
     let deadline = tokio::time::Instant::now() + max_wait;
 

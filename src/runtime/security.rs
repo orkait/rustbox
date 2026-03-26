@@ -140,12 +140,14 @@ pub mod command_validation {
     }
 
     fn validate_path_security(path: &Path) -> Result<()> {
-        let path_str = path.to_string_lossy();
-
-        if path_str.contains("..") {
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err(SecurityError::PathTraversal.into());
         }
 
+        let path_str = path.to_string_lossy();
         let secure_prefixes = [
             "/usr/bin/",
             "/usr/local/bin/",
@@ -290,7 +292,14 @@ pub mod path_validation {
             return Err(SecurityError::ChrootEscape.into());
         }
 
-        if path_str.contains("..") || path_str.contains("~") {
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(SecurityError::PathTraversal.into());
+        }
+
+        if path_str.contains('~') {
             return Err(SecurityError::PathTraversal.into());
         }
 

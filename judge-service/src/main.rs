@@ -79,11 +79,7 @@ async fn main() -> anyhow::Result<()> {
         .map(rustbox::kernel::cgroup::backend_type_name)
         .map(str::to_string);
     let namespace_support = rustbox::kernel::namespace::NamespaceIsolation::is_supported();
-    let is_root = std::process::Command::new("id")
-        .arg("-u")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
-        .unwrap_or(false);
+    let is_root = unsafe { libc::geteuid() } == 0;
     let enforcement_mode = match (&cgroup_backend, namespace_support, is_root) {
         (Some(_), true, true) => "strict",
         (Some(_), _, _) | (_, true, _) => "degraded",
@@ -107,12 +103,12 @@ async fn main() -> anyhow::Result<()> {
         max_code_bytes: cfg.max_code_bytes,
         max_stdin_bytes: cfg.max_stdin_bytes,
         sync_wait_timeout_secs: cfg.sync_wait_timeout_secs,
-        sync_poll_interval_ms: cfg.sync_poll_interval_ms,
         webhook_timeout_secs: cfg.webhook_timeout_secs,
         cgroup_backend,
         namespace_support,
         enforcement_mode,
         available_languages,
+        trust_proxy_headers: cfg.trust_proxy_headers,
         rate_limiter: if cfg.rate_limit_per_minute > 0 {
             info!(rpm = cfg.rate_limit_per_minute, "rate limiting enabled");
             Some(std::sync::Arc::new(
@@ -179,7 +175,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("server stopped, draining in-flight workers...");
 
-    let drain_timeout = Duration::from_secs(35);
+    let drain_timeout = Duration::from_secs(cfg.drain_timeout_secs);
     match tokio::time::timeout(drain_timeout, async {
         for handle in _worker_handles {
             let _ = handle.await;

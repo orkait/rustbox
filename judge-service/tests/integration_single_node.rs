@@ -47,7 +47,6 @@ async fn start_server() -> (String, Arc<dyn judge_service::database::Database>) 
         max_code_bytes: 64 * 1024,
         max_stdin_bytes: 256 * 1024,
         sync_wait_timeout_secs: 30,
-        sync_poll_interval_ms: 200,
         webhook_timeout_secs: 10,
         cgroup_backend: None,
         namespace_support: false,
@@ -60,6 +59,7 @@ async fn start_server() -> (String, Arc<dyn judge_service::database::Database>) 
             "javascript".to_string(),
             "typescript".to_string(),
         ],
+        trust_proxy_headers: false,
         rate_limiter: None,
     };
 

@@ -16,10 +16,10 @@ const REQUIRED_CAP_LINES: [&str; 5] = ["CapInh:", "CapPrm:", "CapEff:", "CapBnd:
 pub struct CapabilityNumber(u32);
 
 impl CapabilityNumber {
-    pub const MAX_CAP: u32 = 40;
+    pub const MAX_SUPPORTED: u32 = 63;
 
     pub fn new(cap: u32) -> Option<Self> {
-        if cap <= Self::MAX_CAP {
+        if cap <= Self::MAX_SUPPORTED {
             Some(Self(cap))
         } else {
             None
@@ -29,6 +29,13 @@ impl CapabilityNumber {
     pub const fn value(self) -> u32 {
         self.0
     }
+}
+
+fn kernel_last_cap() -> u32 {
+    fs::read_to_string("/proc/sys/kernel/cap_last_cap")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(40)
 }
 
 pub fn drop_all_capabilities() -> Result<()> {
@@ -55,8 +62,9 @@ pub fn drop_all_capabilities_strict(strict_mode: bool) -> Result<()> {
 }
 
 fn drop_bounding_capabilities() -> Result<()> {
+    let last_cap = kernel_last_cap();
     let mut failures = Vec::new();
-    for cap in 0..=CapabilityNumber::MAX_CAP {
+    for cap in 0..=last_cap {
         // SAFETY: prctl(PR_CAPBSET_DROP) is safe for any cap number.
         let rc = unsafe { libc::prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) };
         if rc != 0 {
@@ -211,6 +219,7 @@ pub fn set_no_new_privs() -> Result<()> {
     Ok(())
 }
 
+#[must_use = "check the returned value to verify NO_NEW_PRIVS state"]
 pub fn check_no_new_privs() -> Result<bool> {
     // SAFETY: PR_GET_NO_NEW_PRIVS is read-only.
     let rc = unsafe { libc::prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
@@ -223,8 +232,9 @@ pub fn check_no_new_privs() -> Result<bool> {
 }
 
 pub fn get_bounding_set() -> Result<Vec<CapabilityNumber>> {
+    let last_cap = kernel_last_cap();
     let mut caps = Vec::new();
-    for cap in 0..=CapabilityNumber::MAX_CAP {
+    for cap in 0..=last_cap {
         // SAFETY: PR_CAPBSET_READ is read-only.
         let rc = unsafe { libc::prctl(PR_CAPBSET_READ, cap, 0, 0, 0) };
         if rc == 1 {
@@ -234,6 +244,7 @@ pub fn get_bounding_set() -> Result<Vec<CapabilityNumber>> {
     Ok(caps)
 }
 
+#[must_use = "returns capability status string"]
 pub fn get_capability_status() -> Result<String> {
     let status = fs::read_to_string("/proc/self/status")
         .map_err(|e| IsolateError::Privilege(format!("failed to read /proc/self/status: {}", e)))?;
@@ -244,6 +255,7 @@ pub fn get_capability_status() -> Result<String> {
     Ok(lines.join("\n"))
 }
 
+#[must_use]
 pub fn get_current_ids() -> String {
     #[cfg(target_os = "linux")]
     {
@@ -270,8 +282,16 @@ mod tests {
     #[test]
     fn capability_number_range_is_checked() {
         assert!(CapabilityNumber::new(0).is_some());
-        assert!(CapabilityNumber::new(40).is_some());
-        assert!(CapabilityNumber::new(41).is_none());
+        assert!(CapabilityNumber::new(41).is_some());
+        assert!(CapabilityNumber::new(63).is_some());
+        assert!(CapabilityNumber::new(64).is_none());
+    }
+
+    #[test]
+    fn kernel_last_cap_is_sane() {
+        let last = kernel_last_cap();
+        assert!(last >= 36, "kernel should support at least CAP_MAC_ADMIN(36)");
+        assert!(last <= CapabilityNumber::MAX_SUPPORTED);
     }
 
     #[test]

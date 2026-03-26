@@ -437,6 +437,7 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
     Some(num)
 }
 
+#[must_use]
 pub fn builtin_deny_list_names() -> Vec<&'static str> {
     BUILTIN_DENY_LIST.iter().map(|r| r.name).collect()
 }

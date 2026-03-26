@@ -6,73 +6,85 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanguageConfig {
-    pub memory: MemoryConfig,
-    pub time: TimeConfig,
-    pub processes: ProcessConfig,
-    pub filesystem: FilesystemConfig,
+    pub limits: LimitsConfig,
+    #[serde(default)]
+    pub compilation: Option<CompilationConfig>,
+    pub runtime: RuntimeConfig,
+    #[serde(default)]
     pub environment: HashMap<String, String>,
-    pub compilation: CompilationConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryConfig {
-    pub limit_mb: u64,
-    pub limit_kb: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TimeConfig {
-    pub cpu_time_seconds: u64,
-    pub wall_time_seconds: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProcessConfig {
+pub struct LimitsConfig {
+    pub memory_mb: u64,
+    #[serde(default)]
+    pub virtual_memory_mb: Option<u64>,
+    pub cpu_time_sec: u64,
+    pub wall_time_sec: u64,
     pub max_processes: u32,
-    pub max_forks: Option<u32>,
-    pub max_threads: Option<u32>,
+    #[serde(default = "default_max_file_size_kb")]
+    pub max_file_size_kb: u64,
+    #[serde(default = "default_max_open_files")]
+    pub max_open_files: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilesystemConfig {
-    pub max_file_size_kb: u64,
-    pub max_open_files: u32,
-    pub additional_read_only_paths: Vec<String>,
-    pub required_binaries: Vec<String>,
-}
+fn default_max_file_size_kb() -> u64 { 1024 }
+fn default_max_open_files() -> u32 { 64 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompilationConfig {
-    pub enabled: bool,
-    pub compiler: String,
-    pub compiler_args: Vec<String>,
-    pub max_compilation_time: Option<u64>,
-    pub max_compilation_memory_mb: Option<u64>,
+    pub command: Vec<String>,
+    pub source_file: String,
+    #[serde(default)]
+    pub limits: Option<CompilationLimits>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompilationLimits {
+    #[serde(default = "default_compile_memory_mb")]
+    pub memory_mb: u64,
+    #[serde(default = "default_compile_max_processes")]
+    pub max_processes: u32,
+    #[serde(default = "default_compile_cpu_time_sec")]
+    pub cpu_time_sec: u64,
+    #[serde(default = "default_compile_wall_time_sec")]
+    pub wall_time_sec: u64,
+    #[serde(default)]
+    pub fd_limit: Option<u64>,
+    #[serde(default)]
+    pub file_size_mb: Option<u64>,
+}
+
+pub fn default_compile_memory_mb() -> u64 { 256 }
+pub fn default_compile_max_processes() -> u32 { 120 }
+pub fn default_compile_cpu_time_sec() -> u64 { 15 }
+pub fn default_compile_wall_time_sec() -> u64 { 30 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    pub command: Vec<String>,
+    pub source_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RustBoxConfig {
-    pub isolate: IsolateGlobalConfig,
-    pub security: SecurityConfig,
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
     pub languages: HashMap<String, LanguageConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IsolateGlobalConfig {
-    pub box_dir: String,
-    pub run_dir: String,
-    pub user: String,
-    pub group: String,
-    pub preserve_env: Vec<String>,
+pub struct SandboxConfig {
+    #[serde(default = "default_tmpfs_size_mb")]
+    pub tmpfs_size_mb: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SecurityConfig {
-    pub drop_capabilities: bool,
-    pub use_namespaces: bool,
-    pub use_cgroups: bool,
-    pub no_new_privileges: bool,
-    pub chroot_jail: bool,
+fn default_tmpfs_size_mb() -> u64 { 256 }
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self { tmpfs_size_mb: default_tmpfs_size_mb() }
+    }
 }
 
 impl RustBoxConfig {
@@ -150,47 +162,38 @@ impl IsolateConfig {
         };
 
         if let Ok(rustbox_config) = RustBoxConfig::load_default() {
-            if let Some(lang_config) = rustbox_config.get_language_config(language) {
-                config.memory_limit = Some(lang_config.memory.limit_mb * 1024 * 1024);
+            if let Some(lang) = rustbox_config.get_language_config(language) {
+                let l = &lang.limits;
+                config.memory_limit = Some(l.memory_mb * 1024 * 1024);
+                config.cpu_time_limit = Some(Duration::from_secs(l.cpu_time_sec));
+                config.wall_time_limit = Some(Duration::from_secs(l.wall_time_sec));
+                config.time_limit = Some(Duration::from_secs(l.cpu_time_sec));
+                config.process_limit = Some(l.max_processes);
+                config.file_size_limit = Some(l.max_file_size_kb * 1024);
+                config.fd_limit = Some(l.max_open_files as u64);
+                config.virtual_memory_limit = l.virtual_memory_mb
+                    .map(|v| v * 1024 * 1024)
+                    .or(Some(1024 * 1024 * 1024));
+                config.tmpfs_size_bytes =
+                    Some(rustbox_config.sandbox.tmpfs_size_mb * 1024 * 1024);
 
-                config.cpu_time_limit =
-                    Some(Duration::from_secs(lang_config.time.cpu_time_seconds));
-                config.wall_time_limit =
-                    Some(Duration::from_secs(lang_config.time.wall_time_seconds));
-                config.time_limit = Some(Duration::from_secs(lang_config.time.cpu_time_seconds));
-
-                config.process_limit = Some(lang_config.processes.max_processes);
-
-                config.file_size_limit = Some(lang_config.filesystem.max_file_size_kb * 1024);
-                config.fd_limit = Some(lang_config.filesystem.max_open_files as u64);
-
-                config.virtual_memory_limit = Some(match language.to_lowercase().as_str() {
-                    "java" => 4 * 1024 * 1024 * 1024_u64,
-                    "typescript" => 2 * 1024 * 1024 * 1024_u64,
-                    "javascript" => 512 * 1024 * 1024_u64,
-                    _ => 1024 * 1024 * 1024_u64,
-                });
-
-                for (key, value) in &lang_config.environment {
+                for (key, value) in &lang.environment {
                     config.environment.push((key.clone(), value.clone()));
                 }
 
-                eprintln!("📋 Loaded config.json defaults for {}:", language);
-                eprintln!("   Memory: {} MB", lang_config.memory.limit_mb);
-                eprintln!("   CPU time: {} seconds", lang_config.time.cpu_time_seconds);
-                eprintln!(
-                    "   Wall time: {} seconds",
-                    lang_config.time.wall_time_seconds
-                );
-                eprintln!("   Max processes: {}", lang_config.processes.max_processes);
+                eprintln!("Loaded config.json defaults for {}:", language);
+                eprintln!("  Memory: {} MB", l.memory_mb);
+                eprintln!("  CPU time: {} sec", l.cpu_time_sec);
+                eprintln!("  Wall time: {} sec", l.wall_time_sec);
+                eprintln!("  Max processes: {}", l.max_processes);
             } else {
                 eprintln!(
-                    "⚠️  Warning: Language '{}' not found in config.json, using defaults",
+                    "Warning: Language '{}' not found in config.json, using defaults",
                     language
                 );
             }
         } else {
-            eprintln!("⚠️  Warning: Could not load config.json, using hardcoded defaults");
+            eprintln!("Warning: Could not load config.json, using hardcoded defaults");
         }
 
         Ok(config)
@@ -223,14 +226,8 @@ mod tests {
 
     #[test]
     fn virtual_memory_limits_per_language() {
-        assert_eq!(
-            load("java").virtual_memory_limit,
-            Some(4 * 1024 * 1024 * 1024)
-        );
-        assert_eq!(
-            load("python").virtual_memory_limit,
-            Some(1024 * 1024 * 1024)
-        );
+        assert_eq!(load("java").virtual_memory_limit, Some(4096 * 1024 * 1024));
+        assert_eq!(load("python").virtual_memory_limit, Some(1024 * 1024 * 1024));
         assert_eq!(load("cpp").virtual_memory_limit, Some(1024 * 1024 * 1024));
     }
 
@@ -239,5 +236,30 @@ mod tests {
         let c = load("python");
         assert_eq!(c.uid, Some(65534));
         assert_eq!(c.gid, Some(65534));
+    }
+
+    #[test]
+    fn compilation_config_loaded() {
+        let config = RustBoxConfig::load_default().unwrap();
+        let cpp = config.get_language_config("cpp").unwrap();
+        assert!(cpp.compilation.is_some());
+        let comp = cpp.compilation.as_ref().unwrap();
+        assert!(comp.command[0].contains("g++"));
+        assert_eq!(comp.source_file, "solution.cpp");
+
+        let py = config.get_language_config("python").unwrap();
+        assert!(py.compilation.is_none());
+    }
+
+    #[test]
+    fn runtime_config_loaded() {
+        let config = RustBoxConfig::load_default().unwrap();
+        let py = config.get_language_config("python").unwrap();
+        assert_eq!(py.runtime.command[0], "/usr/bin/python3");
+        assert_eq!(py.runtime.source_file.as_deref(), Some("solution.py"));
+
+        let cpp = config.get_language_config("cpp").unwrap();
+        assert_eq!(cpp.runtime.command[0], "./solution");
+        assert!(cpp.runtime.source_file.is_none());
     }
 }

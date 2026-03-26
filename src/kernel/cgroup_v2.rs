@@ -116,26 +116,11 @@ impl CgroupV2 {
     }
 
     fn read_u64_file(path: &Path, name: &str) -> Result<u64> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| IsolateError::Cgroup(format!("failed to read {}: {}", name, e)))?;
-        content
-            .trim()
-            .parse::<u64>()
-            .map_err(|e| IsolateError::Cgroup(format!("failed to parse {}: {}", name, e)))
+        super::cgroup::read_cgroup_u64(path, name)
     }
 
     fn read_optional_limit(path: &Path, name: &str) -> Result<Option<u64>> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| IsolateError::Cgroup(format!("failed to read {}: {}", name, e)))?;
-        let value = content.trim();
-        if value == "max" {
-            Ok(None)
-        } else {
-            let parsed = value
-                .parse::<u64>()
-                .map_err(|e| IsolateError::Cgroup(format!("failed to parse {}: {}", name, e)))?;
-            Ok(Some(parsed))
-        }
+        super::cgroup::read_cgroup_optional_limit(path, name)
     }
 
     fn cpu_max_value(limit_usec: u64) -> Result<String> {
@@ -158,34 +143,15 @@ impl CgroupV2 {
     }
 
     fn collect_optional_metric<T>(&self, name: &str, result: Result<T>) -> Result<Option<T>> {
-        self.try_permissive(name, result.map(Some), None)
+        super::cgroup::collect_cgroup_optional_metric(self.strict_mode, name, result)
     }
 
     fn try_permissive<T>(&self, name: &str, result: Result<T>, fallback: T) -> Result<T> {
-        match result {
-            Ok(value) => Ok(value),
-            Err(err) if self.strict_mode => Err(IsolateError::Cgroup(format!(
-                "failed collecting {} in strict mode: {}",
-                name, err
-            ))),
-            Err(err) => {
-                log::warn!("failed collecting {} in permissive mode: {}", name, err);
-                Ok(fallback)
-            }
-        }
+        super::cgroup::collect_cgroup_metric(self.strict_mode, name, result, fallback)
     }
 
     fn write_permissive(&self, path: &Path, value: &str, name: &str) -> Result<()> {
-        if let Err(err) = fs::write(path, value) {
-            if self.strict_mode {
-                return Err(IsolateError::Cgroup(format!(
-                    "failed to set {}: {}",
-                    name, err
-                )));
-            }
-            log::warn!("failed to set {} in permissive mode: {}", name, err);
-        }
-        Ok(())
+        super::cgroup::write_cgroup_value(path, &value, self.strict_mode, name)
     }
 
     fn read_cgroup_field(path: &Path, file_name: &str, field: &str) -> Result<u64> {

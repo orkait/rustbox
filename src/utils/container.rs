@@ -1,9 +1,11 @@
 use std::path::Path;
 
+#[must_use]
 pub fn is_container() -> bool {
     Path::new("/.dockerenv").exists() || Path::new("/run/.containerenv").exists()
 }
 
+#[must_use]
 pub fn docker_cgroup_hint() -> &'static str {
     "Cgroup unavailable inside container. Run with:\n  \
      --cap-add SYS_ADMIN --cap-add SETUID --cap-add SETGID \\\n  \

@@ -2,8 +2,8 @@ use crate::config::types::{
     CgroupEvidence, ExecutionStatus, IsolateError, JudgeAction, JudgeActionType,
     ProcessLifecycleEvidence, Result,
 };
-use crate::core::proxy::{read_proxy_status_from_fd, run_proxy_main_from_fds, write_request_to_fd};
-use crate::core::types::{
+use crate::sandbox::proxy::{read_proxy_status_from_fd, run_proxy_main_from_fds, write_request_to_fd};
+use crate::sandbox::types::{
     KillReport, LaunchEvidence, ProxyStatus, SandboxLaunchOutcome, SandboxLaunchRequest,
 };
 use crate::kernel::cgroup::CgroupBackend;
@@ -11,10 +11,6 @@ use nix::sched::{clone, CloneFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, pipe, Pid};
 use std::time::{Duration, Instant, SystemTime};
-
-fn to_process_error(prefix: &str, err: impl std::fmt::Display) -> IsolateError {
-    IsolateError::Process(format!("{prefix}: {err}"))
-}
 
 fn drain_reader(mut r: impl std::io::Read) -> String {
     let mut s = String::new();
@@ -214,7 +210,8 @@ fn build_launch_evidence(
 }
 
 fn send_signal_with_fallback(pid: Pid, sig: i32, report: &mut KillReport, label: &str) {
-    // SAFETY: sending a POSIX signal to a process group (negative pid) or individual pid
+    // SAFETY: kill(2) with negative pid sends signal to the process group. Falls back to
+    // individual pid if group signal fails (e.g., process not a group leader).
     let rc = unsafe { libc::kill(-pid.as_raw(), sig) };
     if rc != 0 {
         let _ = unsafe { libc::kill(pid.as_raw(), sig) };
@@ -263,8 +260,8 @@ pub fn launch_with_supervisor(
     let cgroup_backend_selected = cgroup.map(|controller| controller.backend_name().to_string());
     let mut cgroup_enforced = false;
 
-    let (launch_read, launch_write) = pipe().map_err(|e| to_process_error("pipe(launch)", e))?;
-    let (status_read, status_write) = pipe().map_err(|e| to_process_error("pipe(status)", e))?;
+    let (launch_read, launch_write) = pipe().map_err(|e| IsolateError::process("pipe(launch)", e))?;
+    let (status_read, status_write) = pipe().map_err(|e| IsolateError::process("pipe(status)", e))?;
 
     let mut clone_flags =
         CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
@@ -285,6 +282,12 @@ pub fn launch_with_supervisor(
         run_proxy_main_from_fds(launch_read, status_write)
     });
 
+    // SAFETY: clone(2) with namespace flags creates a child process in new namespaces.
+    // - child_cb is a boxed closure moved into the child's COW address space (no CLONE_VM).
+    // - child_stack is a 2MB heap buffer whose top is passed as the child's initial stack pointer.
+    // - SIGCHLD ensures the parent receives notification when the child exits.
+    // - The parent retains no references into child_cb or child_stack after clone returns;
+    //   the child operates on its own COW copy.
     let clone_result =
         unsafe { clone(child_cb, &mut child_stack, clone_flags, Some(libc::SIGCHLD)) };
 
@@ -312,7 +315,7 @@ pub fn launch_with_supervisor(
         }
         Err(e) => {
             close_all_pipes(launch_read, launch_write, status_read, status_write);
-            return Err(to_process_error("clone(proxy)", e));
+            return Err(IsolateError::process("clone(proxy)", e));
         }
     };
 
@@ -429,7 +432,7 @@ pub fn launch_with_supervisor(
             Err(nix::errno::Errno::EINTR) => continue,
             Err(e) => {
                 let _ = close(status_read);
-                return Err(to_process_error("waitpid(proxy)", e));
+                return Err(IsolateError::process("waitpid(proxy)", e));
             }
         }
     }
@@ -443,7 +446,7 @@ pub fn launch_with_supervisor(
             Err(nix::errno::Errno::EINTR) => {}
             Err(e) => {
                 let _ = close(status_read);
-                return Err(to_process_error("waitpid(proxy-interrupt)", e));
+                return Err(IsolateError::process("waitpid(proxy-interrupt)", e));
             }
         }
     }
@@ -571,35 +574,17 @@ fn launch_degraded(
         cmd.env(key, value);
     }
 
-    const DEGRADED_ENV_BLOCKLIST: &[&str] = &[
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "LD_AUDIT",
-        "LD_DEBUG",
-        "LD_PROFILE",
-        "LD_BIND_NOW",
-        "LD_BIND_NOT",
-        "LD_DYNAMIC_WEAK",
-        "LD_USE_LOAD_BIAS",
-        "BASH_ENV",
-        "ENV",
-        "CDPATH",
-        "PYTHONSTARTUP",
-        "PERL5OPT",
-        "RUBYOPT",
-        "NODE_OPTIONS",
-        "_JAVA_OPTIONS",
-        "JDK_JAVA_OPTIONS",
-    ];
-    for key in DEGRADED_ENV_BLOCKLIST {
+    for key in crate::utils::env_hygiene::DANGEROUS_ENV_VARS {
         cmd.env_remove(key);
     }
 
-    const JAVA_AGENT_FLAGS: &[&str] = &["-javaagent:", "-agentpath:", "-agentlib:"];
     for (key, value) in &req.profile.environment {
         if key == "JAVA_TOOL_OPTIONS" {
             let lower = value.to_lowercase();
-            if JAVA_AGENT_FLAGS.iter().any(|flag| lower.contains(flag)) {
+            if crate::utils::env_hygiene::JAVA_AGENT_FLAGS
+                .iter()
+                .any(|flag| lower.contains(flag))
+            {
                 cmd.env_remove("JAVA_TOOL_OPTIONS");
                 log::warn!("Removed JAVA_TOOL_OPTIONS containing agent flag in degraded mode");
             }

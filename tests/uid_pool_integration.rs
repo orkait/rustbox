@@ -113,7 +113,7 @@ fn uid_propagates_through_execution_profile() {
     let isolate = rustbox::runtime::isolate::Isolate::new(config).unwrap();
     let uid = isolate.config().uid.unwrap();
 
-    let profile = rustbox::core::types::ExecutionProfile::from_config(
+    let profile = rustbox::sandbox::types::ExecutionProfile::from_config(
         isolate.config(),
         &["/bin/true".to_string()],
         None,
@@ -125,7 +125,7 @@ fn uid_propagates_through_execution_profile() {
     );
     assert_eq!(profile.gid, Some(uid), "ExecutionProfile gid must match");
 
-    let request = rustbox::core::types::SandboxLaunchRequest::from_config(
+    let request = rustbox::sandbox::types::SandboxLaunchRequest::from_config(
         isolate.config(),
         &["/bin/true".to_string()],
         None,

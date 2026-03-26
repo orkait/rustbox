@@ -34,6 +34,7 @@ pub struct ExecutionProfile {
     pub directory_bindings: Vec<DirectoryBinding>,
     pub enable_seccomp: bool,
     pub seccomp_policy_file: Option<std::path::PathBuf>,
+    pub tmpfs_size_bytes: Option<u64>,
 }
 
 impl ExecutionProfile {
@@ -69,6 +70,7 @@ impl ExecutionProfile {
             directory_bindings: config.directory_bindings.clone(),
             enable_seccomp: !config.no_seccomp,
             seccomp_policy_file: config.seccomp_policy_file.clone(),
+            tmpfs_size_bytes: config.tmpfs_size_bytes,
         }
     }
 }

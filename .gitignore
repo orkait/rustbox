@@ -126,3 +126,6 @@ judge-service/*.db-wal
 
 ## Docker
 .wrangler/
+
+## Astro build artifacts
+docs-site/.astro/

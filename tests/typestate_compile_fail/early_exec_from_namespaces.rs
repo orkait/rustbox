@@ -1,7 +1,7 @@
 /// This test should FAIL to compile
 /// Attempting to exec from NamespacesReady state should be impossible
 
-use rustbox::preexec::{Sandbox, FreshChild};
+use rustbox::exec::preexec::{Sandbox, FreshChild};
 
 fn main() {
     let sandbox = Sandbox::<FreshChild>::new("test".to_string(), false);

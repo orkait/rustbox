@@ -2,7 +2,7 @@ pub mod kernel;
 
 pub mod exec;
 
-pub mod core;
+pub mod sandbox;
 
 pub mod verdict;
 
