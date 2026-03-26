@@ -2,7 +2,7 @@
 
 #[cfg(target_os = "linux")]
 mod namespace_tests {
-    use rustbox::kernel::namespace::{NamespaceIsolation, harden_mount_propagation};
+    use rustbox::kernel::namespace::{harden_mount_propagation, NamespaceIsolation};
 
     fn running_as_root() -> bool {
         // SAFETY: geteuid has no side effects and needs no arguments.
@@ -26,9 +26,7 @@ mod namespace_tests {
 
     #[test]
     fn test_namespace_isolation_all_except_user() {
-        let ns = NamespaceIsolation::builder()
-            .with_all_except_user()
-            .build();
+        let ns = NamespaceIsolation::builder().with_all_except_user().build();
 
         let enabled = ns.get_enabled_namespaces();
         assert!(enabled.contains(&"PID"));
@@ -52,9 +50,7 @@ mod namespace_tests {
 
     #[test]
     fn test_namespace_isolation_is_enabled() {
-        let ns_enabled = NamespaceIsolation::builder()
-            .with_pid()
-            .build();
+        let ns_enabled = NamespaceIsolation::builder().with_pid().build();
         assert!(ns_enabled.is_isolation_enabled());
 
         let ns_disabled = NamespaceIsolation::new(false, false, false, false, false, false);
@@ -131,7 +127,9 @@ mod namespace_tests {
         let result = harden_mount_propagation();
         // Either succeeds (if root) or fails with permission error
         if let Err(e) = result {
-            assert!(e.to_string().contains("CRITICAL: Failed to harden mount propagation"));
+            assert!(e
+                .to_string()
+                .contains("CRITICAL: Failed to harden mount propagation"));
         }
     }
 

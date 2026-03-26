@@ -8,7 +8,7 @@ The judge-service exposes a REST API for submitting code, polling results, and r
 ## Base URL
 
 ```
-http://localhost:3000/api
+http://localhost:4096/api
 ```
 
 ## Authentication

@@ -1,0 +1,18 @@
+warning: unreachable statement
+ --> tests/typestate_compile_fail/skip_root_transition.rs:5:5
+  |
+4 |     let sandbox: Sandbox<CgroupAttached> = todo!();
+  |                                            ------- any code following this expression is unreachable
+5 |     let _ = sandbox.drop_credentials(None, None);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+  |
+  = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no method named `drop_credentials` found for struct `Sandbox<CgroupAttached>` in the current scope
+ --> tests/typestate_compile_fail/skip_root_transition.rs:5:21
+  |
+5 |     let _ = sandbox.drop_credentials(None, None);
+  |                     ^^^^^^^^^^^^^^^^ method not found in `Sandbox<CgroupAttached>`
+  |
+  = note: the method was found for
+          - `Sandbox<RootTransitioned>`

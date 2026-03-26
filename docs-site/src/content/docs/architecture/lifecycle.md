@@ -5,7 +5,12 @@ description: The journey of a code submission from arrival to verdict
 
 ## Overview
 
-<img src="/lifecycle.svg" alt="Execution lifecycle flow" style="max-height: 500px; width: auto; display: block; margin: 1rem auto;" />
+```
+┌───────────┐     ┌───────────┐     ┌──────────────────────────────┐     ┌─────────────┐     ┌─────────┐     ┌──────────────┐
+│   new()   │ --> │  compile  │ --> │Supervisor --> Proxy --> Code │ --> │  evidence   │ --> │ verdict │ --> │  cleanup()   │
+│ alloc UID │     │ if needed │     │     typestate --> exec()     │     │ cgroup+wait │     │ pure fn │     │ wipe+release │
+└───────────┘     └───────────┘     └──────────────────────────────┘     └─────────────┘     └─────────┘     └──────────────┘
+```
 
 ## Phase 1: Setup
 
@@ -33,7 +38,7 @@ Supervisor (host)
         └── Payload (namespaced + chrooted + cgroup + seccomp)
 ```
 
-If CPU or wall time expires, the Supervisor kills with `SIGKILL` immediately. Untrusted code doesn't get a graceful shutdown.
+If CPU or wall time expires, the Supervisor sends `SIGTERM` to the process group, waits 200ms, then sends `SIGKILL`. Untrusted code doesn't get a graceful shutdown.
 
 :::note[Design Note]
 The two-process design exists because the Proxy needs to run the typestate chain before exec'ing the payload. `exec()` replaces the process image, so all setup must complete first.

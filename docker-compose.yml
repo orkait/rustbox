@@ -21,8 +21,11 @@ services:
       dockerfile: docker/service/Dockerfile
     cap_add:
       - SYS_ADMIN
+      - SETUID
+      - SETGID
       - NET_ADMIN
-      - SYS_PTRACE
+      - MKNOD
+      - DAC_OVERRIDE
     cap_drop:
       - ALL
     security_opt:

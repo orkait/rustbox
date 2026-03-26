@@ -110,7 +110,7 @@ impl JudgeResultV1 {
     pub fn from_execution_result(
         result: &ExecutionResult,
         config: &IsolateConfig,
-        launch_evidence: &crate::core::types::LaunchEvidence,
+        launch_evidence: &crate::sandbox::types::LaunchEvidence,
         capability_report: CapabilityReport,
         execution_envelope_id: String,
         language_runtime_envelope: Option<String>,
@@ -167,8 +167,10 @@ impl JudgeResultV1 {
             output_limit_bytes: config.file_size_limit,
         };
 
-        let (status, provenance) =
-            crate::verdict::classifier::VerdictClassifier::classify(&evidence_bundle, &limit_snapshot);
+        let (status, provenance) = crate::verdict::classifier::VerdictClassifier::classify(
+            &evidence_bundle,
+            &limit_snapshot,
+        );
         let verdict_provenance = if status == ExecutionStatus::Ok {
             None
         } else {

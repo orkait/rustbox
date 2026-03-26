@@ -248,12 +248,7 @@ impl Database for PgDatabase {
         Ok(row.map(Submission::from))
     }
 
-    async fn mark_running(
-        &self,
-        id: Uuid,
-        node_id: &str,
-        sandbox_id: &str,
-    ) -> anyhow::Result<()> {
+    async fn mark_running(&self, id: Uuid, node_id: &str, sandbox_id: &str) -> anyhow::Result<()> {
         sqlx::query(
             r#"
             UPDATE submissions

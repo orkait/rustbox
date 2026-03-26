@@ -1,7 +1,8 @@
 # ============================================================================
 # Stage 1: builder — compiles rustbox/isolate/judge binaries + QuickJS
 # ============================================================================
-# TODO: Pin to SHA256 digest for production builds
+# For production: pin to digest with `docker pull ubuntu:22.04` then
+# `docker inspect --format='{{index .RepoDigests 0}}' ubuntu:22.04`
 FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -106,6 +107,12 @@ RUN apt-get update \
 RUN groupadd -r -g 65534 sandbox 2>/dev/null || true \
     && useradd -r -u 65534 -g 65534 -s /sbin/nologin sandbox 2>/dev/null || true
 
+# UID pool range (60000-60099) — one user per concurrent sandbox
+RUN for i in $(seq 60000 60099); do \
+        groupadd -r -g $i "sandbox-$i" 2>/dev/null || true; \
+        useradd -r -u $i -g $i -s /sbin/nologin -d /nonexistent "sandbox-$i" 2>/dev/null || true; \
+    done
+
 # Copy binaries from builder (strip = "symbols" in Cargo.toml removes ~700 KB each)
 COPY --from=builder /build/target/release/judge   /usr/local/bin/judge
 COPY --from=builder /build/target/release/isolate /usr/local/bin/isolate
@@ -114,6 +121,7 @@ COPY --from=builder /build/target/release/rustbox /usr/local/bin/rustbox
 # Config
 RUN mkdir -p /etc/rustbox
 COPY config.json /etc/rustbox/config.json
+RUN chmod 644 /etc/rustbox/config.json
 
 # Runtime state dirs
 RUN mkdir -p /var/run/rustbox /tmp/rustbox

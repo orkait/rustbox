@@ -23,9 +23,8 @@ fn init_subsystems() {
 // ---------------------------------------------------------------------------
 
 fn permissive_config(language: &str, box_id: u32) -> IsolateConfig {
-    let mut config =
-        IsolateConfig::with_language_defaults(language, format!("rustbox/{}", box_id))
-            .unwrap_or_default();
+    let mut config = IsolateConfig::with_language_defaults(language, format!("rustbox/{}", box_id))
+        .unwrap_or_default();
     config.strict_mode = false;
     config.allow_degraded = true;
     config.enable_pid_namespace = false;
@@ -35,9 +34,8 @@ fn permissive_config(language: &str, box_id: u32) -> IsolateConfig {
 }
 
 fn strict_config(language: &str, box_id: u32) -> IsolateConfig {
-    let mut config =
-        IsolateConfig::with_language_defaults(language, format!("rustbox/{}", box_id))
-            .unwrap_or_default();
+    let mut config = IsolateConfig::with_language_defaults(language, format!("rustbox/{}", box_id))
+        .unwrap_or_default();
     config.strict_mode = true;
     config
 }
@@ -53,7 +51,12 @@ fn overrides_with_stdin(input: &str) -> ExecutionOverrides {
     }
 }
 
-fn run_permissive(language: &str, box_id: u32, code: &str, overrides: ExecutionOverrides) -> rustbox::config::types::ExecutionResult {
+fn run_permissive(
+    language: &str,
+    box_id: u32,
+    code: &str,
+    overrides: ExecutionOverrides,
+) -> rustbox::config::types::ExecutionResult {
     init_subsystems();
     let config = permissive_config(language, box_id);
     let mut isolate = Isolate::new(config).expect("Isolate::new failed");
@@ -62,7 +65,12 @@ fn run_permissive(language: &str, box_id: u32, code: &str, overrides: ExecutionO
         .expect("execute_code_string failed")
 }
 
-fn run_strict(language: &str, box_id: u32, code: &str, overrides: ExecutionOverrides) -> rustbox::config::types::ExecutionResult {
+fn run_strict(
+    language: &str,
+    box_id: u32,
+    code: &str,
+    overrides: ExecutionOverrides,
+) -> rustbox::config::types::ExecutionResult {
     init_subsystems();
     let config = strict_config(language, box_id);
     let mut isolate = Isolate::new(config).expect("Isolate::new failed");
@@ -78,7 +86,13 @@ fn run_strict(language: &str, box_id: u32, code: &str, overrides: ExecutionOverr
 #[test]
 fn python_hello_world_permissive() {
     let r = run_permissive("python", 100, "print('hello world')", no_overrides());
-    assert_eq!(r.status, ExecutionStatus::Ok, "status: {:?}\nstderr: {}", r.status, r.stderr);
+    assert_eq!(
+        r.status,
+        ExecutionStatus::Ok,
+        "status: {:?}\nstderr: {}",
+        r.status,
+        r.stderr
+    );
     assert_eq!(r.stdout.trim(), "hello world");
     assert_eq!(r.exit_code, Some(0));
 }
@@ -101,7 +115,12 @@ fn python_arithmetic_permissive() {
 #[test]
 fn python_syntax_error_is_runtime_error_permissive() {
     let r = run_permissive("python", 103, "def f(\n  pass", no_overrides());
-    assert_eq!(r.status, ExecutionStatus::RuntimeError, "expected RE for syntax error, got {:?}", r.status);
+    assert_eq!(
+        r.status,
+        ExecutionStatus::RuntimeError,
+        "expected RE for syntax error, got {:?}",
+        r.status
+    );
     assert_ne!(r.exit_code, Some(0));
 }
 
@@ -141,10 +160,16 @@ fn python_cpu_time_limit_enforced_permissive() {
         c
     };
     let mut isolate = Isolate::new(config).expect("Isolate::new");
-    let r = isolate.execute_code_string("python", code, &ov).expect("execute");
+    let r = isolate
+        .execute_code_string("python", code, &ov)
+        .expect("execute");
     assert!(
-        matches!(r.status, ExecutionStatus::TimeLimit | ExecutionStatus::RuntimeError | ExecutionStatus::Signaled),
-        "expected TLE, RE, or Signaled for infinite loop, got {:?}", r.status
+        matches!(
+            r.status,
+            ExecutionStatus::TimeLimit | ExecutionStatus::RuntimeError | ExecutionStatus::Signaled
+        ),
+        "expected TLE, RE, or Signaled for infinite loop, got {:?}",
+        r.status
     );
 }
 
@@ -175,8 +200,16 @@ int main(){std::string s;std::cin>>s;std::cout<<s;}"#;
 fn cpp_compile_error_is_runtime_error_permissive() {
     let code = "this is not valid c++";
     let r = run_permissive("cpp", 202, code, no_overrides());
-    assert_eq!(r.status, ExecutionStatus::RuntimeError, "expected RE for compile error, got {:?}", r.status);
-    assert!(!r.stderr.is_empty(), "compiler error should appear in stderr");
+    assert_eq!(
+        r.status,
+        ExecutionStatus::RuntimeError,
+        "expected RE for compile error, got {:?}",
+        r.status
+    );
+    assert!(
+        !r.stderr.is_empty(),
+        "compiler error should appear in stderr"
+    );
 }
 
 #[test]
@@ -216,7 +249,12 @@ fn java_hello_world_permissive() {
 fn java_compile_error_is_runtime_error_permissive() {
     let code = "this is not valid java";
     let r = run_permissive("java", 301, code, no_overrides());
-    assert_eq!(r.status, ExecutionStatus::RuntimeError, "expected RE for compile error, got {:?}", r.status);
+    assert_eq!(
+        r.status,
+        ExecutionStatus::RuntimeError,
+        "expected RE for compile error, got {:?}",
+        r.status
+    );
 }
 
 #[test]
@@ -239,7 +277,10 @@ fn java_arithmetic_permissive() {
 fn wall_time_is_nonzero_for_real_execution_permissive() {
     let r = run_permissive("python", 400, "print(1)", no_overrides());
     assert_eq!(r.status, ExecutionStatus::Ok);
-    assert!(r.wall_time > 0.0, "wall_time must be > 0 for real execution");
+    assert!(
+        r.wall_time > 0.0,
+        "wall_time must be > 0 for real execution"
+    );
 }
 
 #[test]
@@ -286,7 +327,10 @@ fn python_all_controls_applied_strict() {
 fn python_memory_peak_is_reported_strict() {
     let r = run_strict("python", 502, "x = list(range(100000))", no_overrides());
     assert_eq!(r.status, ExecutionStatus::Ok, "stderr: {}", r.stderr);
-    assert!(r.memory_peak > 0, "memory_peak must be reported in strict mode");
+    assert!(
+        r.memory_peak > 0,
+        "memory_peak must be reported in strict mode"
+    );
 }
 
 #[test]
@@ -301,10 +345,17 @@ fn python_tle_is_classified_strict() {
         c
     };
     let mut isolate = Isolate::new(config).expect("Isolate::new");
-    let r = isolate.execute_code_string("python", code, &no_overrides()).expect("execute");
+    let r = isolate
+        .execute_code_string("python", code, &no_overrides())
+        .expect("execute");
     assert!(
-        matches!(r.status, ExecutionStatus::TimeLimit | ExecutionStatus::Signaled),
-        "expected TLE or Signaled for infinite loop, got {:?}\nstderr: {}", r.status, r.stderr
+        matches!(
+            r.status,
+            ExecutionStatus::TimeLimit | ExecutionStatus::Signaled
+        ),
+        "expected TLE or Signaled for infinite loop, got {:?}\nstderr: {}",
+        r.status,
+        r.stderr
     );
 }
 
@@ -337,6 +388,10 @@ fn cleanup_verified_after_strict_execution() {
     let r = run_strict("python", 800, "print(1)", no_overrides());
     assert_eq!(r.status, ExecutionStatus::Ok);
     // IE verdict would indicate cleanup or evidence failure — must not happen on clean run.
-    assert_ne!(r.status, ExecutionStatus::InternalError,
-        "IE verdict means cleanup/evidence failure: {:?}", r);
+    assert_ne!(
+        r.status,
+        ExecutionStatus::InternalError,
+        "IE verdict means cleanup/evidence failure: {:?}",
+        r
+    );
 }

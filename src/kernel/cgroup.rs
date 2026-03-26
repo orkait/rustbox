@@ -7,7 +7,13 @@ use super::cgroup_v2::CgroupV2;
 pub(crate) fn sanitize_instance_id(instance_id: &str) -> String {
     let sanitized: String = instance_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let trimmed = sanitized.trim_matches('_').to_string();
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." || trimmed.contains("..") {
@@ -66,11 +72,117 @@ impl BackendSelector {
     }
 }
 
+pub(crate) fn read_cgroup_u64(path: &std::path::Path, field_name: &str) -> Result<u64> {
+    let raw = std::fs::read_to_string(path).map_err(|e| {
+        IsolateError::Cgroup(format!(
+            "failed to read {} ({}): {}",
+            field_name,
+            path.display(),
+            e
+        ))
+    })?;
+    raw.trim().parse::<u64>().map_err(|e| {
+        IsolateError::Cgroup(format!(
+            "failed to parse {} ({}): {}",
+            field_name,
+            path.display(),
+            e
+        ))
+    })
+}
+
+pub(crate) fn read_cgroup_optional_limit(
+    path: &std::path::Path,
+    field_name: &str,
+) -> Result<Option<u64>> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(IsolateError::Cgroup(format!(
+                "failed to read {} ({}): {}",
+                field_name,
+                path.display(),
+                err
+            )));
+        }
+    };
+    let value = raw.trim();
+    if value == "max" {
+        return Ok(None);
+    }
+    value.parse::<u64>().map(Some).map_err(|err| {
+        IsolateError::Cgroup(format!(
+            "failed to parse {} ({}): {}",
+            field_name,
+            path.display(),
+            err
+        ))
+    })
+}
+
+pub(crate) fn write_cgroup_value(
+    path: &std::path::Path,
+    value: &impl ToString,
+    strict_mode: bool,
+    name: &str,
+) -> Result<()> {
+    if let Err(err) = std::fs::write(path, value.to_string()) {
+        if strict_mode {
+            return Err(IsolateError::Cgroup(format!(
+                "failed to write {} ({}): {}",
+                name,
+                path.display(),
+                err
+            )));
+        }
+        log::warn!(
+            "failed to write {} ({}), continuing in permissive mode: {}",
+            name,
+            path.display(),
+            err
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn collect_cgroup_metric<T>(
+    strict_mode: bool,
+    field_name: &str,
+    result: Result<T>,
+    fallback: T,
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(err) if strict_mode => Err(IsolateError::Cgroup(format!(
+            "failed collecting {} in strict mode: {}",
+            field_name, err
+        ))),
+        Err(err) => {
+            log::warn!(
+                "failed collecting {} in permissive mode: {}",
+                field_name,
+                err
+            );
+            Ok(fallback)
+        }
+    }
+}
+
+pub(crate) fn collect_cgroup_optional_metric<T>(
+    strict_mode: bool,
+    field_name: &str,
+    result: Result<T>,
+) -> Result<Option<T>> {
+    collect_cgroup_metric(strict_mode, field_name, result.map(Some), None)
+}
+
 pub struct SelectedBackend {
     pub backend_type: CgroupBackendType,
     pub backend: Box<dyn CgroupBackend>,
 }
 
+#[must_use]
 pub fn detect_cgroup_backend() -> Option<CgroupBackendType> {
     if std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
         return Some(CgroupBackendType::V2);
@@ -115,9 +227,14 @@ pub fn select_cgroup_backend(
                 backend_type: CgroupBackendType::V1,
                 backend: Box::new(CgroupV1::new(instance_id, strict_mode)?),
             }),
-            None => Err(IsolateError::Cgroup(
-                "No cgroup backend available on this host".to_string(),
-            )),
+            None => {
+                let mut msg = "No cgroup backend available on this host".to_string();
+                if crate::utils::container::is_container() {
+                    msg.push_str(".\n");
+                    msg.push_str(crate::utils::container::docker_cgroup_hint());
+                }
+                Err(IsolateError::Cgroup(msg))
+            }
         },
         BackendSelector::ForceV1 => match detected {
             Some(CgroupBackendType::V1) => Ok(SelectedBackend {
@@ -137,9 +254,14 @@ pub fn select_cgroup_backend(
                     })
                 }
             }
-            None => Err(IsolateError::Cgroup(
-                "cgroup v1 forced, but no cgroup backend is available".to_string(),
-            )),
+            None => {
+                let mut msg = "cgroup v1 forced, but no cgroup backend is available".to_string();
+                if crate::utils::container::is_container() {
+                    msg.push_str(".\n");
+                    msg.push_str(crate::utils::container::docker_cgroup_hint());
+                }
+                Err(IsolateError::Cgroup(msg))
+            }
         },
     }
 }
@@ -170,7 +292,10 @@ mod tests {
             BackendSelector::from_force_v1(false),
             BackendSelector::AutoPreferV2
         );
-        assert_eq!(BackendSelector::from_force_v1(true), BackendSelector::ForceV1);
+        assert_eq!(
+            BackendSelector::from_force_v1(true),
+            BackendSelector::ForceV1
+        );
     }
 
     #[test]

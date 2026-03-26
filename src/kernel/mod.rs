@@ -15,5 +15,5 @@ pub use contract::{
     EnforcementMode, KernelDomain, KernelRequirement, RequirementLevel, KERNEL_REQUIREMENTS,
     REQUIRED_STAGE_ORDER,
 };
-pub use runtime_exec::exec_payload;
 pub use pipeline::{KernelPipeline, KernelRunReport, KernelStage};
+pub use runtime_exec::exec_payload;

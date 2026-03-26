@@ -37,13 +37,15 @@ Rustbox executes untrusted code inside kernel-enforced sandboxes with determinis
 
 | | Judge0 | Rustbox |
 |---|--------|---------|
-| Deployment | 4 containers (Rails + PG + Redis + worker) | 1 binary + SQLite |
-| Isolation | Docker containers | Linux namespaces + cgroups + seccomp |
-| Syscall filtering | Docker default seccomp | Custom 18-syscall deny-list |
-| Sandbox escape CVEs | [CVE-2024-28185](https://nvd.nist.gov/vuln/detail/CVE-2024-28185) (CVSS 10.0) | Symlink-safe cleanup, O_NOFOLLOW, path validation |
+| Deployment | 4 containers (Rails + PG + Redis + worker) | 1 binary + SQLite, `docker compose up` |
+| Languages | 60+ | 5 (Python, C++, Java, JS, TS) |
+| Isolation | Docker containers (namespaces + cgroups via Docker) | Direct namespaces + cgroups + seccomp + capabilities |
+| Syscall filtering | Docker default seccomp (~300 rules) | Purpose-built 18-syscall deny-list (io_uring gets ENOSYS, not KILL) |
 | Safety model | Runtime checks | Compile-time typestate (misordering = compile error) |
-| Verdicts | Exit code + timing | Kernel evidence bundles (cgroup OOM events, /proc, waitpid) |
-| Cold start | ~200-500ms (Docker spin-up) | ~5-15ms (clone + typestate chain) |
+| Verdicts | Exit code + wall time heuristics | Kernel evidence bundles (cgroup OOM events, /proc, waitpid) |
+| API modes | Polling only | Async polling + sync `?wait=true` + webhooks (HMAC-SHA256) |
+| Security audit | Community-tested, [CVE-2024-28185](https://nvd.nist.gov/vuln/detail/CVE-2024-28185) found and patched | Internal audit: 4 critical + 7 high findings, all resolved |
+| Production use | Hundreds of deployments | Pre-production (v0.1.0) |
 
 ## :rocket: Quick Start
 
@@ -64,21 +66,24 @@ sudo target/release/judge execute-code --strict \
 ### HTTP API (judge service)
 
 ```bash
-# Start the service (SQLite, no external deps)
-cargo run -p judge-service
+# Start the service
+docker compose -f docker-compose.judge.yml up judge -d
 
-# Async submit
-curl -X POST http://localhost:8080/api/submit \
+# Submit and get result (sync mode)
+curl -X POST "http://localhost:4096/api/submit?wait=true" \
   -H "Content-Type: application/json" \
   -d '{"language": "python", "code": "print(42)"}'
+```
 
-# Sync submit (blocks until done)
-curl -X POST "http://localhost:8080/api/submit?wait=true" \
+For production, set `RUSTBOX_API_KEY` to require authentication:
+
+```bash
+RUSTBOX_API_KEY=your-secret docker compose -f docker-compose.judge.yml up judge -d
+
+curl -X POST "http://localhost:4096/api/submit?wait=true" \
   -H "Content-Type: application/json" \
+  -H "x-api-key: your-secret" \
   -d '{"language": "python", "code": "print(42)"}'
-
-# Poll result
-curl http://localhost:8080/api/result/{id}
 ```
 
 <details>
@@ -87,7 +92,7 @@ curl http://localhost:8080/api/result/{id}
 Fire-and-forget with signed callbacks (Standard Webhooks spec):
 
 ```bash
-curl -X POST http://localhost:8080/api/submit \
+curl -X POST http://localhost:4096/api/submit \
   -H "Content-Type: application/json" \
   -d '{
     "language": "python",
@@ -224,7 +229,7 @@ judge-service/    HTTP API: submit, poll, webhooks, SQLite/PostgreSQL
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RUSTBOX_PORT` | 8080 | HTTP listen port |
+| `RUSTBOX_PORT` | 4096 | HTTP listen port |
 | `RUSTBOX_WORKERS` | 2 | Concurrent sandbox workers |
 | `RUSTBOX_QUEUE_SIZE` | 100 | Max pending submissions |
 | `RUSTBOX_DATABASE_URL` | `sqlite:rustbox.db` | SQLite or PostgreSQL URL |
@@ -286,16 +291,66 @@ target/debug/judge check-deps --verbose  # verify language toolchains
 
 ## :whale: Docker
 
+### Docker Compose (recommended)
+
+```bash
+# SQLite mode (single node)
+docker compose -f docker-compose.judge.yml up judge
+
+# PostgreSQL mode (multi-node ready)
+docker compose -f docker-compose.judge.yml --profile postgres up
+```
+
+### Manual docker run
+
 ```bash
 docker build -f docker/base/Dockerfile -t rustbox .
 
-# Single execution
-docker run --privileged rustbox \
-  judge execute-code --strict --language python --code 'print(1)'
+# Judge service with minimal capabilities (no --privileged)
+docker run -p 4096:4096 \
+  --cap-add SYS_ADMIN --cap-add SETUID --cap-add SETGID \
+  --cap-add NET_ADMIN --cap-add MKNOD --cap-add DAC_OVERRIDE \
+  --security-opt seccomp=unconfined \
+  --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  --stop-timeout 45 \
+  rustbox judge-service
 
-# Judge service
-docker run --privileged -p 8080:8080 rustbox \
-  judge-service
+# Single execution (strict mode)
+docker run \
+  --cap-add SYS_ADMIN --cap-add SETUID --cap-add SETGID \
+  --cap-add NET_ADMIN --cap-add MKNOD --cap-add DAC_OVERRIDE \
+  --security-opt seccomp=unconfined \
+  --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  rustbox judge execute-code --strict --language python --code 'print(1)'
+```
+
+<details>
+<summary><strong>Why not --privileged?</strong></summary>
+
+`--privileged` gives the container full host capabilities, access to all devices, and disables Docker's seccomp profile. If an attacker escapes rustbox's sandbox inside a `--privileged` container, they get full host access.
+
+The minimal capability set above gives rustbox exactly what it needs for strict mode:
+
+| Capability | Used for |
+|------------|----------|
+| `SYS_ADMIN` | clone with new namespaces, mount, chroot |
+| `SETUID` / `SETGID` | Credential drop to sandbox UID |
+| `NET_ADMIN` | Network namespace loopback setup |
+| `MKNOD` | Device nodes (/dev/null, /dev/urandom) in chroot |
+| `DAC_OVERRIDE` | Cgroup filesystem writes |
+
+`seccomp=unconfined` is needed because Docker's default seccomp profile blocks `clone` with namespace flags, `mount`, and `pivot_root` - syscalls rustbox needs during sandbox setup. Rustbox installs its own seccomp filter before executing untrusted code.
+
+</details>
+
+### Health checks
+
+```bash
+# Liveness (always 200 if process is running)
+curl http://localhost:4096/api/health
+
+# Readiness (503 if cgroups/namespaces unavailable)
+curl http://localhost:4096/api/health/ready
 ```
 
 The Docker image uses `jlink` to build a minimal 62MB Java runtime instead of a full 285MB JDK.

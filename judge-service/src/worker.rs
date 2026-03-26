@@ -87,7 +87,13 @@ pub fn spawn_pg_workers(
                                 let node_id = node_id.clone();
                                 tokio::spawn(async move {
                                     if let Ok(Some(sub)) = db.claim_pending(&node_id).await {
-                                        process_job(db.as_ref(), sub.id, &node_id, webhook_timeout_secs).await;
+                                        process_job(
+                                            db.as_ref(),
+                                            sub.id,
+                                            &node_id,
+                                            webhook_timeout_secs,
+                                        )
+                                        .await;
                                     }
                                     drop(permit);
                                 });
@@ -109,7 +115,12 @@ pub fn spawn_pg_workers(
     vec![listener_handle]
 }
 
-async fn drain_pending(db: Arc<dyn Database>, sem: Arc<Semaphore>, node_id: String, webhook_timeout_secs: u64) {
+async fn drain_pending(
+    db: Arc<dyn Database>,
+    sem: Arc<Semaphore>,
+    node_id: String,
+    webhook_timeout_secs: u64,
+) {
     loop {
         let permit = match sem.clone().acquire_owned().await {
             Ok(p) => p,
@@ -148,12 +159,16 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_tim
         Ok(Some(s)) => s,
         Ok(None) => {
             warn!(%job_id, "submission not found in database");
-            let _ = db.mark_error(job_id, "submission vanished from database").await;
+            let _ = db
+                .mark_error(job_id, "submission vanished from database")
+                .await;
             return;
         }
         Err(e) => {
             error!(%job_id, error = %e, "database read error");
-            let _ = db.mark_error(job_id, &format!("database read error: {e}")).await;
+            let _ = db
+                .mark_error(job_id, &format!("database read error: {e}"))
+                .await;
             return;
         }
     };
@@ -164,15 +179,24 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_tim
     let webhook_url = submission.webhook_url.clone();
     let webhook_secret = submission.webhook_secret.clone();
 
+    let code_hash = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(code.as_bytes());
+        format!("{:x}", h.finalize())[..16].to_string()
+    };
+    info!(%job_id, %language, code_hash, code_bytes = code.len(), "executing submission");
+
     let result =
-        tokio::task::spawn_blocking(move || execute_in_sandbox(&language, &code, &stdin))
-            .await;
+        tokio::task::spawn_blocking(move || execute_in_sandbox(&language, &code, &stdin)).await;
 
     match result {
         Ok(Ok(output)) => {
             if let Err(e) = db.mark_completed(job_id, &output).await {
                 error!(%job_id, error = %e, "failed to store result, marking error");
-                let _ = db.mark_error(job_id, "execution succeeded but result storage failed").await;
+                let _ = db
+                    .mark_error(job_id, "execution succeeded but result storage failed")
+                    .await;
             } else {
                 info!(%job_id, verdict = output.verdict, "submission completed");
             }
@@ -197,14 +221,23 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_tim
             }
         };
         if let Some(payload) = payload {
-            tokio::spawn(deliver_webhook(job_id, url, secret, payload, webhook_timeout_secs));
+            tokio::spawn(deliver_webhook(
+                job_id,
+                url,
+                secret,
+                payload,
+                webhook_timeout_secs,
+            ));
         }
     }
 }
 
 async fn deliver_webhook(
-    job_id: Uuid, url: String, secret: String,
-    payload: crate::types::ResultResponse, timeout_secs: u64,
+    job_id: Uuid,
+    url: String,
+    secret: String,
+    payload: crate::types::ResultResponse,
+    timeout_secs: u64,
 ) {
     use base64::Engine;
     use hmac::{Hmac, Mac};
@@ -223,40 +256,62 @@ async fn deliver_webhook(
 
     // Standard Webhooks: sign "{msg_id}.{timestamp}.{body}"
     let signed_content = format!("{}.{}.{}", msg_id, timestamp, body);
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .expect("HMAC accepts any key length");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(signed_content.as_bytes());
     let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
+        .connect_timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default();
 
-    let result = client.post(&url)
-        .header("webhook-id", &msg_id)
-        .header("webhook-timestamp", timestamp.to_string())
-        .header("webhook-signature", format!("v1,{}", signature))
-        .header("content-type", "application/json")
-        .body(body)
-        .send()
-        .await;
-
-    match result {
-        Ok(resp) => {
-            info!(%job_id, status = %resp.status(), "webhook delivered");
+    let delays = [0, 1, 5];
+    for (attempt, delay_secs) in delays.iter().enumerate() {
+        if *delay_secs > 0 {
+            tokio::time::sleep(Duration::from_secs(*delay_secs)).await;
         }
-        Err(e) => {
-            warn!(%job_id, url, error = %e, "webhook delivery failed");
+
+        let result = client
+            .post(&url)
+            .header("webhook-id", &msg_id)
+            .header("webhook-timestamp", timestamp.to_string())
+            .header("webhook-signature", format!("v1,{}", signature))
+            .header("content-type", "application/json")
+            .body(body.clone())
+            .send()
+            .await;
+
+        match result {
+            Ok(resp) if resp.status().is_success() || resp.status().is_redirection() => {
+                info!(%job_id, status = %resp.status(), attempt, "webhook delivered");
+                return;
+            }
+            Ok(resp) => {
+                warn!(%job_id, status = %resp.status(), attempt, "webhook rejected by server");
+                if resp.status().as_u16() < 500 {
+                    return;
+                }
+            }
+            Err(e) => {
+                warn!(%job_id, attempt, error = %e, "webhook delivery failed");
+            }
         }
     }
+    error!(%job_id, url, "webhook delivery failed after 3 attempts");
 }
 
 fn sanitize_error(raw: &str) -> String {
     let sanitized = raw
         .replace("/home/", "/.../<redacted>/")
         .replace("/tmp/rustbox/", "/sandbox/")
-        .replace("/sys/fs/cgroup/", "/cgroup/");
+        .replace("/tmp/rustbox-uid-", "/sandbox-uid-")
+        .replace("/tmp/rustbox-strict-root-", "/sandbox-root-")
+        .replace("/sys/fs/cgroup/", "/cgroup/")
+        .replace("/proc/self/", "/proc/.../<redacted>/")
+        .replace("/etc/rustbox/", "/config/");
     if sanitized.len() > 512 {
         let end = sanitized
             .char_indices()
@@ -270,11 +325,7 @@ fn sanitize_error(raw: &str) -> String {
     }
 }
 
-fn execute_in_sandbox(
-    language: &str,
-    code: &str,
-    stdin: &str,
-) -> Result<ExecutionOutput, String> {
+fn execute_in_sandbox(language: &str, code: &str, stdin: &str) -> Result<ExecutionOutput, String> {
     use rustbox::config::types::IsolateConfig;
     use rustbox::runtime::isolate::{ExecutionOverrides, Isolate};
 
@@ -283,11 +334,15 @@ fn execute_in_sandbox(
         let _ = rustbox::observability::audit::init_security_logger(None);
     });
 
-    let config = IsolateConfig::with_language_defaults(language, "rustbox/0".to_string())
+    let mut config = IsolateConfig::with_language_defaults(language, "rustbox/0".to_string())
         .map_err(|e| format!("config error: {e}"))?;
+    let is_root = unsafe { libc::geteuid() } == 0;
+    if !is_root {
+        config.strict_mode = false;
+        config.allow_degraded = true;
+    }
 
-    let mut isolate =
-        Isolate::new(config).map_err(|e| format!("isolate creation error: {e}"))?;
+    let mut isolate = Isolate::new(config).map_err(|e| format!("isolate creation error: {e}"))?;
 
     let overrides = ExecutionOverrides {
         stdin_data: if stdin.is_empty() {

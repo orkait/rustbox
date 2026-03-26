@@ -52,11 +52,11 @@ pub mod command_validation {
         "/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
         "/usr/bin/javac",
         "/usr/lib/jvm/java-21-openjdk-amd64/bin/javac",
-        "/usr/local/bin/qjs",
         "/usr/local/bin/bun",
         "/usr/bin/node",
-        "/usr/bin/go",
-        "/usr/lib/go-1.22/bin/go",
+        "/usr/local/go/bin/go",
+        "/usr/local/bin/rustc",
+        "/usr/local/rust/bin/rustc",
         "/bin/sh",
         "/bin/bash",
         "/usr/bin/rustc",
@@ -124,7 +124,7 @@ pub mod command_validation {
     }
 
     fn resolve_command_in_path(command: &str) -> Result<PathBuf> {
-        let secure_paths = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/lib/go-1.22/bin"];
+        let secure_paths = ["/usr/local/bin", "/usr/local/go/bin", "/usr/bin", "/bin"];
 
         for path_dir in &secure_paths {
             let candidate = Path::new(path_dir).join(command);
@@ -140,23 +140,29 @@ pub mod command_validation {
     }
 
     fn validate_path_security(path: &Path) -> Result<()> {
-        let path_str = path.to_string_lossy();
-
-        if path_str.contains("..") {
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err(SecurityError::PathTraversal.into());
         }
 
+        let path_str = path.to_string_lossy();
         let secure_prefixes = [
             "/usr/bin/",
             "/usr/local/bin/",
+            "/usr/local/go/bin/",
+            "/usr/local/rust/bin/",
             "/bin/",
-            "/usr/lib/go-1.22/bin/",
             "/usr/lib/jvm/",
             "/tmp/rustbox/",
             "/tmp/rustbox-uid-",
         ];
 
-        if !secure_prefixes.iter().any(|prefix| path_str.starts_with(prefix)) {
+        if !secure_prefixes
+            .iter()
+            .any(|prefix| path_str.starts_with(prefix))
+        {
             return Err(SecurityError::CommandNotAllowed(format!(
                 "Path not under secure prefix: {}",
                 path_str
@@ -286,7 +292,14 @@ pub mod path_validation {
             return Err(SecurityError::ChrootEscape.into());
         }
 
-        if path_str.contains("..") || path_str.contains("~") {
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(SecurityError::PathTraversal.into());
+        }
+
+        if path_str.contains('~') {
             return Err(SecurityError::PathTraversal.into());
         }
 

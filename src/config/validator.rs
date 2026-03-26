@@ -1,4 +1,3 @@
-
 use crate::config::types::{IsolateConfig, IsolateError, Result};
 use std::path::Path;
 
@@ -11,12 +10,18 @@ pub struct ValidationResult {
 
 impl Default for ValidationResult {
     fn default() -> Self {
-        Self { valid: true, errors: Vec::new(), warnings: Vec::new() }
+        Self {
+            valid: true,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        }
     }
 }
 
 impl ValidationResult {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn add_error(&mut self, error: String) {
         self.valid = false;
@@ -27,7 +32,9 @@ impl ValidationResult {
         self.warnings.push(warning);
     }
 
-    pub fn is_valid(&self) -> bool { self.valid }
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
 }
 
 pub fn validate_config(config: &IsolateConfig) -> Result<ValidationResult> {
@@ -40,7 +47,8 @@ pub fn validate_config(config: &IsolateConfig) -> Result<ValidationResult> {
 
     if config.strict_mode && !result.is_valid() {
         return Err(IsolateError::Config(format!(
-            "Config validation failed in strict mode:\n{}", result.errors.join("\n")
+            "Config validation failed in strict mode:\n{}",
+            result.errors.join("\n")
         )));
     }
     Ok(result)
@@ -48,40 +56,68 @@ pub fn validate_config(config: &IsolateConfig) -> Result<ValidationResult> {
 
 fn validate_limits(config: &IsolateConfig, result: &mut ValidationResult) {
     if let Some(v) = config.memory_limit {
-        if v == 0 { result.add_error("memory_limit cannot be zero".into()); }
+        if v == 0 {
+            result.add_error("memory_limit cannot be zero".into());
+        }
         if v < 1024 * 1024 {
-            result.add_warning(format!("memory_limit {} is very low (< 1MB), may cause OOM", v));
+            result.add_warning(format!(
+                "memory_limit {} is very low (< 1MB), may cause OOM",
+                v
+            ));
         }
         if v > 8 * 1024 * 1024 * 1024 {
-            result.add_warning(format!("memory_limit {} bytes exceeds recommended maximum of 8GB", v));
+            result.add_warning(format!(
+                "memory_limit {} bytes exceeds recommended maximum of 8GB",
+                v
+            ));
         }
     }
 
-    for (name, limit) in [("cpu_time_limit", config.cpu_time_limit), ("wall_time_limit", config.wall_time_limit)] {
+    for (name, limit) in [
+        ("cpu_time_limit", config.cpu_time_limit),
+        ("wall_time_limit", config.wall_time_limit),
+    ] {
         if let Some(t) = limit {
-            if t.is_zero() { result.add_error(format!("{} cannot be zero", name)); }
+            if t.is_zero() {
+                result.add_error(format!("{} cannot be zero", name));
+            }
             if t.as_secs() > 600 {
-                result.add_warning(format!("{} {} seconds exceeds recommended maximum of 600 seconds", name, t.as_secs()));
+                result.add_warning(format!(
+                    "{} {} seconds exceeds recommended maximum of 600 seconds",
+                    name,
+                    t.as_secs()
+                ));
             }
         }
     }
 
     if let Some(v) = config.process_limit {
-        if v == 0 { result.add_error("process_limit cannot be zero".into()); }
+        if v == 0 {
+            result.add_error("process_limit cannot be zero".into());
+        }
         if v > 4096 {
-            result.add_warning(format!("process_limit {} exceeds recommended maximum of 4096", v));
+            result.add_warning(format!(
+                "process_limit {} exceeds recommended maximum of 4096",
+                v
+            ));
         }
     }
 
     if let (Some(cpu), Some(wall)) = (config.cpu_time_limit, config.wall_time_limit) {
         if wall < cpu {
-            result.add_error(format!("wall_time_limit ({:?}) must be >= cpu_time_limit ({:?})", wall, cpu));
+            result.add_error(format!(
+                "wall_time_limit ({:?}) must be >= cpu_time_limit ({:?})",
+                wall, cpu
+            ));
         }
     }
 }
 
 fn check_path_traversal(path: &Path, name: &str, result: &mut ValidationResult) {
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         result.add_error(format!("{} contains path traversal: {:?}", name, path));
     }
 }
@@ -89,14 +125,20 @@ fn check_path_traversal(path: &Path, name: &str, result: &mut ValidationResult) 
 fn check_parent_exists(path: &Path, name: &str, result: &mut ValidationResult) {
     if let Some(parent) = path.parent() {
         if !parent.exists() {
-            result.add_error(format!("{} parent directory does not exist: {:?}", name, parent));
+            result.add_error(format!(
+                "{} parent directory does not exist: {:?}",
+                name, parent
+            ));
         }
     }
 }
 
 fn validate_paths(config: &IsolateConfig, result: &mut ValidationResult) {
     if !config.workdir.is_absolute() {
-        result.add_error(format!("workdir must be absolute path: {:?}", config.workdir));
+        result.add_error(format!(
+            "workdir must be absolute path: {:?}",
+            config.workdir
+        ));
     }
 
     if let Some(ref p) = config.chroot_dir {
@@ -108,8 +150,13 @@ fn validate_paths(config: &IsolateConfig, result: &mut ValidationResult) {
         }
     }
 
-    if let Some(ref p) = config.stdin_file { check_path_traversal(p, "stdin_file", result); }
-    for (name, path) in [("stdout_file", &config.stdout_file), ("stderr_file", &config.stderr_file)] {
+    if let Some(ref p) = config.stdin_file {
+        check_path_traversal(p, "stdin_file", result);
+    }
+    for (name, path) in [
+        ("stdout_file", &config.stdout_file),
+        ("stderr_file", &config.stderr_file),
+    ] {
         if let Some(ref p) = path {
             check_path_traversal(p, name, result);
             check_parent_exists(p, name, result);
@@ -120,15 +167,29 @@ fn validate_paths(config: &IsolateConfig, result: &mut ValidationResult) {
 fn validate_namespaces(config: &IsolateConfig, result: &mut ValidationResult) {
     if config.strict_mode {
         for (enabled, msg) in [
-            (config.enable_pid_namespace, "enable_pid_namespace must be true in strict mode (judge-v1 requirement)"),
-            (config.enable_mount_namespace, "enable_mount_namespace must be true in strict mode (judge-v1 requirement)"),
-            (config.enable_network_namespace, "enable_network_namespace must be true in strict mode"),
+            (
+                config.enable_pid_namespace,
+                "enable_pid_namespace must be true in strict mode (judge-v1 requirement)",
+            ),
+            (
+                config.enable_mount_namespace,
+                "enable_mount_namespace must be true in strict mode (judge-v1 requirement)",
+            ),
+            (
+                config.enable_network_namespace,
+                "enable_network_namespace must be true in strict mode",
+            ),
         ] {
-            if !enabled { result.add_error(msg.into()); }
+            if !enabled {
+                result.add_error(msg.into());
+            }
         }
     }
     if config.enable_user_namespace {
-        result.add_warning("User namespace is not fully supported in judge-v1 GA (rootful strict is the target)".into());
+        result.add_warning(
+            "User namespace is not fully supported in judge-v1 GA (rootful strict is the target)"
+                .into(),
+        );
     }
 }
 
@@ -136,8 +197,14 @@ fn validate_credentials(config: &IsolateConfig, result: &mut ValidationResult) {
     if config.strict_mode {
         for (val, name) in [(config.uid, "uid"), (config.gid, "gid")] {
             match val {
-                None => result.add_error(format!("{} must be set in strict mode for unprivileged payload execution", name)),
-                Some(0) => result.add_error(format!("{} cannot be 0 (root) for untrusted payload in strict mode", name)),
+                None => result.add_error(format!(
+                    "{} must be set in strict mode for unprivileged payload execution",
+                    name
+                )),
+                Some(0) => result.add_error(format!(
+                    "{} cannot be 0 (root) for untrusted payload in strict mode",
+                    name
+                )),
                 _ => {}
             }
         }
@@ -170,7 +237,10 @@ mod tests {
     use std::time::Duration;
 
     fn permissive(f: impl FnOnce(&mut IsolateConfig)) -> ValidationResult {
-        let mut c = IsolateConfig { strict_mode: false, ..IsolateConfig::default() };
+        let mut c = IsolateConfig {
+            strict_mode: false,
+            ..IsolateConfig::default()
+        };
         f(&mut c);
         validate_config(&c).unwrap()
     }
@@ -189,9 +259,15 @@ mod tests {
     #[test]
     fn zero_limits_are_errors() {
         let r = permissive(|c| c.memory_limit = Some(0));
-        assert!(r.errors.iter().any(|e| e.contains("memory_limit cannot be zero")));
+        assert!(r
+            .errors
+            .iter()
+            .any(|e| e.contains("memory_limit cannot be zero")));
         let r = permissive(|c| c.cpu_time_limit = Some(Duration::ZERO));
-        assert!(r.errors.iter().any(|e| e.contains("cpu_time_limit cannot be zero")));
+        assert!(r
+            .errors
+            .iter()
+            .any(|e| e.contains("cpu_time_limit cannot be zero")));
     }
 
     #[test]

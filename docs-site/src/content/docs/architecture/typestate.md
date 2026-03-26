@@ -15,22 +15,34 @@ Every other sandbox enforces this through documentation, code review, or runtime
 
 Rust's type system enforces the order at compile time:
 
-<img src="/typestate.svg" alt="Typestate chain" style="max-width: 100%; display: block; margin: 1rem auto;" />
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   FreshChild    │ --> │ NamespacesReady │ --> │  MountsPrivate  │ --> │ CgroupAttached  │
+└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
+     clone(2)               unshare(2)           MS_PRIVATE on /       cgroup+chroot+rlimits
+                                                                                  │
+                                                                                  ▼
+                          ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+                          │   ExecReady ✓   │ <-- │   PrivsLocked   │ <-- │  CredsDropped   │
+                          └─────────────────┘     └─────────────────┘     └─────────────────┘
+                           seccomp+execvp           capset+prctl            setresuid/gid
+```
 
 Only `Sandbox<ExecReady>` has an `exec_payload()` method. You literally cannot call it on any other state.
 
 ```rust
 // This compiles:
-let s = Sandbox::new(config);          // FreshChild
-let s = s.configure_namespaces()?;     // NamespacesReady
-let s = s.setup_mounts()?;            // MountsPrivate
-let s = s.attach_cgroup()?;           // CgroupAttached
-let s = s.drop_credentials()?;        // CredsDropped
-let s = s.lock_privileges()?;         // PrivsLocked
-s.exec_payload(cmd)?;                 // ExecReady ✓
+let s = Sandbox::new(id, strict);             // FreshChild
+let s = s.setup_namespaces(..)?;              // NamespacesReady
+let s = s.harden_mount_propagation()?;        // MountsPrivate
+let s = s.attach_to_cgroup(path)?;            // CgroupAttached
+let s = s.drop_credentials(uid, gid)?;        // CredsDropped
+let s = s.lock_privileges()?;                 // PrivsLocked
+let s = s.ready_for_exec();                   // ExecReady
+s.exec_payload(cmd)?;                         // ✓
 
 // This doesn't compile:
-let s = Sandbox::new(config);
+let s = Sandbox::new(id, strict);
 s.exec_payload(cmd)?;                 // ✗ no method on Sandbox<FreshChild>
 ```
 
@@ -50,11 +62,11 @@ We considered runtime state machines (enum with match) and capability-based desi
 | State | What happens | Kernel primitive |
 |-------|-------------|-----------------|
 | `FreshChild` | Process just cloned | `clone(2)` |
-| `NamespacesReady` | PID/mount/net/IPC configured | `unshare(2)` |
-| `MountsPrivate` | Chroot, tmpfs, devices created | `mount(2)`, `chroot(2)`, `mknod(2)` |
-| `CgroupAttached` | Memory/CPU/PID limits active | cgroup filesystem writes |
+| `NamespacesReady` | PID/mount/net namespaces created | `unshare(2)` |
+| `MountsPrivate` | Mount propagation hardened | `mount(MS_PRIVATE\|MS_REC)` |
+| `CgroupAttached` | Cgroup joined, chroot/mounts/rlimits set | cgroup writes, `mount(2)`, `chroot(2)` |
 | `CredsDropped` | UID/GID unprivileged, groups cleared | `setresuid(2)`, `setresgid(2)` |
-| `PrivsLocked` | All capabilities zeroed, NO_NEW_PRIVS | `capset(2)`, `prctl(2)` |
-| `ExecReady` | Seccomp filter installed | `seccomp(2)` |
+| `PrivsLocked` | Capabilities zeroed, NO_NEW_PRIVS set | `capset(2)`, `prctl(2)` |
+| `ExecReady` | Seccomp filter installed, ready for exec | `seccomp(2)` via `seccompiler` |
 
-Seccomp is installed last because the BPF filter would block syscalls needed for earlier stages (like `mount` and `capset`).
+Seccomp is installed procedurally (not as a typestate) between `PrivsLocked` and `ExecReady` because the BPF filter would block syscalls needed for earlier stages (like `mount` and `capset`).

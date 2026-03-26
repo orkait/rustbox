@@ -1,5 +1,5 @@
 use crate::config::types::{IsolateError, OutputIntegrity, Result};
-use crate::core::types::{ProxyStatus, SandboxLaunchRequest};
+use crate::sandbox::types::{ProxyStatus, SandboxLaunchRequest};
 use nix::errno::Errno;
 use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
@@ -13,10 +13,6 @@ use std::os::fd::FromRawFd;
 use std::os::unix::io::RawFd;
 use std::thread;
 use std::time::Instant;
-
-fn to_isolate_error(prefix: &str, err: impl std::fmt::Display) -> IsolateError {
-    IsolateError::Process(format!("{prefix}: {err}"))
-}
 
 fn read_json_from_fd<T: DeserializeOwned>(fd: RawFd) -> Result<T> {
     let mut file = unsafe { File::from_raw_fd(fd) };
@@ -104,7 +100,7 @@ fn wait_for_payload_and_reap(payload_pid: Pid) -> Result<(Option<i32>, Option<i3
             }
             Ok(_) => continue,
             Err(Errno::EINTR) => continue,
-            Err(e) => return Err(to_isolate_error("waitpid(payload)", e)),
+            Err(e) => return Err(IsolateError::process("waitpid(payload)", e)),
         }
     }
 
@@ -121,7 +117,7 @@ fn wait_for_payload_and_reap(payload_pid: Pid) -> Result<(Option<i32>, Option<i3
             }
             Err(Errno::ECHILD) => break,
             Err(Errno::EINTR) => continue,
-            Err(e) => return Err(to_isolate_error("waitpid(reap)", e)),
+            Err(e) => return Err(IsolateError::process("waitpid(reap)", e)),
         }
     }
 
@@ -135,23 +131,23 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
     crate::exec::preexec::setup_parent_death_signal()?;
 
     let (stdout_read, stdout_write) =
-        nix::unistd::pipe().map_err(|e| to_isolate_error("pipe(stdout)", e))?;
+        nix::unistd::pipe().map_err(|e| IsolateError::process("pipe(stdout)", e))?;
     let (stderr_read, stderr_write) =
-        nix::unistd::pipe().map_err(|e| to_isolate_error("pipe(stderr)", e))?;
+        nix::unistd::pipe().map_err(|e| IsolateError::process("pipe(stderr)", e))?;
     let (stdin_read, stdin_write) =
-        nix::unistd::pipe().map_err(|e| to_isolate_error("pipe(stdin)", e))?;
+        nix::unistd::pipe().map_err(|e| IsolateError::process("pipe(stdin)", e))?;
 
-    let payload_pid = match unsafe { fork() }.map_err(|e| to_isolate_error("fork(payload)", e))? {
+    let payload_pid = match unsafe { fork() }.map_err(|e| IsolateError::process("fork(payload)", e))? {
         ForkResult::Child => {
             let _ = close(stdout_read);
             let _ = close(stderr_read);
             let _ = close(stdin_write);
 
-            dup2(stdin_read, libc::STDIN_FILENO).map_err(|e| to_isolate_error("dup2(stdin)", e))?;
+            dup2(stdin_read, libc::STDIN_FILENO).map_err(|e| IsolateError::process("dup2(stdin)", e))?;
             dup2(stdout_write, libc::STDOUT_FILENO)
-                .map_err(|e| to_isolate_error("dup2(stdout)", e))?;
+                .map_err(|e| IsolateError::process("dup2(stdout)", e))?;
             dup2(stderr_write, libc::STDERR_FILENO)
-                .map_err(|e| to_isolate_error("dup2(stderr)", e))?;
+                .map_err(|e| IsolateError::process("dup2(stderr)", e))?;
 
             let _ = close(stdin_read);
             let _ = close(stdout_write);
@@ -189,25 +185,8 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
         .join()
         .unwrap_or_else(|_| (Vec::new(), OutputIntegrity::WriteError));
 
-    let output_integrity = if matches!(stdout_integrity, OutputIntegrity::WriteError)
-        || matches!(stderr_integrity, OutputIntegrity::WriteError)
-    {
-        OutputIntegrity::WriteError
-    } else if matches!(stdout_integrity, OutputIntegrity::CrashMidWrite)
-        || matches!(stderr_integrity, OutputIntegrity::CrashMidWrite)
-    {
-        OutputIntegrity::CrashMidWrite
-    } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByJudgeLimit)
-        || matches!(stderr_integrity, OutputIntegrity::TruncatedByJudgeLimit)
-    {
-        OutputIntegrity::TruncatedByJudgeLimit
-    } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByProgramClose)
-        || matches!(stderr_integrity, OutputIntegrity::TruncatedByProgramClose)
-    {
-        OutputIntegrity::TruncatedByProgramClose
-    } else {
-        OutputIntegrity::Complete
-    };
+    let output_integrity =
+        OutputIntegrity::resolve_combined(&stdout_integrity, &stderr_integrity);
 
     let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
     let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
@@ -229,7 +208,9 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
 pub fn run_proxy_main_from_fds(launch_fd: RawFd, status_fd: RawFd) -> ! {
     let _ = fcntl(status_fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC));
 
-    let outcome = match read_json_from_fd::<SandboxLaunchRequest>(launch_fd).and_then(|req| run_proxy(&req)) {
+    let outcome = match read_json_from_fd::<SandboxLaunchRequest>(launch_fd)
+        .and_then(|req| run_proxy(&req))
+    {
         Ok(status) => status,
         Err(err) => ProxyStatus {
             internal_error: Some(err.to_string()),
@@ -266,6 +247,6 @@ pub fn exec_argv(argv: &[String]) -> Result<()> {
         cargv.push(c);
     }
     let refs: Vec<&std::ffi::CStr> = cargv.iter().map(|s| s.as_c_str()).collect();
-    execvp(cargv[0].as_c_str(), &refs).map_err(|e| to_isolate_error("execvp", e))?;
+    execvp(cargv[0].as_c_str(), &refs).map_err(|e| IsolateError::process("execvp", e))?;
     Ok(())
 }

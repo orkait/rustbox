@@ -137,40 +137,11 @@ impl CgroupV1 {
     }
 
     fn collect_metric<T>(&self, field_name: &str, result: Result<T>, fallback: T) -> Result<T> {
-        match result {
-            Ok(value) => Ok(value),
-            Err(err) if self.strict_mode => Err(IsolateError::Cgroup(format!(
-                "failed collecting {} in strict mode: {}",
-                field_name, err
-            ))),
-            Err(err) => {
-                log::warn!(
-                    "failed collecting {} in permissive mode: {}",
-                    field_name,
-                    err
-                );
-                Ok(fallback)
-            }
-        }
+        super::cgroup::collect_cgroup_metric(self.strict_mode, field_name, result, fallback)
     }
 
     fn read_u64(path: &Path, field_name: &str) -> Result<u64> {
-        let raw = fs::read_to_string(path).map_err(|e| {
-            IsolateError::Cgroup(format!(
-                "failed to read {} ({}): {}",
-                field_name,
-                path.display(),
-                e
-            ))
-        })?;
-        raw.trim().parse::<u64>().map_err(|e| {
-            IsolateError::Cgroup(format!(
-                "failed to parse {} ({}): {}",
-                field_name,
-                path.display(),
-                e
-            ))
-        })
+        super::cgroup::read_cgroup_u64(path, field_name)
     }
 
     fn read_controller_u64(&self, controller: &str, file: &str) -> Result<u64> {
@@ -192,51 +163,16 @@ impl CgroupV1 {
     }
 
     fn read_optional_limit(path: &Path, field_name: &str) -> Result<Option<u64>> {
-        let raw = match fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => {
-                return Err(IsolateError::Cgroup(format!(
-                    "failed to read {} ({}): {}",
-                    field_name,
-                    path.display(),
-                    err
-                )));
-            }
-        };
-
-        let value = raw.trim();
-        if value == "max" {
-            return Ok(None);
-        }
-        value.parse::<u64>().map(Some).map_err(|err| {
-            IsolateError::Cgroup(format!(
-                "failed to parse {} ({}): {}",
-                field_name,
-                path.display(),
-                err
-            ))
-        })
+        super::cgroup::read_cgroup_optional_limit(path, field_name)
     }
 
-    fn write_value(path: &Path, value: &impl ToString, strict_mode: bool, name: &str) -> Result<()> {
-        if let Err(err) = fs::write(path, value.to_string()) {
-            if strict_mode {
-                return Err(IsolateError::Cgroup(format!(
-                    "failed to write {} ({}): {}",
-                    name,
-                    path.display(),
-                    err
-                )));
-            }
-            log::warn!(
-                "failed to write {} ({}), continuing in permissive mode: {}",
-                name,
-                path.display(),
-                err
-            );
-        }
-        Ok(())
+    fn write_value(
+        path: &Path,
+        value: &impl ToString,
+        strict_mode: bool,
+        name: &str,
+    ) -> Result<()> {
+        super::cgroup::write_cgroup_value(path, value, strict_mode, name)
     }
 }
 
@@ -249,9 +185,12 @@ impl CgroupBackend for CgroupV1 {
         if !self.enabled {
             return Ok(());
         }
-        self.foreach_controller("failed to create cgroup v1 directories", |controller, path| {
-            fs::create_dir_all(path).map_err(|err| format!("{}: {}", controller, err))
-        })
+        self.foreach_controller(
+            "failed to create cgroup v1 directories",
+            |controller, path| {
+                fs::create_dir_all(path).map_err(|err| format!("{}: {}", controller, err))
+            },
+        )
     }
 
     fn remove(&self, _instance_id: &str) -> Result<()> {
@@ -342,11 +281,29 @@ impl CgroupBackend for CgroupV1 {
         let memsw = memory_path.join("memory.memsw.limit_in_bytes");
         let has_memsw = memsw.exists();
 
-        Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
+        Self::write_value(
+            &mem_file,
+            &limit_bytes,
+            self.strict_mode,
+            "memory.limit_in_bytes",
+        )?;
 
-        if has_memsw && Self::write_value(&memsw, &limit_bytes, self.strict_mode, "memory.memsw.limit_in_bytes").is_err() {
+        if has_memsw
+            && Self::write_value(
+                &memsw,
+                &limit_bytes,
+                self.strict_mode,
+                "memory.memsw.limit_in_bytes",
+            )
+            .is_err()
+        {
             let _ = Self::write_value(&memsw, &limit_bytes, false, "memory.memsw.limit_in_bytes");
-            Self::write_value(&mem_file, &limit_bytes, self.strict_mode, "memory.limit_in_bytes")?;
+            Self::write_value(
+                &mem_file,
+                &limit_bytes,
+                self.strict_mode,
+                "memory.limit_in_bytes",
+            )?;
         }
 
         let swappiness = memory_path.join("memory.swappiness");
@@ -472,7 +429,9 @@ impl CgroupBackend for CgroupV1 {
             Some(raw) => match u32::try_from(raw) {
                 Ok(parsed) => Some(parsed),
                 Err(_) if self.strict_mode => {
-                    return Err(IsolateError::Cgroup("pids.max exceeds u32 limit".to_string()));
+                    return Err(IsolateError::Cgroup(
+                        "pids.max exceeds u32 limit".to_string(),
+                    ));
                 }
                 Err(_) => {
                     log::warn!("pids.max exceeds u32 limit in permissive mode");
@@ -487,18 +446,14 @@ impl CgroupBackend for CgroupV1 {
             self.get_memory_peak().map(Some),
             None,
         )?;
-        let cpu_usage_usec = self.collect_metric(
-            "cpuacct.usage",
-            self.get_cpu_usage().map(Some),
-            None,
-        )?;
+        let cpu_usage_usec =
+            self.collect_metric("cpuacct.usage", self.get_cpu_usage().map(Some), None)?;
         let process_count = self.collect_metric(
             "pids.current/tasks",
             self.get_process_count().map(Some),
             None,
         )?;
-        let oom_kill_count =
-            self.collect_metric("memory.failcnt", self.get_oom_kill_count(), 0)?;
+        let oom_kill_count = self.collect_metric("memory.failcnt", self.get_oom_kill_count(), 0)?;
 
         Ok(CgroupEvidence {
             memory_peak,

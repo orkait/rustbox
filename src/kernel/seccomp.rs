@@ -3,17 +3,12 @@ use seccompiler::{apply_filter, BpfProgram, SeccompAction, SeccompFilter};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum SeccompPolicy {
     Disabled,
+    #[default]
     BuiltinDenyList,
     CustomFile(std::path::PathBuf),
-}
-
-impl Default for SeccompPolicy {
-    fn default() -> Self {
-        Self::BuiltinDenyList
-    }
 }
 
 struct SyscallRule {
@@ -27,33 +22,234 @@ struct SyscallRule {
 // Everything else gets KILL_PROCESS.
 const BUILTIN_DENY_LIST: &[SyscallRule] = &[
     // io_uring: kernel LPE history (CVE-2021-41073, CVE-2023-2598)
-    SyscallRule { name: "io_uring_setup",    num: libc::SYS_io_uring_setup as i64,    action: SeccompAction::Errno(libc::ENOSYS as u32) },
-    SyscallRule { name: "io_uring_enter",    num: libc::SYS_io_uring_enter as i64,    action: SeccompAction::Errno(libc::ENOSYS as u32) },
-    SyscallRule { name: "io_uring_register", num: libc::SYS_io_uring_register as i64, action: SeccompAction::Errno(libc::ENOSYS as u32) },
+    SyscallRule {
+        name: "io_uring_setup",
+        num: libc::SYS_io_uring_setup,
+        action: SeccompAction::Errno(libc::ENOSYS as u32),
+    },
+    SyscallRule {
+        name: "io_uring_enter",
+        num: libc::SYS_io_uring_enter,
+        action: SeccompAction::Errno(libc::ENOSYS as u32),
+    },
+    SyscallRule {
+        name: "io_uring_register",
+        num: libc::SYS_io_uring_register,
+        action: SeccompAction::Errno(libc::ENOSYS as u32),
+    },
     // Tracing: cross-process inspection
-    SyscallRule { name: "ptrace",            num: libc::SYS_ptrace as i64,            action: SeccompAction::KillProcess },
-    SyscallRule { name: "process_vm_readv",  num: libc::SYS_process_vm_readv as i64,  action: SeccompAction::KillProcess },
-    SyscallRule { name: "process_vm_writev", num: libc::SYS_process_vm_writev as i64, action: SeccompAction::KillProcess },
+    SyscallRule {
+        name: "ptrace",
+        num: libc::SYS_ptrace,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "process_vm_readv",
+        num: libc::SYS_process_vm_readv,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "process_vm_writev",
+        num: libc::SYS_process_vm_writev,
+        action: SeccompAction::KillProcess,
+    },
     // Kernel subsystems
-    SyscallRule { name: "bpf",              num: libc::SYS_bpf as i64,              action: SeccompAction::KillProcess },
-    SyscallRule { name: "userfaultfd",      num: libc::SYS_userfaultfd as i64,      action: SeccompAction::KillProcess },
-    SyscallRule { name: "perf_event_open",  num: libc::SYS_perf_event_open as i64,  action: SeccompAction::KillProcess },
+    SyscallRule {
+        name: "bpf",
+        num: libc::SYS_bpf,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "userfaultfd",
+        num: libc::SYS_userfaultfd,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "perf_event_open",
+        num: libc::SYS_perf_event_open,
+        action: SeccompAction::KillProcess,
+    },
     // Module/boot
-    SyscallRule { name: "kexec_load",       num: libc::SYS_kexec_load as i64,       action: SeccompAction::KillProcess },
-    SyscallRule { name: "init_module",      num: libc::SYS_init_module as i64,      action: SeccompAction::KillProcess },
-    SyscallRule { name: "finit_module",     num: libc::SYS_finit_module as i64,     action: SeccompAction::KillProcess },
-    SyscallRule { name: "delete_module",    num: libc::SYS_delete_module as i64,    action: SeccompAction::KillProcess },
+    SyscallRule {
+        name: "kexec_load",
+        num: libc::SYS_kexec_load,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "init_module",
+        num: libc::SYS_init_module,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "finit_module",
+        num: libc::SYS_finit_module,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "delete_module",
+        num: libc::SYS_delete_module,
+        action: SeccompAction::KillProcess,
+    },
     // Mount/swap
-    SyscallRule { name: "mount",      num: libc::SYS_mount as i64,      action: SeccompAction::KillProcess },
-    SyscallRule { name: "umount2",    num: libc::SYS_umount2 as i64,    action: SeccompAction::KillProcess },
-    SyscallRule { name: "pivot_root", num: libc::SYS_pivot_root as i64, action: SeccompAction::KillProcess },
-    SyscallRule { name: "swapon",     num: libc::SYS_swapon as i64,     action: SeccompAction::KillProcess },
-    SyscallRule { name: "swapoff",    num: libc::SYS_swapoff as i64,    action: SeccompAction::KillProcess },
+    SyscallRule {
+        name: "mount",
+        num: libc::SYS_mount,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "umount2",
+        num: libc::SYS_umount2,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "pivot_root",
+        num: libc::SYS_pivot_root,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "swapon",
+        num: libc::SYS_swapon,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "swapoff",
+        num: libc::SYS_swapoff,
+        action: SeccompAction::KillProcess,
+    },
+    // Namespace/chroot escape: block nested user namespaces and chroot
+    SyscallRule {
+        name: "unshare",
+        num: libc::SYS_unshare,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "chroot",
+        num: libc::SYS_chroot,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "setns",
+        num: libc::SYS_setns,
+        action: SeccompAction::KillProcess,
+    },
+    // New mount API (Linux 5.2+/5.12+): block to prevent mount manipulation
+    SyscallRule {
+        name: "move_mount",
+        num: libc::SYS_move_mount,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "open_tree",
+        num: libc::SYS_open_tree,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "mount_setattr",
+        num: libc::SYS_mount_setattr,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "fsopen",
+        num: libc::SYS_fsopen,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "fsmount",
+        num: libc::SYS_fsmount,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "fsconfig",
+        num: libc::SYS_fsconfig,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "fspick",
+        num: libc::SYS_fspick,
+        action: SeccompAction::KillProcess,
+    },
+    // DAC bypass (CVE-2014-0038): file handle manipulation
+    SyscallRule {
+        name: "name_to_handle_at",
+        num: libc::SYS_name_to_handle_at,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "open_by_handle_at",
+        num: libc::SYS_open_by_handle_at,
+        action: SeccompAction::KillProcess,
+    },
+    // Alternate kexec path
+    SyscallRule {
+        name: "kexec_file_load",
+        num: libc::SYS_kexec_file_load,
+        action: SeccompAction::KillProcess,
+    },
+    // System clock manipulation
+    SyscallRule {
+        name: "reboot",
+        num: libc::SYS_reboot,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "settimeofday",
+        num: libc::SYS_settimeofday,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "clock_settime",
+        num: libc::SYS_clock_settime,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "acct",
+        num: libc::SYS_acct,
+        action: SeccompAction::KillProcess,
+    },
+    // Kernel keyring (CVE-2016-0728, not namespaced)
+    SyscallRule {
+        name: "add_key",
+        num: libc::SYS_add_key,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "keyctl",
+        num: libc::SYS_keyctl,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "request_key",
+        num: libc::SYS_request_key,
+        action: SeccompAction::KillProcess,
+    },
+    // Execution domain: personality(READ_IMPLIES_EXEC) marks all readable pages executable
+    SyscallRule {
+        name: "personality",
+        num: libc::SYS_personality,
+        action: SeccompAction::Errno(libc::EPERM as u32),
+    },
+    // NUMA: memory policy manipulation
+    SyscallRule {
+        name: "mbind",
+        num: libc::SYS_mbind,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "set_mempolicy",
+        num: libc::SYS_set_mempolicy,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "move_pages",
+        num: libc::SYS_move_pages,
+        action: SeccompAction::KillProcess,
+    },
 ];
 
 fn target_arch() -> Result<seccompiler::TargetArch> {
-    std::env::consts::ARCH.try_into().map_err(|_|
-        IsolateError::Config("Unsupported architecture for seccomp".to_string()))
+    std::env::consts::ARCH
+        .try_into()
+        .map_err(|_| IsolateError::Config("Unsupported architecture for seccomp".to_string()))
 }
 
 fn build_and_apply(
@@ -61,13 +257,15 @@ fn build_and_apply(
     default: SeccompAction,
     on_match: SeccompAction,
 ) -> Result<()> {
-    if rules.is_empty() { return Ok(()); }
+    if rules.is_empty() {
+        return Ok(());
+    }
     let filter = SeccompFilter::new(rules, default, on_match, target_arch()?)
         .map_err(|e| IsolateError::Config(format!("seccomp filter build: {}", e)))?;
-    let prog: BpfProgram = filter.try_into()
+    let prog: BpfProgram = filter
+        .try_into()
         .map_err(|e| IsolateError::Config(format!("seccomp compile: {}", e)))?;
-    apply_filter(&prog)
-        .map_err(|e| IsolateError::Config(format!("seccomp apply: {}", e)))?;
+    apply_filter(&prog).map_err(|e| IsolateError::Config(format!("seccomp apply: {}", e)))?;
     Ok(())
 }
 
@@ -86,14 +284,20 @@ fn install_builtin_deny_list() -> Result<()> {
     // We need two filters because SeccompFilter only supports one match_action.
 
     // Filter 1: io_uring → ERRNO(ENOSYS)
-    let enosys_rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BUILTIN_DENY_LIST.iter()
+    let enosys_rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BUILTIN_DENY_LIST
+        .iter()
         .filter(|r| matches!(r.action, SeccompAction::Errno(_)))
         .map(|r| (r.num, vec![]))
         .collect();
-    build_and_apply(enosys_rules, SeccompAction::Allow, SeccompAction::Errno(libc::ENOSYS as u32))?;
+    build_and_apply(
+        enosys_rules,
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::ENOSYS as u32),
+    )?;
 
     // Filter 2: tracing/bpf/modules/mount → KILL_PROCESS
-    let kill_rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BUILTIN_DENY_LIST.iter()
+    let kill_rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BUILTIN_DENY_LIST
+        .iter()
         .filter(|r| matches!(r.action, SeccompAction::KillProcess))
         .map(|r| (r.num, vec![]))
         .collect();
@@ -103,8 +307,9 @@ fn install_builtin_deny_list() -> Result<()> {
 }
 
 fn install_custom_policy(path: &Path) -> Result<()> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| IsolateError::Config(format!("read seccomp policy {}: {}", path.display(), e)))?;
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        IsolateError::Config(format!("read seccomp policy {}: {}", path.display(), e))
+    })?;
     let policy: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| IsolateError::Config(format!("parse seccomp policy: {}", e)))?;
 
@@ -112,24 +317,41 @@ fn install_custom_policy(path: &Path) -> Result<()> {
         Some("allow") => SeccompAction::Allow,
         Some("kill") | Some("kill_process") => SeccompAction::KillProcess,
         Some("errno") => SeccompAction::Errno(libc::EPERM as u32),
-        Some(other) => return Err(IsolateError::Config(format!("unknown default_action: {}", other))),
+        Some(other) => {
+            return Err(IsolateError::Config(format!(
+                "unknown default_action: {}",
+                other
+            )))
+        }
         None => SeccompAction::Allow,
     };
 
-    let rules = policy.get("rules").and_then(|v| v.as_array())
+    let rules = policy
+        .get("rules")
+        .and_then(|v| v.as_array())
         .ok_or_else(|| IsolateError::Config("seccomp policy missing 'rules' array".to_string()))?;
 
-    let mut action_groups: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+    let mut action_groups: std::collections::HashMap<String, Vec<i64>> =
+        std::collections::HashMap::new();
     for rule in rules {
-        let action_str = rule.get("action").and_then(|v| v.as_str()).unwrap_or("kill_process");
-        let syscalls = rule.get("syscalls").and_then(|v| v.as_array())
+        let action_str = rule
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("kill_process");
+        let syscalls = rule
+            .get("syscalls")
+            .and_then(|v| v.as_array())
             .ok_or_else(|| IsolateError::Config("rule missing 'syscalls' array".to_string()))?;
         for sc in syscalls {
-            let name = sc.as_str()
+            let name = sc
+                .as_str()
                 .ok_or_else(|| IsolateError::Config("syscall must be a string".to_string()))?;
             let num = syscall_name_to_number(name)
                 .ok_or_else(|| IsolateError::Config(format!("unknown syscall: {}", name)))?;
-            action_groups.entry(action_str.to_string()).or_default().push(num);
+            action_groups
+                .entry(action_str.to_string())
+                .or_default()
+                .push(num);
         }
     }
 
@@ -152,49 +374,70 @@ fn install_custom_policy(path: &Path) -> Result<()> {
 
 fn syscall_name_to_number(name: &str) -> Option<i64> {
     let num = match name {
-        "io_uring_setup"    => libc::SYS_io_uring_setup,
-        "io_uring_enter"    => libc::SYS_io_uring_enter,
+        "io_uring_setup" => libc::SYS_io_uring_setup,
+        "io_uring_enter" => libc::SYS_io_uring_enter,
         "io_uring_register" => libc::SYS_io_uring_register,
-        "ptrace"            => libc::SYS_ptrace,
-        "process_vm_readv"  => libc::SYS_process_vm_readv,
+        "ptrace" => libc::SYS_ptrace,
+        "process_vm_readv" => libc::SYS_process_vm_readv,
         "process_vm_writev" => libc::SYS_process_vm_writev,
-        "bpf"               => libc::SYS_bpf,
-        "userfaultfd"       => libc::SYS_userfaultfd,
-        "perf_event_open"   => libc::SYS_perf_event_open,
-        "kexec_load"        => libc::SYS_kexec_load,
-        "init_module"       => libc::SYS_init_module,
-        "finit_module"      => libc::SYS_finit_module,
-        "delete_module"     => libc::SYS_delete_module,
-        "mount"             => libc::SYS_mount,
-        "umount2"           => libc::SYS_umount2,
-        "pivot_root"        => libc::SYS_pivot_root,
-        "swapon"            => libc::SYS_swapon,
-        "swapoff"           => libc::SYS_swapoff,
-        "reboot"            => libc::SYS_reboot,
-        "settimeofday"      => libc::SYS_settimeofday,
-        "clock_settime"     => libc::SYS_clock_settime,
-        "acct"              => libc::SYS_acct,
-        "add_key"           => libc::SYS_add_key,
-        "keyctl"            => libc::SYS_keyctl,
-        "request_key"       => libc::SYS_request_key,
-        "mbind"             => libc::SYS_mbind,
-        "set_mempolicy"     => libc::SYS_set_mempolicy,
-        "move_pages"        => libc::SYS_move_pages,
-        "personality"       => libc::SYS_personality,
-        "read" => libc::SYS_read, "write" => libc::SYS_write,
-        "open" => libc::SYS_open, "close" => libc::SYS_close,
-        "mmap" => libc::SYS_mmap, "mprotect" => libc::SYS_mprotect,
-        "munmap" => libc::SYS_munmap, "brk" => libc::SYS_brk,
-        "execve" => libc::SYS_execve, "exit_group" => libc::SYS_exit_group,
-        "clone" => libc::SYS_clone, "wait4" => libc::SYS_wait4,
+        "bpf" => libc::SYS_bpf,
+        "userfaultfd" => libc::SYS_userfaultfd,
+        "perf_event_open" => libc::SYS_perf_event_open,
+        "kexec_load" => libc::SYS_kexec_load,
+        "init_module" => libc::SYS_init_module,
+        "finit_module" => libc::SYS_finit_module,
+        "delete_module" => libc::SYS_delete_module,
+        "mount" => libc::SYS_mount,
+        "umount2" => libc::SYS_umount2,
+        "pivot_root" => libc::SYS_pivot_root,
+        "swapon" => libc::SYS_swapon,
+        "swapoff" => libc::SYS_swapoff,
+        "reboot" => libc::SYS_reboot,
+        "settimeofday" => libc::SYS_settimeofday,
+        "clock_settime" => libc::SYS_clock_settime,
+        "acct" => libc::SYS_acct,
+        "add_key" => libc::SYS_add_key,
+        "keyctl" => libc::SYS_keyctl,
+        "request_key" => libc::SYS_request_key,
+        "mbind" => libc::SYS_mbind,
+        "set_mempolicy" => libc::SYS_set_mempolicy,
+        "move_pages" => libc::SYS_move_pages,
+        "personality" => libc::SYS_personality,
+        "unshare" => libc::SYS_unshare,
+        "chroot" => libc::SYS_chroot,
+        "setns" => libc::SYS_setns,
+        "move_mount" => libc::SYS_move_mount,
+        "open_tree" => libc::SYS_open_tree,
+        "mount_setattr" => libc::SYS_mount_setattr,
+        "fsopen" => libc::SYS_fsopen,
+        "fsmount" => libc::SYS_fsmount,
+        "fsconfig" => libc::SYS_fsconfig,
+        "fspick" => libc::SYS_fspick,
+        "name_to_handle_at" => libc::SYS_name_to_handle_at,
+        "open_by_handle_at" => libc::SYS_open_by_handle_at,
+        "kexec_file_load" => libc::SYS_kexec_file_load,
+        "read" => libc::SYS_read,
+        "write" => libc::SYS_write,
+        "open" => libc::SYS_open,
+        "close" => libc::SYS_close,
+        "mmap" => libc::SYS_mmap,
+        "mprotect" => libc::SYS_mprotect,
+        "munmap" => libc::SYS_munmap,
+        "brk" => libc::SYS_brk,
+        "execve" => libc::SYS_execve,
+        "exit_group" => libc::SYS_exit_group,
+        "clone" => libc::SYS_clone,
+        "wait4" => libc::SYS_wait4,
         "rt_sigaction" => libc::SYS_rt_sigaction,
         "rt_sigreturn" => libc::SYS_rt_sigreturn,
-        "getcwd" => libc::SYS_getcwd, "getpid" => libc::SYS_getpid,
+        "getcwd" => libc::SYS_getcwd,
+        "getpid" => libc::SYS_getpid,
         _ => return None,
     };
-    Some(num as i64)
+    Some(num)
 }
 
+#[must_use]
 pub fn builtin_deny_list_names() -> Vec<&'static str> {
     BUILTIN_DENY_LIST.iter().map(|r| r.name).collect()
 }
@@ -205,7 +448,7 @@ mod tests {
 
     #[test]
     fn builtin_deny_list_has_expected_count() {
-        assert_eq!(BUILTIN_DENY_LIST.len(), 18);
+        assert_eq!(BUILTIN_DENY_LIST.len(), 42);
     }
 
     #[test]
@@ -237,7 +480,10 @@ mod tests {
 
     #[test]
     fn default_policy_is_builtin() {
-        assert!(matches!(SeccompPolicy::default(), SeccompPolicy::BuiltinDenyList));
+        assert!(matches!(
+            SeccompPolicy::default(),
+            SeccompPolicy::BuiltinDenyList
+        ));
     }
 
     #[test]

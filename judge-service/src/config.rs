@@ -12,14 +12,16 @@ pub struct ServiceConfig {
     pub max_code_bytes: usize,
     pub max_stdin_bytes: usize,
     pub sync_wait_timeout_secs: u64,
-    pub sync_poll_interval_ms: u64,
     pub webhook_timeout_secs: u64,
+    pub drain_timeout_secs: u64,
+    pub rate_limit_per_minute: u32,
+    pub trust_proxy_headers: bool,
 }
 
 impl ServiceConfig {
     pub fn from_env() -> Self {
         Self {
-            port: env_or("RUSTBOX_PORT", 8080),
+            port: env_or("RUSTBOX_PORT", 4096),
             workers: env_or("RUSTBOX_WORKERS", 2),
             queue_size: env_or("RUSTBOX_QUEUE_SIZE", 100),
             database_url: std::env::var("RUSTBOX_DATABASE_URL")
@@ -35,8 +37,10 @@ impl ServiceConfig {
             max_code_bytes: env_or("RUSTBOX_MAX_CODE_BYTES", 64 * 1024),
             max_stdin_bytes: env_or("RUSTBOX_MAX_STDIN_BYTES", 256 * 1024),
             sync_wait_timeout_secs: env_or("RUSTBOX_SYNC_WAIT_TIMEOUT_SECS", 30),
-            sync_poll_interval_ms: env_or("RUSTBOX_SYNC_POLL_INTERVAL_MS", 200),
             webhook_timeout_secs: env_or("RUSTBOX_WEBHOOK_TIMEOUT_SECS", 10),
+            drain_timeout_secs: env_or("RUSTBOX_DRAIN_TIMEOUT_SECS", 35),
+            rate_limit_per_minute: env_or("RUSTBOX_RATE_LIMIT", 0),
+            trust_proxy_headers: env_or("RUSTBOX_TRUST_PROXY_HEADERS", false),
         }
     }
 }

@@ -24,7 +24,6 @@ impl CgroupV2 {
     }
 
     fn detect_cgroup_base() -> Result<String> {
-
         let candidates = Self::cgroup_base_candidates();
 
         for (base, parent_subtree_control) in &candidates {
@@ -35,7 +34,8 @@ impl CgroupV2 {
             if let Err(e) = fs::write(parent_subtree_control, "+memory +pids +cpu") {
                 log::debug!(
                     "could not enable controllers at {}: {} (may already be enabled)",
-                    parent_subtree_control, e
+                    parent_subtree_control,
+                    e
                 );
             }
 
@@ -54,7 +54,10 @@ impl CgroupV2 {
                     log::info!("cgroup v2 base: {}", base);
                     return Ok(base.clone());
                 }
-                log::debug!("probe at {} has no memory.max - controllers not delegated", base);
+                log::debug!(
+                    "probe at {} has no memory.max - controllers not delegated",
+                    base
+                );
             }
         }
 
@@ -64,12 +67,10 @@ impl CgroupV2 {
     }
 
     fn cgroup_base_candidates() -> Vec<(String, String)> {
-        let mut candidates = vec![
-            (
-                "/sys/fs/cgroup/rustbox".to_string(),
-                "/sys/fs/cgroup/cgroup.subtree_control".to_string(),
-            ),
-        ];
+        let mut candidates = vec![(
+            "/sys/fs/cgroup/rustbox".to_string(),
+            "/sys/fs/cgroup/cgroup.subtree_control".to_string(),
+        )];
 
         if let Ok(content) = fs::read_to_string("/proc/self/cgroup") {
             let self_path = content
@@ -106,7 +107,8 @@ impl CgroupV2 {
     }
 
     fn instance_path(&self, instance_id: &str) -> PathBuf {
-        self.base_path.join(super::cgroup::sanitize_instance_id(instance_id))
+        self.base_path
+            .join(super::cgroup::sanitize_instance_id(instance_id))
     }
 
     fn current_instance_path(&self) -> PathBuf {
@@ -114,26 +116,11 @@ impl CgroupV2 {
     }
 
     fn read_u64_file(path: &Path, name: &str) -> Result<u64> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| IsolateError::Cgroup(format!("failed to read {}: {}", name, e)))?;
-        content
-            .trim()
-            .parse::<u64>()
-            .map_err(|e| IsolateError::Cgroup(format!("failed to parse {}: {}", name, e)))
+        super::cgroup::read_cgroup_u64(path, name)
     }
 
     fn read_optional_limit(path: &Path, name: &str) -> Result<Option<u64>> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| IsolateError::Cgroup(format!("failed to read {}: {}", name, e)))?;
-        let value = content.trim();
-        if value == "max" {
-            Ok(None)
-        } else {
-            let parsed = value
-                .parse::<u64>()
-                .map_err(|e| IsolateError::Cgroup(format!("failed to parse {}: {}", name, e)))?;
-            Ok(Some(parsed))
-        }
+        super::cgroup::read_cgroup_optional_limit(path, name)
     }
 
     fn cpu_max_value(limit_usec: u64) -> Result<String> {
@@ -156,31 +143,15 @@ impl CgroupV2 {
     }
 
     fn collect_optional_metric<T>(&self, name: &str, result: Result<T>) -> Result<Option<T>> {
-        self.try_permissive(name, result.map(Some), None)
+        super::cgroup::collect_cgroup_optional_metric(self.strict_mode, name, result)
     }
 
     fn try_permissive<T>(&self, name: &str, result: Result<T>, fallback: T) -> Result<T> {
-        match result {
-            Ok(value) => Ok(value),
-            Err(err) if self.strict_mode => Err(IsolateError::Cgroup(format!(
-                "failed collecting {} in strict mode: {}",
-                name, err
-            ))),
-            Err(err) => {
-                log::warn!("failed collecting {} in permissive mode: {}", name, err);
-                Ok(fallback)
-            }
-        }
+        super::cgroup::collect_cgroup_metric(self.strict_mode, name, result, fallback)
     }
 
     fn write_permissive(&self, path: &Path, value: &str, name: &str) -> Result<()> {
-        if let Err(err) = fs::write(path, value) {
-            if self.strict_mode {
-                return Err(IsolateError::Cgroup(format!("failed to set {}: {}", name, err)));
-            }
-            log::warn!("failed to set {} in permissive mode: {}", name, err);
-        }
-        Ok(())
+        super::cgroup::write_cgroup_value(path, &value, self.strict_mode, name)
     }
 
     fn read_cgroup_field(path: &Path, file_name: &str, field: &str) -> Result<u64> {
@@ -336,7 +307,9 @@ impl CgroupBackend for CgroupV2 {
 
     fn attach_process(&self, instance_id: &str, pid: u32) -> Result<()> {
         if pid == 0 {
-            return Err(IsolateError::Cgroup("invalid PID 0 for cgroup attach".to_string()));
+            return Err(IsolateError::Cgroup(
+                "invalid PID 0 for cgroup attach".to_string(),
+            ));
         }
 
         let procs_path = self.instance_path(instance_id).join("cgroup.procs");
@@ -348,7 +321,9 @@ impl CgroupBackend for CgroupV2 {
 
     fn set_memory_limit(&self, instance_id: &str, limit_bytes: u64) -> Result<()> {
         if limit_bytes == 0 {
-            return Err(IsolateError::Cgroup("memory limit cannot be zero".to_string()));
+            return Err(IsolateError::Cgroup(
+                "memory limit cannot be zero".to_string(),
+            ));
         }
         let path = self.instance_path(instance_id);
 
@@ -357,12 +332,17 @@ impl CgroupBackend for CgroupV2 {
 
         self.write_permissive(&path.join("memory.swap.max"), "0", "memory.swap.max=0")?;
 
+        let high = (limit_bytes as f64 * 0.9) as u64;
+        self.write_permissive(&path.join("memory.high"), &high.to_string(), "memory.high")?;
+
         Ok(())
     }
 
     fn set_process_limit(&self, instance_id: &str, limit: u32) -> Result<()> {
         if limit == 0 {
-            return Err(IsolateError::Cgroup("process limit cannot be zero".to_string()));
+            return Err(IsolateError::Cgroup(
+                "process limit cannot be zero".to_string(),
+            ));
         }
         let limit_path = self.instance_path(instance_id).join("pids.max");
         fs::write(&limit_path, limit.to_string())

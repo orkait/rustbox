@@ -116,3 +116,16 @@ skills-lock.json
 mcp.json
 
 CLAUDE.md
+
+## Test artifacts
+judge-service/rustbox-test-*.db*
+judge-service/*.db-shm
+judge-service/*.db-wal
+*.db-shm
+*.db-wal
+
+## Docker
+.wrangler/
+
+## Astro build artifacts
+docs-site/.astro/

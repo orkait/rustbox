@@ -1,92 +1,73 @@
-direction: down
+grid-columns: 8
+grid-rows: 1
+grid-gap: 0
 
-host: {
-  label: "Host System"
-  style.fill: "#ffffff"
+l8: {
+  label: "8\nNO_NEW\nPRIVS"
+  style.fill: "#eff1f5"
   style.stroke: "#6c6f85"
   style.font-color: "#4c4f69"
-  style.border-radius: 16
-  style.font-size: 14
+  style.border-radius: 0
+  style.font-size: 11
+}
+l7: {
+  label: "7\nCreds\nDrop"
+  style.fill: "#e6e9ef"
+  style.stroke: "#6c6f85"
+  style.font-color: "#4c4f69"
+  style.border-radius: 0
+  style.font-size: 11
+}
+l6: {
+  label: "6\nCaps\nZeroed"
+  style.fill: "#dce0e8"
+  style.stroke: "#6c6f85"
+  style.font-color: "#4c4f69"
+  style.border-radius: 0
+  style.font-size: 11
+}
+l5: {
+  label: "5\nSeccomp\nBPF"
+  style.fill: "#ccd0da"
+  style.stroke: "#6c6f85"
+  style.font-color: "#4c4f69"
+  style.border-radius: 0
+  style.font-size: 11
+}
+l4: {
+  label: "4\nCgroups"
+  style.fill: "#bcc0cc"
+  style.stroke: "#6c6f85"
+  style.font-color: "#4c4f69"
+  style.border-radius: 0
+  style.font-size: 11
+}
+l3: {
+  label: "3\nNet NS"
+  style.fill: "#acb0be"
+  style.stroke: "#6c6f85"
+  style.font-color: "#4c4f69"
+  style.border-radius: 0
+  style.font-size: 11
+}
+l2: {
+  label: "2\nMount NS\n+ Chroot"
+  style.fill: "#9ca0b0"
+  style.stroke: "#6c6f85"
+  style.font-color: "#ffffff"
+  style.border-radius: 0
+  style.font-size: 11
+}
+l1: {
+  label: "1\nPID NS"
+  style.fill: "#6c6f85"
+  style.stroke: "#4c4f69"
+  style.font-color: "#ffffff"
+  style.border-radius: 0
+  style.font-size: 11
+}
 
-  l8: {
-    label: "8. NO_NEW_PRIVS"
-    style.fill: "#ffffff"
-    style.stroke: "#6c6f85"
-    style.font-color: "#4c4f69"
-    style.border-radius: 14
-    style.font-size: 12
-
-    l7: {
-      label: "7. Credential Drop (UID 60000)"
-      style.fill: "#ffffff"
-      style.stroke: "#6c6f85"
-      style.font-color: "#4c4f69"
-      style.border-radius: 14
-      style.font-size: 12
-
-      l6: {
-        label: "6. Capabilities Zeroed"
-        style.fill: "#ffffff"
-        style.stroke: "#6c6f85"
-        style.font-color: "#4c4f69"
-        style.border-radius: 14
-        style.font-size: 12
-
-        l5: {
-          label: "5. Seccomp-BPF (18 syscalls blocked)"
-          style.fill: "#ffffff"
-          style.stroke: "#6c6f85"
-          style.font-color: "#4c4f69"
-          style.border-radius: 14
-          style.font-size: 12
-
-          l4: {
-            label: "4. Cgroups (memory + CPU + PIDs)"
-            style.fill: "#ffffff"
-            style.stroke: "#6c6f85"
-            style.font-color: "#4c4f69"
-            style.border-radius: 14
-            style.font-size: 12
-
-            l3: {
-              label: "3. Network Namespace (no sockets)"
-              style.fill: "#ffffff"
-              style.stroke: "#6c6f85"
-              style.font-color: "#4c4f69"
-              style.border-radius: 14
-              style.font-size: 12
-
-              l2: {
-                label: "2. Mount Namespace + Chroot"
-                style.fill: "#ffffff"
-                style.stroke: "#6c6f85"
-                style.font-color: "#4c4f69"
-                style.border-radius: 14
-                style.font-size: 12
-
-                l1: {
-                  label: "1. PID Namespace"
-                  style.fill: "#ffffff"
-                  style.stroke: "#6c6f85"
-                  style.font-color: "#4c4f69"
-                  style.border-radius: 12
-                  style.font-size: 12
-
-                  payload: {
-                    label: "User Code"
-                    style.fill: "#fe640b"
-                    style.stroke: "#fe640b"
-                    style.font-color: "#ffffff"
-                    style.border-radius: 8
-                    style.font-size: 14
-                    style.bold: true
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
+l8 -> l7 -> l6 -> l5 -> l4 -> l3 -> l2 -> l1: {
+  style.stroke: "#fe640b"
+  style.stroke-width: 2
 }

@@ -1,5 +1,5 @@
 use crate::config::types::{IsolateError, Result};
-use nix::sched::{CloneFlags, unshare};
+use nix::sched::{unshare, CloneFlags};
 use nix::unistd::sethostname;
 
 #[derive(Debug, Clone)]
@@ -163,7 +163,7 @@ impl NamespaceIsolation {
 }
 
 pub fn harden_mount_propagation() -> Result<()> {
-    use nix::mount::{MsFlags, mount};
+    use nix::mount::{mount, MsFlags};
 
     mount(
         None::<&str>,

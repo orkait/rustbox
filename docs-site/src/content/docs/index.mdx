@@ -19,13 +19,14 @@ Built for anyone running code from strangers on the internet - online judges, co
 
 | | rustbox | Judge0 | Isolate (IOI) |
 |---|---|---|---|
-| Isolation | 8 kernel layers | Docker container | cgroups + mount |
-| Compile-time safety | Typestate chain | None | None |
-| Verdict provenance | Kernel evidence bundle | Exit code heuristics | Exit code heuristics |
-| Webhook support | Standard Webhooks + HMAC | No | No |
-| Sync mode | `?wait=true` | No | No |
-| Binary size | 2.8MB | Docker image (~1GB) | ~200KB (C) |
-| Setup | `cargo build` | Docker Compose + Redis + PostgreSQL | `make install` |
+| Deployment | 1 binary + SQLite | Docker + Rails + PostgreSQL + Redis | `make install` |
+| Languages | 5 | 60+ | Any (manual config) |
+| Isolation | Namespaces + cgroups + seccomp + capabilities | Docker container (same primitives, thicker abstraction) | cgroups + mount |
+| Compile-time safety | Typestate chain (misordering = compiler error) | Runtime checks | Runtime checks |
+| Verdict source | Kernel evidence (cgroup OOM events, /proc, waitpid) | Exit code + wall time heuristics | Exit code heuristics |
+| API modes | Async polling + sync `?wait=true` + webhooks (HMAC) | Polling only | CLI only |
+| Security audit | All 11 findings resolved ([audit report](/specs)) | Community-tested, CVE-2024-28185 patched | Mature, well-reviewed |
+| Setup time | `docker compose up` | Docker Compose + env config (~15 min) | `make install` |
 
 ### Security model at a glance
 

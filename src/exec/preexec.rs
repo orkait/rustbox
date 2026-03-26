@@ -1,10 +1,8 @@
 use crate::config::types::{IsolateError, Result};
-use crate::core::types::ExecutionProfile;
-use crate::utils::fork_safe_log::{
-    fs_debug, fs_info_parts, fs_warn_parts, itoa_buf, itoa_i32,
-};
+use crate::sandbox::types::ExecutionProfile;
 use crate::kernel::capabilities::{self, check_no_new_privs, set_no_new_privs};
 use crate::kernel::credentials::transition_to_unprivileged;
+use crate::utils::fork_safe_log::{fs_debug, fs_info_parts, fs_warn_parts, itoa_buf, itoa_i32};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::marker::PhantomData;
@@ -29,20 +27,24 @@ fn apply_rlimit_value(
     }
 
     let err = std::io::Error::last_os_error();
+    let mut sbuf = [0u8; 20];
+    let mut hbuf = [0u8; 20];
+    let mut ebuf = [0u8; 20];
+    let soft_s = itoa_buf(soft, &mut sbuf);
+    let hard_s = itoa_buf(hard, &mut hbuf);
+    let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
     if strict_mode {
-        Err(IsolateError::Process(format!(
-            "Failed to apply {}={} (hard={}): {}",
-            name, soft, hard, err
-        )))
-    } else {
-        let mut sbuf = [0u8; 20];
-        let mut hbuf = [0u8; 20];
-        let mut ebuf = [0u8; 20];
-        let soft_s = itoa_buf(soft, &mut sbuf);
-        let hard_s = itoa_buf(hard, &mut hbuf);
-        let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
         fs_warn_parts(&[
-            "Failed to apply ", name, "=", soft_s, " (hard=", hard_s,
+            "FATAL: Failed to apply ",
+            name, "=", soft_s, " (hard=", hard_s, "): errno=", eno,
+        ]);
+        Err(IsolateError::Process(
+            "rlimit setup failed in strict mode (see stderr)".to_string(),
+        ))
+    } else {
+        fs_warn_parts(&[
+            "Failed to apply ",
+            name, "=", soft_s, " (hard=", hard_s,
             ") in permissive mode: errno=", eno,
         ]);
         Ok(())
@@ -54,14 +56,14 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
     let clear_rc = unsafe { libc::clearenv() };
     if clear_rc != 0 {
         let err = std::io::Error::last_os_error();
-        if strict_mode {
-            return Err(IsolateError::Process(format!(
-                "clearenv failed in strict mode: {}",
-                err
-            )));
-        }
         let mut ebuf = [0u8; 20];
         let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
+        if strict_mode {
+            fs_warn_parts(&["FATAL: clearenv failed: errno=", eno]);
+            return Err(IsolateError::Process(
+                "clearenv failed in strict mode (see stderr)".to_string(),
+            ));
+        }
         fs_warn_parts(&["clearenv failed in permissive mode: errno=", eno]);
     }
 
@@ -69,14 +71,15 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
         let key_c = match CString::new(key.as_str()) {
             Ok(k) => k,
             Err(_) if strict_mode => {
-                return Err(IsolateError::Config(format!(
-                    "Environment key contains NUL byte: {}",
-                    key
-                )));
+                fs_warn_parts(&["FATAL: env key contains NUL byte: ", key]);
+                return Err(IsolateError::Config(
+                    "environment key contains NUL byte (see stderr)".to_string(),
+                ));
             }
             Err(_) => {
                 fs_warn_parts(&[
-                    "Skipping environment key with NUL byte in permissive mode: ", key,
+                    "Skipping environment key with NUL byte in permissive mode: ",
+                    key,
                 ]);
                 continue;
             }
@@ -85,14 +88,15 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
         let value_c = match CString::new(value.as_str()) {
             Ok(v) => v,
             Err(_) if strict_mode => {
-                return Err(IsolateError::Config(format!(
-                    "Environment value for {} contains NUL byte",
-                    key
-                )));
+                fs_warn_parts(&["FATAL: env value contains NUL byte for key: ", key]);
+                return Err(IsolateError::Config(
+                    "environment value contains NUL byte (see stderr)".to_string(),
+                ));
             }
             Err(_) => {
                 fs_warn_parts(&[
-                    "Skipping environment value with NUL byte in permissive mode: ", key,
+                    "Skipping environment value with NUL byte in permissive mode: ",
+                    key,
                 ]);
                 continue;
             }
@@ -101,15 +105,20 @@ fn apply_exec_environment(env_map: &HashMap<String, String>, strict_mode: bool) 
         let rc = unsafe { libc::setenv(key_c.as_ptr(), value_c.as_ptr(), 1) };
         if rc != 0 {
             let err = std::io::Error::last_os_error();
-            if strict_mode {
-                return Err(IsolateError::Process(format!(
-                    "setenv failed for {}: {}",
-                    key, err
-                )));
-            }
             let mut ebuf = [0u8; 20];
             let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
-            fs_warn_parts(&["setenv failed for ", key, " in permissive mode: errno=", eno]);
+            if strict_mode {
+                fs_warn_parts(&["FATAL: setenv failed for ", key, ": errno=", eno]);
+                return Err(IsolateError::Process(
+                    "setenv failed in strict mode (see stderr)".to_string(),
+                ));
+            }
+            fs_warn_parts(&[
+                "setenv failed for ",
+                key,
+                " in permissive mode: errno=",
+                eno,
+            ]);
         }
     }
 
@@ -141,6 +150,7 @@ pub struct FreshChild;
 pub struct NamespacesReady;
 pub struct MountsPrivate;
 pub struct CgroupAttached;
+pub struct RootTransitioned;
 pub struct CredsDropped;
 pub struct PrivsLocked;
 pub struct ExecReady;
@@ -151,6 +161,18 @@ pub struct Sandbox<S> {
     pub strict_mode: bool,
     pub mount_namespace_enabled: bool,
     _state: PhantomData<S>,
+}
+
+impl<S> Sandbox<S> {
+    fn transition<T>(self) -> Sandbox<T> {
+        Sandbox {
+            pid: self.pid,
+            instance_id: self.instance_id,
+            strict_mode: self.strict_mode,
+            mount_namespace_enabled: self.mount_namespace_enabled,
+            _state: PhantomData,
+        }
+    }
 }
 
 impl Sandbox<FreshChild> {
@@ -179,7 +201,12 @@ impl Sandbox<FreshChild> {
             if sid < 0 {
                 let err = std::io::Error::last_os_error();
                 if self.strict_mode {
-                    return Err(IsolateError::Process(format!("setsid failed: {}", err)));
+                    let mut ebuf = [0u8; 20];
+                    let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
+                    fs_warn_parts(&["FATAL: setsid failed: errno=", eno]);
+                    return Err(IsolateError::Process(
+                        "setsid failed in strict mode (see stderr)".to_string(),
+                    ));
                 }
                 let mut ebuf = [0u8; 20];
                 let eno = itoa_i32(err.raw_os_error().unwrap_or(-1), &mut ebuf);
@@ -223,13 +250,9 @@ impl Sandbox<FreshChild> {
             }
         }
 
-        Ok(Sandbox {
-            pid: self.pid,
-            instance_id: self.instance_id,
-            strict_mode: self.strict_mode,
-            mount_namespace_enabled: enable_mount,
-            _state: PhantomData,
-        })
+        let mut next: Sandbox<NamespacesReady> = self.transition();
+        next.mount_namespace_enabled = enable_mount;
+        Ok(next)
     }
 }
 
@@ -249,13 +272,7 @@ impl Sandbox<NamespacesReady> {
             fs_debug("Mount namespace disabled; skipping propagation hardening step");
         }
 
-        Ok(Sandbox {
-            pid: self.pid,
-            instance_id: self.instance_id,
-            strict_mode: self.strict_mode,
-            mount_namespace_enabled: self.mount_namespace_enabled,
-            _state: PhantomData,
-        })
+        Ok(self.transition())
     }
 }
 
@@ -276,21 +293,22 @@ impl Sandbox<MountsPrivate> {
             } else {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
-                    format!(
-                        "No cgroup attach file found under {} (expected cgroup.procs or tasks)",
-                        cgroup_dir.display()
-                    ),
+                    "no cgroup.procs or tasks file found",
                 ))
             };
 
             if let Err(e) = write_result {
                 if self.strict_mode {
-                    return Err(IsolateError::Cgroup(format!(
-                        "Failed to attach PID {} to cgroup {}: {}",
-                        current_pid,
-                        cgroup_dir.display(),
-                        e
-                    )));
+                    let mut pbuf = [0u8; 20];
+                    let pid_s = itoa_buf(current_pid as u64, &mut pbuf);
+                    let mut ebuf = [0u8; 20];
+                    let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
+                    fs_warn_parts(&[
+                        "FATAL: cgroup attach PID ", pid_s, " to ", path, ": errno=", eno,
+                    ]);
+                    return Err(IsolateError::Cgroup(
+                        "cgroup attach failed in strict mode (see stderr)".to_string(),
+                    ));
                 }
                 let mut pbuf = [0u8; 20];
                 let pid_s = itoa_buf(current_pid as u64, &mut pbuf);
@@ -298,24 +316,28 @@ impl Sandbox<MountsPrivate> {
                 let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
                 let path_s = path;
                 fs_warn_parts(&[
-                    "Failed to attach PID ", pid_s, " to cgroup ", path_s,
-                    " (permissive mode): errno=", eno,
+                    "Failed to attach PID ",
+                    pid_s,
+                    " to cgroup ",
+                    path_s,
+                    " (permissive mode): errno=",
+                    eno,
                 ]);
             } else {
                 let mut pbuf = [0u8; 20];
                 let pid_s = itoa_buf(current_pid as u64, &mut pbuf);
                 let path_s = path;
-                fs_info_parts(&["Attached PID ", pid_s, " to cgroup ", path_s, " before exec"]);
+                fs_info_parts(&[
+                    "Attached PID ",
+                    pid_s,
+                    " to cgroup ",
+                    path_s,
+                    " before exec",
+                ]);
             }
         }
 
-        Ok(Sandbox {
-            pid: self.pid,
-            instance_id: self.instance_id,
-            strict_mode: self.strict_mode,
-            mount_namespace_enabled: self.mount_namespace_enabled,
-            _state: PhantomData,
-        })
+        Ok(self.transition())
     }
 }
 
@@ -323,12 +345,12 @@ impl Sandbox<CgroupAttached> {
     pub fn setup_mounts_and_root(
         self,
         profile: &ExecutionProfile,
-    ) -> Result<Sandbox<CgroupAttached>> {
+    ) -> Result<Sandbox<RootTransitioned>> {
         let mut fs_security = crate::kernel::mount::FilesystemSecurity::new(
             profile.chroot_dir.clone(),
             profile.workdir.clone(),
             self.strict_mode,
-            profile.file_size_limit.or(profile.memory_limit),
+            profile.tmpfs_size_bytes.or(profile.file_size_limit).or(profile.memory_limit),
             None,
         );
 
@@ -353,27 +375,60 @@ impl Sandbox<CgroupAttached> {
             fs_warn_parts(&["Root transition failed (permissive mode)"]);
         }
 
-        Ok(self)
+        Ok(self.transition())
     }
+}
 
+impl Sandbox<RootTransitioned> {
     pub fn apply_runtime_hygiene(
         self,
         profile: &ExecutionProfile,
-    ) -> Result<Sandbox<CgroupAttached>> {
+    ) -> Result<Sandbox<RootTransitioned>> {
         #[cfg(unix)]
         {
             let rlimits: &[(&str, libc::__rlimit_resource_t, Option<(u64, u64)>)] = &[
-                ("RLIMIT_AS", libc::RLIMIT_AS, profile.virtual_memory_limit.map(|v| (v, v))),
-                ("RLIMIT_FSIZE", libc::RLIMIT_FSIZE, profile.file_size_limit.map(|v| (v, v))),
-                ("RLIMIT_CORE", libc::RLIMIT_CORE, Some((profile.core_limit.unwrap_or(0), profile.core_limit.unwrap_or(0)))),
+                (
+                    "RLIMIT_AS",
+                    libc::RLIMIT_AS,
+                    profile.virtual_memory_limit.map(|v| (v, v)),
+                ),
+                (
+                    "RLIMIT_FSIZE",
+                    libc::RLIMIT_FSIZE,
+                    profile.file_size_limit.map(|v| (v, v)),
+                ),
+                (
+                    "RLIMIT_CORE",
+                    libc::RLIMIT_CORE,
+                    Some((
+                        profile.core_limit.unwrap_or(0),
+                        profile.core_limit.unwrap_or(0),
+                    )),
+                ),
                 ("RLIMIT_MEMLOCK", libc::RLIMIT_MEMLOCK, Some((0, 0))),
-                ("RLIMIT_NPROC", libc::RLIMIT_NPROC, profile.process_limit.map(|v| (v as u64, v as u64))),
-                ("RLIMIT_STACK", libc::RLIMIT_STACK, profile.stack_limit.map(|v| (v, v))),
-                ("RLIMIT_NOFILE", libc::RLIMIT_NOFILE, profile.fd_limit.map(|v| (v, v))),
-                ("RLIMIT_CPU", libc::RLIMIT_CPU, profile.cpu_time_limit_ms.map(|ms| {
-                    let s = (ms / 1000).max(1);
-                    (s, s + 1)
-                })),
+                (
+                    "RLIMIT_NPROC",
+                    libc::RLIMIT_NPROC,
+                    profile.process_limit.map(|v| (v as u64, v as u64)),
+                ),
+                (
+                    "RLIMIT_STACK",
+                    libc::RLIMIT_STACK,
+                    profile.stack_limit.map(|v| (v, v)),
+                ),
+                (
+                    "RLIMIT_NOFILE",
+                    libc::RLIMIT_NOFILE,
+                    profile.fd_limit.map(|v| (v, v)),
+                ),
+                (
+                    "RLIMIT_CPU",
+                    libc::RLIMIT_CPU,
+                    profile.cpu_time_limit_ms.map(|ms| {
+                        let s = (ms / 1000).max(1);
+                        (s, s + 1)
+                    }),
+                ),
             ];
             for &(name, resource, ref limits) in rlimits {
                 if let Some((soft, hard)) = *limits {
@@ -402,103 +457,35 @@ impl Sandbox<CgroupAttached> {
                 env_map.insert(key.clone(), value.clone());
             }
 
-            const DANGEROUS_ENV_BLOCKLIST: &[&str] = &[
-                "LD_PRELOAD",
-                "LD_LIBRARY_PATH",
-                "LD_AUDIT",
-                "LD_DEBUG",
-                "LD_PROFILE",
-                "LD_BIND_NOW",
-                "LD_BIND_NOT",
-                "LD_DYNAMIC_WEAK",
-                "LD_USE_LOAD_BIAS",
-                "BASH_ENV",
-                "ENV",
-                "CDPATH",
-                "PYTHONSTARTUP",
-                "PERL5OPT",
-                "RUBYOPT",
-                "NODE_OPTIONS",
-                "IFS",
-                "GCONV_PATH",
-                "HOSTALIASES",
-                "LOCALDOMAIN",
-                "RES_OPTIONS",
-                "http_proxy",
-                "https_proxy",
-                "HTTP_PROXY",
-                "HTTPS_PROXY",
-                "ftp_proxy",
-                "FTP_PROXY",
-                "all_proxy",
-                "ALL_PROXY",
-                "no_proxy",
-                "NO_PROXY",
-                "_JAVA_OPTIONS",
-                "JDK_JAVA_OPTIONS",
-            ];
-
-            for key in DANGEROUS_ENV_BLOCKLIST {
-                if env_map.remove(*key).is_some() {
-                    fs_warn_parts(&[
-                        "Removed dangerous environment variable after profile merge: ",
-                        key,
-                    ]);
-                }
-            }
-
-            let bash_func_keys: Vec<String> = env_map
-                .keys()
-                .filter(|k| k.starts_with("BASH_FUNC_"))
-                .cloned()
-                .collect();
-            for key in &bash_func_keys {
-                env_map.remove(key);
-                fs_warn_parts(&[
-                    "Removed dangerous BASH_FUNC_ variable after profile merge: ",
-                    key,
-                ]);
-            }
-
-            const JAVA_AGENT_FLAGS: &[&str] = &["-javaagent:", "-agentpath:", "-agentlib:"];
-            if let Some(jto) = env_map.get("JAVA_TOOL_OPTIONS") {
-                let lower = jto.to_lowercase();
-                if JAVA_AGENT_FLAGS.iter().any(|flag| lower.contains(flag)) {
-                    env_map.remove("JAVA_TOOL_OPTIONS");
-                    fs_warn_parts(&[
-                        "Removed JAVA_TOOL_OPTIONS containing agent flag",
-                    ]);
-                }
-            }
+            crate::utils::env_hygiene::strip_dangerous_env(&mut env_map);
 
             apply_exec_environment(&env_map, self.strict_mode)?;
 
             if let Err(e) = std::env::set_current_dir(&profile.workdir) {
                 if self.strict_mode {
-                    return Err(IsolateError::Config(format!(
-                        "Failed to chdir to workdir {}: {}",
-                        profile.workdir.display(),
-                        e
-                    )));
+                    let mut ebuf = [0u8; 20];
+                    let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
+                    let wdir = profile.workdir.to_str().unwrap_or("<?>");
+                    fs_warn_parts(&["FATAL: chdir to ", wdir, " failed: errno=", eno]);
+                    return Err(IsolateError::Config(
+                        "chdir to workdir failed in strict mode (see stderr)".to_string(),
+                    ));
                 }
                 let mut ebuf = [0u8; 20];
                 let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
                 let wdir = profile.workdir.to_str().unwrap_or("<?>");
                 fs_warn_parts(&[
-                    "Failed to chdir to workdir ", wdir, " (permissive mode): errno=", eno,
+                    "Failed to chdir to workdir ",
+                    wdir,
+                    " (permissive mode): errno=",
+                    eno,
                 ]);
             }
 
             capabilities::drop_bounding_and_ambient()?;
         }
 
-        Ok(Sandbox {
-            pid: self.pid,
-            instance_id: self.instance_id,
-            strict_mode: self.strict_mode,
-            mount_namespace_enabled: self.mount_namespace_enabled,
-            _state: PhantomData,
-        })
+        Ok(self.transition())
     }
 
     pub fn drop_credentials(
@@ -524,19 +511,26 @@ impl Sandbox<CgroupAttached> {
             }
         }
 
-        Ok(Sandbox {
-            pid: self.pid,
-            instance_id: self.instance_id,
-            strict_mode: self.strict_mode,
-            mount_namespace_enabled: self.mount_namespace_enabled,
-            _state: PhantomData,
-        })
+        Ok(self.transition())
     }
 }
 
 impl Sandbox<CredsDropped> {
     pub fn lock_privileges(self) -> Result<Sandbox<PrivsLocked>> {
         setup_parent_death_signal()?;
+
+        // SAFETY: PR_SET_DUMPABLE(0) prevents ptrace attach and /proc/pid access
+        // from other processes sharing the same UID. Standard sandbox hardening
+        // used by Chromium, nsjail, and Firejail.
+        #[cfg(target_os = "linux")]
+        {
+            let rc = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+            if rc != 0 && self.strict_mode {
+                return Err(IsolateError::Privilege(
+                    "failed to set PR_SET_DUMPABLE(0)".to_string(),
+                ));
+            }
+        }
 
         capabilities::drop_process_caps_and_verify(self.strict_mode)?;
 
@@ -550,25 +544,13 @@ impl Sandbox<CredsDropped> {
             ));
         }
 
-        Ok(Sandbox {
-            pid: self.pid,
-            instance_id: self.instance_id,
-            strict_mode: self.strict_mode,
-            mount_namespace_enabled: self.mount_namespace_enabled,
-            _state: PhantomData,
-        })
+        Ok(self.transition())
     }
 }
 
 impl Sandbox<PrivsLocked> {
     pub fn ready_for_exec(self) -> Sandbox<ExecReady> {
-        Sandbox {
-            pid: self.pid,
-            instance_id: self.instance_id,
-            strict_mode: self.strict_mode,
-            mount_namespace_enabled: self.mount_namespace_enabled,
-            _state: PhantomData,
-        }
+        self.transition()
     }
 }
 
@@ -596,6 +578,38 @@ impl Sandbox<ExecReady> {
 mod typestate_tests {
     use super::*;
 
+    fn test_profile() -> ExecutionProfile {
+        ExecutionProfile {
+            command: vec![],
+            stdin_data: None,
+            environment: vec![],
+            inherit_fds: true,
+            workdir: std::env::temp_dir(),
+            chroot_dir: None,
+            uid: None,
+            gid: None,
+            strict_mode: false,
+            enable_pid_namespace: false,
+            enable_mount_namespace: false,
+            enable_network_namespace: false,
+            enable_user_namespace: false,
+            allow_degraded: true,
+            memory_limit: None,
+            file_size_limit: None,
+            stack_limit: None,
+            core_limit: None,
+            process_limit: None,
+            cpu_time_limit_ms: None,
+            wall_time_limit_ms: None,
+            fd_limit: None,
+            virtual_memory_limit: None,
+            directory_bindings: vec![],
+            enable_seccomp: false,
+            seccomp_policy_file: None,
+            tmpfs_size_bytes: None,
+        }
+    }
+
     #[test]
     fn test_typestate_chain_happy_path() {
         let sandbox = Sandbox::<FreshChild>::new("test-001".to_string(), false);
@@ -612,6 +626,11 @@ mod typestate_tests {
         let sandbox = sandbox
             .attach_to_cgroup(None)
             .expect("cgroup attach failed");
+
+        let profile = test_profile();
+        let sandbox = sandbox
+            .setup_mounts_and_root(&profile)
+            .expect("mount root transition failed");
 
         let sandbox = sandbox
             .drop_credentials(None, None)
@@ -636,7 +655,9 @@ mod typestate_tests {
             Err(_) => return,
         };
         let cgroup = mounts.attach_to_cgroup(None).expect("cgroup attach");
-        let creds = cgroup.drop_credentials(None, None).expect("drop_credentials");
+        let profile = test_profile();
+        let root = cgroup.setup_mounts_and_root(&profile).expect("mount root");
+        let creds = root.drop_credentials(None, None).expect("drop_credentials");
         let privs = match creds.lock_privileges() {
             Ok(s) => s,
             Err(_) => return,
@@ -646,7 +667,11 @@ mod typestate_tests {
         let result = ready.exec_payload(&[]);
         assert!(result.is_err(), "exec_payload must reject empty command");
         let msg = format!("{:?}", result.unwrap_err());
-        assert!(msg.contains("Empty"), "expected 'Empty' in error, got: {}", msg);
+        assert!(
+            msg.contains("Empty"),
+            "expected 'Empty' in error, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -707,6 +732,11 @@ mod typestate_tests {
         let sandbox = sandbox
             .attach_to_cgroup(None)
             .expect("cgroup attach failed");
+
+        let profile = test_profile();
+        let sandbox = sandbox
+            .setup_mounts_and_root(&profile)
+            .expect("mount root transition failed");
 
         let sandbox = sandbox
             .drop_credentials(Some(1000), Some(1000))

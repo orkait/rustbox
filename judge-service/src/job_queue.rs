@@ -21,7 +21,9 @@ impl JobQueue {
     pub async fn enqueue(&self, id: Uuid) -> anyhow::Result<()> {
         match self {
             JobQueue::Channel { sender, .. } => {
-                sender.try_send(id).map_err(|_| anyhow::anyhow!("queue full"))?;
+                sender
+                    .try_send(id)
+                    .map_err(|_| anyhow::anyhow!("queue full"))?;
                 Ok(())
             }
             JobQueue::Postgres => Ok(()),

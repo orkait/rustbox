@@ -47,8 +47,20 @@ async fn start_server() -> (String, Arc<dyn judge_service::database::Database>) 
         max_code_bytes: 64 * 1024,
         max_stdin_bytes: 256 * 1024,
         sync_wait_timeout_secs: 30,
-        sync_poll_interval_ms: 200,
         webhook_timeout_secs: 10,
+        cgroup_backend: None,
+        namespace_support: false,
+        enforcement_mode: "none".to_string(),
+        available_languages: vec![
+            "python".to_string(),
+            "c".to_string(),
+            "cpp".to_string(),
+            "java".to_string(),
+            "javascript".to_string(),
+            "typescript".to_string(),
+        ],
+        trust_proxy_headers: false,
+        rate_limiter: None,
     };
 
     let app = judge_service::api::router().with_state(state);
@@ -77,11 +89,7 @@ async fn poll_until_done(client: &reqwest::Client, base_url: &str, id: &str) -> 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
 
     loop {
-        let resp = client
-            .get(&url)
-            .send()
-            .await
-            .expect("poll request failed");
+        let resp = client.get(&url).send().await.expect("poll request failed");
         assert_eq!(resp.status(), 200, "expected 200 from result endpoint");
 
         let body: Value = resp.json().await.expect("failed to parse result JSON");

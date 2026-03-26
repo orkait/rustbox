@@ -55,13 +55,11 @@ impl OutputCollector {
         let stderr_limit = self.limits.stderr_limit;
         let combined_limit = self.limits.combined_limit;
 
-        let stdout_handle = stdout.map(|stdout| {
-            thread::spawn(move || collect_stream(stdout, stdout_limit, stdout_tx))
-        });
+        let stdout_handle = stdout
+            .map(|stdout| thread::spawn(move || collect_stream(stdout, stdout_limit, stdout_tx)));
 
-        let stderr_handle = stderr.map(|stderr| {
-            thread::spawn(move || collect_stream(stderr, stderr_limit, stderr_tx))
-        });
+        let stderr_handle = stderr
+            .map(|stderr| thread::spawn(move || collect_stream(stderr, stderr_limit, stderr_tx)));
 
         let timeout = Duration::from_millis(self.limits.collection_timeout_ms);
         let start = Instant::now();
@@ -71,6 +69,8 @@ impl OutputCollector {
         let mut stdout_integrity = OutputIntegrity::Complete;
         let mut stderr_integrity = OutputIntegrity::Complete;
         let mut combined_truncated = false;
+        let mut stdout_received = stdout_handle.is_none();
+        let mut stderr_received = stderr_handle.is_none();
 
         loop {
             if start.elapsed() > timeout {
@@ -83,41 +83,27 @@ impl OutputCollector {
                 Ok((data, integrity)) => {
                     stdout_data = data;
                     stdout_integrity = integrity;
+                    stdout_received = true;
                 }
                 Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {}
+                Err(TryRecvError::Disconnected) => {
+                    stdout_received = true;
+                }
             }
 
             match stderr_rx.try_recv() {
                 Ok((data, integrity)) => {
                     stderr_data = data;
                     stderr_integrity = integrity;
+                    stderr_received = true;
                 }
                 Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {}
+                Err(TryRecvError::Disconnected) => {
+                    stderr_received = true;
+                }
             }
 
-            let stdout_done = stdout_handle.is_none()
-                || matches!(
-                    stdout_integrity,
-                    OutputIntegrity::Complete
-                        | OutputIntegrity::TruncatedByJudgeLimit
-                        | OutputIntegrity::TruncatedByProgramClose
-                        | OutputIntegrity::CrashMidWrite
-                        | OutputIntegrity::WriteError
-                );
-
-            let stderr_done = stderr_handle.is_none()
-                || matches!(
-                    stderr_integrity,
-                    OutputIntegrity::Complete
-                        | OutputIntegrity::TruncatedByJudgeLimit
-                        | OutputIntegrity::TruncatedByProgramClose
-                        | OutputIntegrity::CrashMidWrite
-                        | OutputIntegrity::WriteError
-                );
-
-            if stdout_done && stderr_done {
+            if stdout_received && stderr_received {
                 break;
             }
 
@@ -149,24 +135,8 @@ impl OutputCollector {
 
         let combined_integrity = if combined_truncated {
             OutputIntegrity::TruncatedByJudgeLimit
-        } else if matches!(stdout_integrity, OutputIntegrity::CrashMidWrite)
-            || matches!(stderr_integrity, OutputIntegrity::CrashMidWrite)
-        {
-            OutputIntegrity::CrashMidWrite
-        } else if matches!(stdout_integrity, OutputIntegrity::WriteError)
-            || matches!(stderr_integrity, OutputIntegrity::WriteError)
-        {
-            OutputIntegrity::WriteError
-        } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByJudgeLimit)
-            || matches!(stderr_integrity, OutputIntegrity::TruncatedByJudgeLimit)
-        {
-            OutputIntegrity::TruncatedByJudgeLimit
-        } else if matches!(stdout_integrity, OutputIntegrity::TruncatedByProgramClose)
-            || matches!(stderr_integrity, OutputIntegrity::TruncatedByProgramClose)
-        {
-            OutputIntegrity::TruncatedByProgramClose
         } else {
-            OutputIntegrity::Complete
+            OutputIntegrity::resolve_combined(&stdout_integrity, &stderr_integrity)
         };
 
         Ok(OutputResult {

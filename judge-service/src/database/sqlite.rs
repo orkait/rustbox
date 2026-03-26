@@ -220,12 +220,7 @@ impl Database for SqliteDatabase {
                 started_at = ?4
             WHERE id = ?1
             "#,
-            params![
-                id.to_string(),
-                node_id,
-                sandbox_id,
-                Utc::now().to_rfc3339(),
-            ],
+            params![id.to_string(), node_id, sandbox_id, Utc::now().to_rfc3339(),],
         )?;
         Ok(())
     }

@@ -23,13 +23,24 @@ int main() {
     isolate.cleanup().ok();
     match result {
         Ok(r) => {
-            assert_eq!(r.status, ExecutionStatus::Ok, "io_uring probe should not be killed: {:?}", r.stderr);
-            assert!(r.stdout.contains("errno=38") || r.stdout.contains("ret=-1"),
-                "expected ENOSYS, got: {}", r.stdout);
+            assert_eq!(
+                r.status,
+                ExecutionStatus::Ok,
+                "io_uring probe should not be killed: {:?}",
+                r.stderr
+            );
+            assert!(
+                r.stdout.contains("errno=38") || r.stdout.contains("ret=-1"),
+                "expected ENOSYS, got: {}",
+                r.stdout
+            );
         }
         Err(e) => {
             let msg = e.to_string();
-            if msg.contains("No such file") || msg.contains("not found") || msg.contains("Command not found") {
+            if msg.contains("No such file")
+                || msg.contains("not found")
+                || msg.contains("Command not found")
+            {
                 eprintln!("Skipping: C++ toolchain not available");
                 return;
             }
@@ -46,9 +57,8 @@ fn no_seccomp_flag_disables_filter() {
     config.allow_degraded = true;
     config.no_seccomp = true;
     let mut isolate = Isolate::new(config).expect("isolate creation");
-    let result = isolate.execute_code_string(
-        "python", "print('hello')", &ExecutionOverrides::default()
-    );
+    let result =
+        isolate.execute_code_string("python", "print('hello')", &ExecutionOverrides::default());
     isolate.cleanup().ok();
     if let Ok(r) = result {
         assert_eq!(r.status, ExecutionStatus::Ok);
@@ -63,9 +73,8 @@ fn seccomp_enabled_by_default_python_works() {
     config.strict_mode = false;
     config.allow_degraded = true;
     let mut isolate = Isolate::new(config).expect("isolate creation");
-    let result = isolate.execute_code_string(
-        "python", "print(2+2)", &ExecutionOverrides::default()
-    );
+    let result =
+        isolate.execute_code_string("python", "print(2+2)", &ExecutionOverrides::default());
     isolate.cleanup().ok();
     if let Ok(r) = result {
         assert_eq!(r.status, ExecutionStatus::Ok);
