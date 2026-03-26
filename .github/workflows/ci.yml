@@ -5,64 +5,33 @@ on:
     branches: ["**"]
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
-  build-and-core-tests:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Symlink Bun to /usr/local/bin
-        run: sudo ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
-
-      - name: Install C++ toolchain (ensures linker is available)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq g++ binutils
-
-      - name: Verify language runtimes
-        run: |
-          python3 --version
-          g++ --version | head -1
-          ld --version | head -1
-          java -version 2>&1 | head -1
-          javac -version 2>&1 | head -1
-          bun --version
-          ls -la /usr/local/bin/bun
-
-      - name: Build all targets
-        run: cargo test --all --no-run
-
-      - name: Run unit + integration tests
-        run: cargo test --all -- --nocapture --test-threads=1
-
-  strict-compile-fail-lane:
-    runs-on: ubuntu-latest
-    needs: build-and-core-tests
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Compile-fail typestate invariants
-        run: cargo test --test trybuild -- --nocapture
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install language runtimes
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq g++ binutils
+          sudo ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Symlink Bun
+        run: sudo ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
 
       - name: Format check
         run: cargo fmt --all -- --check
@@ -70,18 +39,22 @@ jobs:
       - name: Clippy
         run: cargo clippy --all -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::declare_interior_mutable_const -A clippy::needless_range_loop
 
+      - name: Build all targets
+        run: cargo test --all --no-run
+
+      - name: Unit + integration tests
+        run: cargo test --all -- --nocapture --test-threads=1
+
+      - name: Compile-fail typestate invariants
+        run: cargo test --test trybuild -- --nocapture
+
   supply-chain-audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Unsafe boundary audit
         run: bash scripts/unsafe-audit.sh
 
-      - name: Dependency audit (CVEs, licenses, sources)
-        uses: EmbarkStudios/cargo-deny-action@v2
-
+      - uses: EmbarkStudios/cargo-deny-action@v2
