@@ -3,7 +3,13 @@ name: rustbox-ci
 on:
   push:
     branches: ["**"]
+    paths-ignore: ["docs/**", "docs-site/**", "*.md", "LICENSE", "isolate-read-only/**"]
   pull_request:
+    paths-ignore: ["docs/**", "docs-site/**", "*.md", "LICENSE", "isolate-read-only/**"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,13 +27,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install language runtimes
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq g++ binutils
-          sudo ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
-        env:
-          DEBIAN_FRONTEND: noninteractive
-
       - uses: oven-sh/setup-bun@v2
 
       - name: Symlink Bun
@@ -39,9 +38,6 @@ jobs:
       - name: Clippy
         run: cargo clippy --all -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::declare_interior_mutable_const -A clippy::needless_range_loop
 
-      - name: Build all targets
-        run: cargo test --all --no-run
-
       - name: Unit + integration tests
         run: cargo test --all -- --nocapture --test-threads=1
 
@@ -52,7 +48,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
 
       - name: Unsafe boundary audit
         run: bash scripts/unsafe-audit.sh
