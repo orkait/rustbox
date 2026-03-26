@@ -165,31 +165,19 @@ impl NamespaceIsolation {
 pub fn harden_mount_propagation() -> Result<()> {
     use nix::mount::{mount, MsFlags};
 
-    // Non-recursive MS_PRIVATE on / avoids walking all mounts (15+ cgroup v1
-    // controllers) which contends on the kernel mount lock under concurrent load.
     mount(
         None::<&str>,
         "/",
         None::<&str>,
-        MsFlags::MS_PRIVATE,
+        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
         None::<&str>,
     )
     .map_err(|e| {
         IsolateError::Namespace(format!(
-            "CRITICAL: Failed to harden mount propagation (MS_PRIVATE on /): {}",
+            "CRITICAL: Failed to harden mount propagation (MS_PRIVATE|MS_REC on /): {}",
             e
         ))
     })?;
-
-    if std::path::Path::new("/tmp").exists() {
-        let _ = mount(
-            None::<&str>,
-            "/tmp",
-            None::<&str>,
-            MsFlags::MS_REC | MsFlags::MS_PRIVATE,
-            None::<&str>,
-        );
-    }
 
     Ok(())
 }
