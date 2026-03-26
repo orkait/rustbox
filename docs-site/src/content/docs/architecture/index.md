@@ -15,7 +15,7 @@ The result is a 2.8MB binary that provides 8 layers of isolation, evidence-backe
 
 ```
 ┌─────────┐     ┌──────────┐     ┌──────────────────────┐     ┌─────────────────────┐     ┌─────────────────┐     ┌───────────────┐
-│ CLI/API │ --> │ runtime/ │ --> │verdict/ config/ obs/ │ --> │    core/ + exec/    │ --> │     kernel/     │ --> │    safety/    │
+│ CLI/API │ --> │ runtime/ │ --> │verdict/ config/ obs/ │ --> │  sandbox/ + exec/   │ --> │     kernel/     │ --> │    safety/    │
 └─────────┘     └──────────┘     └──────────────────────┘     └─────────────────────┘     └─────────────────┘     └───────────────┘
  entry point       isolate.rs       pure logic, no unsafe        supervisor+typestate         unsafe wrappers         cleanup+utils
 ```

@@ -13,7 +13,7 @@ Each layer defends against a different class of attack. No single layer is suffi
 ║ ║ ╔════════════════════════════════════════════════════════════════════╗ ║ ║
 ║ ║ ║ 6. Capabilities Zeroed                     no privilege escalation ║ ║ ║
 ║ ║ ║ ╔════════════════════════════════════════════════════════════════╗ ║ ║ ║
-║ ║ ║ ║ 5. Seccomp-BPF                             18 syscalls blocked ║ ║ ║ ║
+║ ║ ║ ║ 5. Seccomp-BPF                             42 syscalls blocked ║ ║ ║ ║
 ║ ║ ║ ║ ╔════════════════════════════════════════════════════════════╗ ║ ║ ║ ║
 ║ ║ ║ ║ ║ 4. Cgroups                             memory + CPU + PIDs ║ ║ ║ ║ ║
 ║ ║ ║ ║ ║ ╔════════════════════════════════════════════════════════╗ ║ ║ ║ ║ ║
