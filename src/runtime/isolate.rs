@@ -118,8 +118,7 @@ impl Isolate {
         base_path.push(pool_uid.to_string());
         fs::create_dir_all(&base_path)?;
 
-        let cgroup = match cgroup::create_cgroup_backend(
-            config.force_cgroup_v1,
+        let cgroup = match cgroup::select_cgroup_backend(
             config.strict_mode,
             &config.instance_id,
         ) {
