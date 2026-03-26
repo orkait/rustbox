@@ -9,18 +9,18 @@ Built for anyone running code from strangers on the internet - online judges, co
 
 ### What it does
 
-- Runs Python, C++, Java, JavaScript, and TypeScript in isolated sandboxes
+- Runs 8 languages (Python, C, C++, Java, Go, Rust, JavaScript, TypeScript) in isolated sandboxes
 - Enforces CPU time, wall time, memory, and process limits via the kernel (not userspace polling)
 - Classifies verdicts (AC, TLE, MLE, RE, SIG) from kernel evidence, not guesswork
 - Exposes a REST API with async polling, sync `?wait=true`, and webhook delivery
-- Ships as a 2.8MB static binary. No Docker, no VMs, no JVM dependency.
+- Ships as a single static binary. No Docker, no VMs, no JVM dependency.
 
 ### How it's different
 
 | | rustbox | Judge0 | Isolate (IOI) |
 |---|---|---|---|
 | Deployment | 1 binary + SQLite | Docker + Rails + PostgreSQL + Redis | `make install` |
-| Languages | 5 | 60+ | Any (manual config) |
+| Languages | 8 | 60+ | Any (manual config) |
 | Isolation | Namespaces + cgroups + seccomp + capabilities | Docker container (same primitives, thicker abstraction) | cgroups + mount |
 | Compile-time safety | Typestate chain (misordering = compiler error) | Runtime checks | Runtime checks |
 | Verdict source | Kernel evidence (cgroup OOM events, /proc, waitpid) | Exit code + wall time heuristics | Exit code heuristics |
