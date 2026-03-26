@@ -609,10 +609,9 @@ impl FilesystemSecurity {
 
     #[cfg(unix)]
     fn setup_hardened_mounts(&self, chroot_path: &Path) -> Result<()> {
-        let sys_path = chroot_path.join("sys");
-        if sys_path.exists() {
-            self.mount_hardened_sysfs(&sys_path)?;
-        }
+        // Minimal mounts for code execution. Skipped: sysfs (not needed),
+        // shm (not needed). procfs mounted without hidepid cascade (single
+        // mount vs 1-4 attempts that contend on kernel mount lock).
 
         let dev_path = chroot_path.join("dev");
         if dev_path.exists() {
@@ -621,15 +620,8 @@ impl FilesystemSecurity {
 
         let proc_path = chroot_path.join("proc");
         if proc_path.exists() {
-            self.mount_hardened_procfs(&proc_path)?;
-        }
-
-        let shm_path = chroot_path.join("dev").join("shm");
-        if !shm_path.exists() {
-            let _ = fs::create_dir_all(&shm_path);
-        }
-        if shm_path.exists() {
-            self.mount_limited_shm(&shm_path)?;
+            let flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
+            mount_special_fs(&proc_path, "proc", flags, None, "procfs", self.strict_mode)?;
         }
 
         let tmp_path = chroot_path.join("tmp");

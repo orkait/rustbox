@@ -337,12 +337,8 @@ pub fn exec_payload(req: &SandboxLaunchRequest) -> Result<()> {
     }
 
     let sandbox = Sandbox::<FreshChild>::new(req.instance_id.clone(), req.profile.strict_mode);
-    let sandbox = sandbox.setup_namespaces(
-        false,
-        req.profile.enable_mount_namespace,
-        req.profile.enable_network_namespace,
-        req.profile.enable_user_namespace,
-    )?;
+    // Namespace creation handled by supervisor's clone() - don't unshare again
+    let sandbox = sandbox.setup_namespaces(false, false, false, false)?;
     mark_stage(&mut report, STAGE_NAMESPACE_SETUP);
     let sandbox = sandbox.harden_mount_propagation()?;
     mark_stage(&mut report, STAGE_MOUNT_HARDENING);
