@@ -107,8 +107,6 @@ pub struct IsolateConfig {
     pub environment: Vec<(String, String)>,
     pub strict_mode: bool,
     #[serde(default)]
-    pub force_cgroup_v1: bool,
-    #[serde(default)]
     pub inherit_fds: bool,
     pub stdout_file: Option<PathBuf>,
     pub stderr_file: Option<PathBuf>,
@@ -160,7 +158,6 @@ impl Default for IsolateConfig {
             virtual_memory_limit: None,
             environment: Vec::new(),
             strict_mode: true,
-            force_cgroup_v1: false,
             inherit_fds: false,
             stdout_file: None,
             stderr_file: None,
