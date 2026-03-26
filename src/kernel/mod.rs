@@ -1,6 +1,5 @@
 pub mod capabilities;
 pub mod cgroup;
-pub mod cgroup_v1;
 pub mod cgroup_v2;
 pub mod contract;
 pub mod credentials;
