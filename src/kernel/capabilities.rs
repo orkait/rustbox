@@ -290,7 +290,10 @@ mod tests {
     #[test]
     fn kernel_last_cap_is_sane() {
         let last = kernel_last_cap();
-        assert!(last >= 36, "kernel should support at least CAP_MAC_ADMIN(36)");
+        assert!(
+            last >= 36,
+            "kernel should support at least CAP_MAC_ADMIN(36)"
+        );
         assert!(last <= CapabilityNumber::MAX_SUPPORTED);
     }
 

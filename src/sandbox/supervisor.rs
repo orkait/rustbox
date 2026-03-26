@@ -2,11 +2,13 @@ use crate::config::types::{
     CgroupEvidence, ExecutionStatus, IsolateError, JudgeAction, JudgeActionType,
     ProcessLifecycleEvidence, Result,
 };
-use crate::sandbox::proxy::{read_proxy_status_from_fd, run_proxy_main_from_fds, write_request_to_fd};
+use crate::kernel::cgroup::CgroupBackend;
+use crate::sandbox::proxy::{
+    read_proxy_status_from_fd, run_proxy_main_from_fds, write_request_to_fd,
+};
 use crate::sandbox::types::{
     KillReport, LaunchEvidence, ProxyStatus, SandboxLaunchOutcome, SandboxLaunchRequest,
 };
-use crate::kernel::cgroup::CgroupBackend;
 use nix::sched::{clone, CloneFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, pipe, Pid};
@@ -260,8 +262,10 @@ pub fn launch_with_supervisor(
     let cgroup_backend_selected = cgroup.map(|controller| controller.backend_name().to_string());
     let mut cgroup_enforced = false;
 
-    let (launch_read, launch_write) = pipe().map_err(|e| IsolateError::process("pipe(launch)", e))?;
-    let (status_read, status_write) = pipe().map_err(|e| IsolateError::process("pipe(status)", e))?;
+    let (launch_read, launch_write) =
+        pipe().map_err(|e| IsolateError::process("pipe(launch)", e))?;
+    let (status_read, status_write) =
+        pipe().map_err(|e| IsolateError::process("pipe(status)", e))?;
 
     let mut clone_flags =
         CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;

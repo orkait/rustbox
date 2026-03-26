@@ -508,8 +508,13 @@ impl FilesystemSecurity {
     #[cfg(unix)]
     fn bind_mount_readonly(&self, source: &Path, target: &Path) -> Result<()> {
         let ro_flags = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV;
-        if bind_mount_path(source, target, Some(ro_flags), "bind-mount readonly", self.strict_mode)?
-        {
+        if bind_mount_path(
+            source,
+            target,
+            Some(ro_flags),
+            "bind-mount readonly",
+            self.strict_mode,
+        )? {
             fs_info_parts(&[
                 "Bind-mounted ",
                 source.to_str().unwrap_or("<?>"),
@@ -640,7 +645,14 @@ impl FilesystemSecurity {
         let shm_size = (self.tmpfs_size_bytes / 16).max(1024 * 1024);
         let flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV | libc::MS_NOATIME;
         let opts = format!("size={},nr_inodes=128,mode=1777", shm_size);
-        mount_special_fs(shm_path, "tmpfs", flags, Some(&opts), "limited /dev/shm", self.strict_mode)?;
+        mount_special_fs(
+            shm_path,
+            "tmpfs",
+            flags,
+            Some(&opts),
+            "limited /dev/shm",
+            self.strict_mode,
+        )?;
         Ok(())
     }
 
@@ -651,21 +663,42 @@ impl FilesystemSecurity {
             "size={},nr_inodes={},mode=1777",
             self.tmpfs_size_bytes, self.tmpfs_inode_limit
         );
-        mount_special_fs(tmp_path, "tmpfs", flags, Some(&opts), "hardened /tmp", self.strict_mode)?;
+        mount_special_fs(
+            tmp_path,
+            "tmpfs",
+            flags,
+            Some(&opts),
+            "hardened /tmp",
+            self.strict_mode,
+        )?;
         Ok(())
     }
 
     #[cfg(unix)]
     fn mount_hardened_sysfs(&self, sys_path: &Path) -> Result<()> {
         let flags = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
-        mount_special_fs(sys_path, "sysfs", flags, None, "hardened sysfs", self.strict_mode)?;
+        mount_special_fs(
+            sys_path,
+            "sysfs",
+            flags,
+            None,
+            "hardened sysfs",
+            self.strict_mode,
+        )?;
         Ok(())
     }
 
     #[cfg(unix)]
     fn mount_hardened_devfs(&self, dev_path: &Path) -> Result<()> {
         let flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NOATIME;
-        if !mount_special_fs(dev_path, "tmpfs", flags, Some("size=64k,mode=755"), "tmpfs on /dev", self.strict_mode)? {
+        if !mount_special_fs(
+            dev_path,
+            "tmpfs",
+            flags,
+            Some("size=64k,mode=755"),
+            "tmpfs on /dev",
+            self.strict_mode,
+        )? {
             return Ok(());
         }
         self.create_essential_devices(dev_path)?;
@@ -690,7 +723,14 @@ impl FilesystemSecurity {
         }
 
         fs_warn_parts(&["All hardened procfs options failed, mounting without hidepid"]);
-        mount_special_fs(proc_path, "proc", flags, None, "fallback procfs", self.strict_mode)?;
+        mount_special_fs(
+            proc_path,
+            "proc",
+            flags,
+            None,
+            "fallback procfs",
+            self.strict_mode,
+        )?;
         Ok(())
     }
 
