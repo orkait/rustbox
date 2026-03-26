@@ -1,32 +1,58 @@
 ---
 title: Configuration
-description: Tune limits, add languages, customise behaviour
+description: Tune limits, add languages, customize behavior
 ---
 
 rustbox uses a layered configuration system. Defaults come from `config.json`, CLI flags override them, and the judge-service reads environment variables on top.
 
 ## config.json
 
-Lives at the project root. Defines per-language resource limits, environment variables, and compilation settings.
+Lives at the project root (or `/etc/rustbox/config.json` in Docker). Defines per-language resource limits, environment variables, and compilation settings.
 
 ```json
 {
+  "sandbox": {
+    "tmpfs_size_mb": 256
+  },
   "languages": {
     "python": {
-      "memory": { "limit_mb": 128, "limit_kb": 131072 },
-      "time": { "cpu_time_seconds": 4, "wall_time_seconds": 7 },
-      "processes": { "max_processes": 10 },
-      "environment": { "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1" },
-      "compilation": { "enabled": false }
+      "limits": {
+        "memory_mb": 256,
+        "cpu_time_sec": 4,
+        "wall_time_sec": 7,
+        "max_processes": 10,
+        "max_file_size_kb": 512,
+        "max_open_files": 32
+      },
+      "runtime": {
+        "command": ["/usr/bin/python3", "-u"],
+        "source_file": "solution.py"
+      },
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1"
+      }
     },
     "cpp": {
-      "memory": { "limit_mb": 256, "limit_kb": 262144 },
-      "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
-      "processes": { "max_processes": 8 },
+      "limits": {
+        "memory_mb": 512,
+        "cpu_time_sec": 8,
+        "wall_time_sec": 10,
+        "max_processes": 8
+      },
       "compilation": {
-        "enabled": true,
-        "compiler": "g++",
-        "compiler_args": ["-O2", "-std=c++17", "-o", "{output}", "{source}"]
+        "command": ["/usr/bin/g++", "-B/usr/bin", "-pipe", "-o", "solution", "{source}", "-std=c++17", "-O2"],
+        "source_file": "solution.cpp",
+        "limits": {
+          "memory_mb": 256,
+          "max_processes": 120,
+          "cpu_time_sec": 15,
+          "wall_time_sec": 30
+        }
+      },
+      "runtime": {
+        "command": ["./solution"],
+        "source_file": null
       }
     }
   }
@@ -34,7 +60,7 @@ Lives at the project root. Defines per-language resource limits, environment var
 ```
 
 :::note[Design Note]
-Limits are per-language, not global. A Python solution with 128MB is generous. A Java solution with 128MB is a death sentence - the JVM alone needs ~100MB to start. We set sensible defaults so users don't have to think about this.
+Limits are per-language, not global. A Python solution with 256MB is generous. A Java solution with 256MB is tight - the JVM alone needs ~100MB to start. We set sensible defaults so users don't have to think about this.
 :::
 
 ## CLI overrides
@@ -65,19 +91,22 @@ The HTTP service reads these at startup. All have sensible defaults.
 | `RUSTBOX_MAX_CODE_BYTES` | `65536` | Maximum source code size |
 | `RUSTBOX_MAX_STDIN_BYTES` | `262144` | Maximum stdin payload (256KB) |
 | `RUSTBOX_SYNC_WAIT_TIMEOUT_SECS` | `30` | Seconds before `?wait=true` times out |
-| `RUSTBOX_SYNC_POLL_INTERVAL_MS` | `200` | Poll interval for sync mode |
 | `RUSTBOX_WEBHOOK_TIMEOUT_SECS` | `10` | Seconds for webhook HTTP delivery |
 | `RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS` | `false` | Allow `http://localhost` webhook URLs (dev mode) |
 | `RUSTBOX_STALE_TIMEOUT_SECS` | `300` | Reaper timeout for stuck jobs |
 | `RUSTBOX_REAPER_INTERVAL_SECS` | `60` | How often the reaper runs |
+| `RUSTBOX_RATE_LIMIT` | `0` (off) | Requests per minute per IP |
+| `RUSTBOX_TRUST_PROXY_HEADERS` | `false` | Use X-Forwarded-For for rate limiting IP |
+| `RUSTBOX_DRAIN_TIMEOUT_SECS` | `35` | Graceful shutdown drain timeout |
+| `RUSTBOX_CORS_ORIGIN` | `http://localhost:3000` | Allowed CORS origin |
 
 :::note[Design Note]
-We deliberately don't support YAML or TOML config files for the judge-service. Environment variables are the standard for containerised deployments, and they're the only thing that works consistently across Docker, Kubernetes, systemd, and bare metal. One fewer config file to manage.
+We deliberately don't support YAML or TOML config files for the judge-service. Environment variables are the standard for containerized deployments, and they're the only thing that works consistently across Docker, Kubernetes, systemd, and bare metal. One fewer config file to manage.
 :::
 
 ## Seccomp configuration
 
-Seccomp filtering is on by default. The built-in deny-list blocks 18 dangerous syscalls.
+Seccomp filtering is on by default. The built-in deny-list blocks 42 dangerous syscalls across 12 families.
 
 ```bash
 # Disable seccomp (not recommended)
@@ -87,20 +116,7 @@ judge execute-code --no-seccomp --language python --code '...'
 judge execute-code --seccomp-policy /path/to/policy.json --language python --code '...'
 ```
 
-The default deny-list:
-
-| Syscall | Action | Why |
-|---------|--------|-----|
-| `io_uring_*` | ENOSYS | Kernel attack surface, bypasses seccomp |
-| `ptrace` | KILL | Debug/inspect other processes |
-| `process_vm_readv`, `process_vm_writev` | KILL | Read/write other process memory |
-| `bpf` | KILL | eBPF program loading |
-| `userfaultfd` | KILL | Page fault interception |
-| `perf_event_open` | KILL | Performance monitoring abuse |
-| `kexec_load` | KILL | Load new kernel |
-| `init_module`, `finit_module`, `delete_module` | KILL | Kernel module manipulation |
-| `mount`, `umount2`, `pivot_root` | KILL | Filesystem manipulation |
-| `swapon`, `swapoff` | KILL | Swap manipulation |
+See [Seccomp internals](/internals/seccomp) for the full deny-list and custom policy format.
 
 :::note[Design Note]
 We use a deny-list (block known-dangerous, allow everything else) rather than an allowlist (block everything, allow known-safe). Complex runtimes like Python, Java, and the JVM make hundreds of different syscalls. Maintaining an allowlist for each runtime is fragile and breaks with every minor version update. The deny-list approach blocks the specific syscalls that enable sandbox escape while letting runtimes work naturally.
