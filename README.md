@@ -14,7 +14,7 @@ Inspired by [IOI Isolate](https://github.com/ioi/isolate). Built to replace [Jud
 ![Tests](https://img.shields.io/badge/tests-113%20unit%20%2B%208%20trybuild-brightgreen)
 ![Languages](https://img.shields.io/badge/sandbox-8%20languages-green)
 
-[Documentation](https://nitrogen-orkait.pages.dev) - [API Reference](https://nitrogen-orkait.pages.dev/api) - [Architecture](https://nitrogen-orkait.pages.dev/architecture)
+[Documentation](https://rustbox-docs.pages.dev) - [API Reference](https://rustbox-docs.pages.dev/api) - [Architecture](https://rustbox-docs.pages.dev/architecture)
 
 </div>
 
@@ -122,7 +122,7 @@ FreshChild -> NamespacesReady -> MountsPrivate -> CgroupAttached
 
 Only `Sandbox<ExecReady>` can call `exec_payload()`. Misordering is a compile error. Verified by 8 [trybuild](https://docs.rs/trybuild) tests.
 
-See [full security docs](https://nitrogen-orkait.pages.dev/architecture/isolation) for the complete seccomp deny-list and isolation details.
+See [full security docs](https://rustbox-docs.pages.dev/architecture/isolation) for the complete seccomp deny-list and isolation details.
 
 ## Docker
 
@@ -139,7 +139,7 @@ docker run -p 4096:4096 \
   rustbox judge-service
 ```
 
-Set `RUSTBOX_API_KEY=your-secret` for production. See [configuration docs](https://nitrogen-orkait.pages.dev/getting-started/configuration) for all environment variables.
+Set `RUSTBOX_API_KEY=your-secret` for production. See [configuration docs](https://rustbox-docs.pages.dev/getting-started/configuration) for all environment variables.
 
 ## Development
 
@@ -174,7 +174,7 @@ src/
 judge-service/ HTTP API (axum), SQLite/PostgreSQL, webhooks
 ```
 
-See [architecture docs](https://nitrogen-orkait.pages.dev/architecture) for the full module map and execution flow.
+See [architecture docs](https://rustbox-docs.pages.dev/architecture) for the full module map and execution flow.
 
 ## License
 
