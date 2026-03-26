@@ -10,10 +10,11 @@ Inspired by [IOI Isolate](https://github.com/ioi/isolate). Built to replace [Jud
 
 ![Rust](https://img.shields.io/badge/Rust-2021%20edition-f74c00?logo=rust&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-cgroups%20v1%2Fv2-FCC624?logo=linux&logoColor=black)
+![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 ![Status](https://img.shields.io/badge/status-v0.1.0-blue)
-![Tests](https://img.shields.io/badge/tests-108%20unit%20%2B%203%20seccomp%20%2B%207%20trybuild-brightgreen)
-![Languages](https://img.shields.io/badge/sandbox-Python%20%7C%20C%2B%2B%20%7C%20Java%20%7C%20JS%20%7C%20TS-green)
-![LOC](https://img.shields.io/badge/LOC-~14k%20Rust-orange)
+![Tests](https://img.shields.io/badge/tests-113%20unit%20%2B%203%20seccomp%20%2B%208%20trybuild-brightgreen)
+![Languages](https://img.shields.io/badge/sandbox-Python%20%7C%20C%20%7C%20C%2B%2B%20%7C%20Java%20%7C%20Go%20%7C%20Rust%20%7C%20JS%20%7C%20TS-green)
+![LOC](https://img.shields.io/badge/LOC-~17k%20Rust-orange)
 ![Deploy](https://img.shields.io/badge/deploy-1%20binary%20%2B%20SQLite-purple)
 
 </div>
@@ -38,9 +39,9 @@ Rustbox executes untrusted code inside kernel-enforced sandboxes with determinis
 | | Judge0 | Rustbox |
 |---|--------|---------|
 | Deployment | 4 containers (Rails + PG + Redis + worker) | 1 binary + SQLite, `docker compose up` |
-| Languages | 60+ | 5 (Python, C++, Java, JS, TS) |
+| Languages | 60+ | 8 (Python, C, C++, Java, Go, Rust, JS, TS) |
 | Isolation | Docker containers (namespaces + cgroups via Docker) | Direct namespaces + cgroups + seccomp + capabilities |
-| Syscall filtering | Docker default seccomp (~300 rules) | Purpose-built 18-syscall deny-list (io_uring gets ENOSYS, not KILL) |
+| Syscall filtering | Docker default seccomp (~300 rules) | Purpose-built 42-syscall deny-list (io_uring gets ENOSYS, not KILL) |
 | Safety model | Runtime checks | Compile-time typestate (misordering = compile error) |
 | Verdicts | Exit code + wall time heuristics | Kernel evidence bundles (cgroup OOM events, /proc, waitpid) |
 | API modes | Polling only | Async polling + sync `?wait=true` + webhooks (HMAC-SHA256) |
@@ -115,11 +116,17 @@ Signed content: `{msg_id}.{timestamp}.{body}` - verify with your secret to preve
 </details>
 
 <details>
-<summary><strong>:test_tube: All five languages</strong></summary>
+<summary><strong>:test_tube: All eight languages</strong></summary>
 
 ```bash
 # Python
 target/release/judge execute-code --permissive --language python --code 'print(sum(range(100)))'
+
+# C (compiled then executed)
+target/release/judge execute-code --permissive --language c --code '
+#include <stdio.h>
+int main() { printf("42\n"); return 0; }
+'
 
 # C++ (compiled then executed)
 target/release/judge execute-code --permissive --language cpp --code '
@@ -136,14 +143,26 @@ public class Main {
 }
 '
 
-# JavaScript (QuickJS)
+# Go (compiled then executed)
+target/release/judge execute-code --permissive --language go --code '
+package main
+import "fmt"
+func main() { fmt.Println(42) }
+'
+
+# Rust (compiled then executed)
+target/release/judge execute-code --permissive --language rust --code '
+fn main() { println!("42"); }
+'
+
+# JavaScript (Bun)
 target/release/judge execute-code --permissive --language javascript --code 'console.log(2 + 2)'
 
 # TypeScript (Bun)
 target/release/judge execute-code --permissive --language typescript --code 'console.log("typed!")'
 ```
 
-Language aliases: `py`, `c++`/`cxx`, `js`, `ts`
+Language aliases: `py`, `c++`/`cxx`, `js`, `ts`, `rs`
 
 </details>
 
@@ -160,7 +179,7 @@ Rustbox applies **8 independent layers** of kernel-enforced isolation. Every lay
 | CPU | `RLIMIT_CPU` + cgroup watchdog | Hard CPU time limit |
 | Processes | cgroup `pids.max` + `RLIMIT_NPROC` | Fork bomb prevention |
 | Privileges | `setresuid` + all caps zeroed + `PR_SET_NO_NEW_PRIVS` | No root, no escalation, no suid |
-| Syscall filtering | seccomp-bpf deny-list (18 syscalls) | Blocks io_uring, ptrace, bpf, module loading |
+| Syscall filtering | seccomp-bpf deny-list (42 syscalls) | Blocks io_uring, ptrace, bpf, mount, module loading, keyring |
 
 ### :lock: Type-state pre-exec chain
 
@@ -168,10 +187,10 @@ Sandbox setup is enforced **at compile time** through Rust's type system - skipp
 
 ```
 FreshChild -> NamespacesReady -> MountsPrivate -> CgroupAttached
-  -> CredsDropped -> PrivsLocked -> [seccomp filter] -> ExecReady
+  -> RootTransitioned -> CredsDropped -> PrivsLocked -> [seccomp filter] -> ExecReady
 ```
 
-Only `Sandbox<ExecReady>` can call `exec_payload()`. Verified by 7 [trybuild](https://docs.rs/trybuild) compile-fail tests.
+Only `Sandbox<ExecReady>` can call `exec_payload()`. Verified by 8 [trybuild](https://docs.rs/trybuild) compile-fail tests.
 
 ### :no_entry: Seccomp deny-list
 
@@ -182,8 +201,15 @@ Following the [nsjail](https://github.com/google/nsjail) pattern (DEFAULT ALLOW 
 | io_uring | `io_uring_setup`, `io_uring_enter`, `io_uring_register` | ERRNO(ENOSYS) |
 | Tracing | `ptrace`, `process_vm_readv`, `process_vm_writev` | KILL_PROCESS |
 | Kernel subsystems | `bpf`, `userfaultfd`, `perf_event_open` | KILL_PROCESS |
-| Module loading | `kexec_load`, `init_module`, `finit_module`, `delete_module` | KILL_PROCESS |
+| Module loading | `kexec_load`, `kexec_file_load`, `init_module`, `finit_module`, `delete_module` | KILL_PROCESS |
 | Mount/swap | `mount`, `umount2`, `pivot_root`, `swapon`, `swapoff` | KILL_PROCESS |
+| New mount API | `fsopen`, `fsmount`, `fsconfig`, `fspick`, `move_mount`, `open_tree`, `mount_setattr` | KILL_PROCESS |
+| Namespace escape | `unshare`, `chroot`, `setns` | KILL_PROCESS |
+| DAC bypass | `name_to_handle_at`, `open_by_handle_at` | KILL_PROCESS |
+| System clock | `reboot`, `settimeofday`, `clock_settime`, `acct` | KILL_PROCESS |
+| Kernel keyring | `add_key`, `keyctl`, `request_key` | KILL_PROCESS |
+| NUMA | `mbind`, `set_mempolicy`, `move_pages` | KILL_PROCESS |
+| Execution domain | `personality` | ERRNO(EPERM) |
 
 Override with `--seccomp-policy policy.json` or disable with `--no-seccomp`.
 
@@ -197,7 +223,7 @@ CLI / HTTP API
   -> execute_code_string(lang, code)   write source, dispatch by language
        -> supervisor::clone()          proxy in new namespaces (PID, mount, net, IPC)
             -> proxy::fork()           payload child through typestate chain
-                 7 setup stages        namespaces, mounts, cgroup, rlimits, creds, caps, seccomp
+                 11 setup stages       namespaces, mounts, cgroup, rlimits, creds, caps, seccomp
                  -> execvp()           replace process image
             -> proxy: collect stdout/stderr, wait, report
        -> supervisor: wall/CPU watchdog via cgroup, collect evidence
@@ -212,13 +238,13 @@ src/
   kernel/         Thin unsafe wrappers: namespaces, cgroups v1/v2, capabilities,
                   mounts, credentials, signals, seccomp
   exec/           Type-state pre-exec chain (preexec.rs)
-  core/           Supervisor (clone/waitpid), proxy (PID 1 in sandbox)
+  sandbox/        Supervisor (clone/waitpid), proxy (PID 1 in sandbox)
   runtime/        Isolate lifecycle (new/execute/cleanup), command security
   config/         Config loading, validation, per-language presets
-  verdict/        Evidence-backed verdict classification
+  verdict/        Evidence-backed verdict classification, judge JSON schema
   safety/         UID pool (lock-free atomic bitset), cleanup, workspace management
   observability/  Security audit logging (injection + traversal detection)
-  utils/          FD closure, env hygiene, fork-safe logging, JSON schema
+  utils/          FD closure, env hygiene, fork-safe logging
 
 judge-service/    HTTP API: submit, poll, webhooks, SQLite/PostgreSQL
 ```
@@ -234,12 +260,16 @@ judge-service/    HTTP API: submit, poll, webhooks, SQLite/PostgreSQL
 | `RUSTBOX_QUEUE_SIZE` | 100 | Max pending submissions |
 | `RUSTBOX_DATABASE_URL` | `sqlite:rustbox.db` | SQLite or PostgreSQL URL |
 | `RUSTBOX_API_KEY` | (none) | API key for authentication |
+| `RUSTBOX_NODE_ID` | (auto UUID) | Node identifier for multi-node |
 | `RUSTBOX_MAX_CODE_BYTES` | 65536 | Max source code size |
 | `RUSTBOX_MAX_STDIN_BYTES` | 262144 | Max stdin size |
 | `RUSTBOX_SYNC_WAIT_TIMEOUT_SECS` | 30 | Timeout for `?wait=true` |
 | `RUSTBOX_WEBHOOK_TIMEOUT_SECS` | 10 | Webhook delivery timeout |
 | `RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS` | false | Allow HTTP + localhost in dev |
 | `RUSTBOX_STALE_TIMEOUT_SECS` | 300 | Reaper timeout for stuck jobs |
+| `RUSTBOX_RATE_LIMIT` | 0 (off) | Requests per minute per IP |
+| `RUSTBOX_TRUST_PROXY_HEADERS` | false | Use X-Forwarded-For for rate limiting |
+| `RUSTBOX_DRAIN_TIMEOUT_SECS` | 35 | Graceful shutdown drain timeout |
 
 ### Per-language defaults (`config.json`)
 
@@ -248,20 +278,41 @@ judge-service/    HTTP API: submit, poll, webhooks, SQLite/PostgreSQL
 
 ```json
 {
+  "sandbox": {
+    "tmpfs_size_mb": 256
+  },
   "languages": {
     "python": {
-      "memory": { "limit_mb": 128 },
-      "time": { "cpu_time_seconds": 4, "wall_time_seconds": 7 },
-      "processes": { "max_processes": 10 },
+      "limits": {
+        "memory_mb": 256,
+        "cpu_time_sec": 4,
+        "wall_time_sec": 7,
+        "max_processes": 10
+      },
+      "runtime": {
+        "command": ["/usr/bin/python3", "-u"],
+        "source_file": "solution.py"
+      },
       "environment": {
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1"
       }
     },
     "cpp": {
-      "memory": { "limit_mb": 256 },
-      "time": { "cpu_time_seconds": 8, "wall_time_seconds": 10 },
-      "compilation": { "compiler": "g++ -std=c++17 -O2" }
+      "limits": {
+        "memory_mb": 512,
+        "cpu_time_sec": 8,
+        "wall_time_sec": 10,
+        "max_processes": 8
+      },
+      "compilation": {
+        "command": ["/usr/bin/g++", "-B/usr/bin", "-pipe", "-o", "solution", "{source}", "-std=c++17", "-O2", "-DONLINE_JUDGE"],
+        "source_file": "solution.cpp"
+      },
+      "runtime": {
+        "command": ["./solution"],
+        "source_file": null
+      }
     }
   }
 }
@@ -282,12 +333,12 @@ target/debug/judge check-deps --verbose  # verify language toolchains
 
 | Suite | Count | What it tests |
 |-------|-------|---------------|
-| Unit | 108 | Config, verdict classifier, presets, seccomp, kernel primitives |
-| Integration (permissive) | 19 | All 5 languages, verdicts, stdin, timeouts |
+| Unit | 113 | Config, verdict classifier, presets, seccomp, kernel primitives |
+| Integration (permissive) | 19 | All languages, verdicts, stdin, timeouts |
 | Integration (strict) | 7 | Full isolation chain under root (ignored without root) |
 | Seccomp | 3 | io_uring blocked, no-seccomp flag, seccomp+python works |
-| Compile-fail (trybuild) | 7 | Type-state invariants |
-| Judge-service | 6 | Submit, poll, idempotency, languages, health |
+| Compile-fail (trybuild) | 8 | Type-state invariants |
+| Judge-service e2e | 16 | Submit, poll, idempotency, languages, health, auth, rate limiting |
 
 ## :whale: Docker
 
@@ -304,7 +355,7 @@ docker compose -f docker-compose.judge.yml --profile postgres up
 ### Manual docker run
 
 ```bash
-docker build -f docker/base/Dockerfile -t rustbox .
+docker build -t rustbox .
 
 # Judge service with minimal capabilities (no --privileged)
 docker run -p 4096:4096 \
@@ -363,10 +414,11 @@ The Docker image uses `jlink` to build a minimal 62MB Java runtime instead of a 
 | Privileges | Root for strict mode |
 | Rust | Edition 2021 |
 | Python | `python3` in `$PATH` |
-| C++ | `g++` (GCC) |
-| Java | `javac` + `java` (OpenJDK 21) |
-| JavaScript | [`qjs`](https://bellard.org/quickjs/) (QuickJS) |
-| TypeScript | [`bun`](https://bun.sh/) |
+| C / C++ | `gcc` / `g++` (GCC) |
+| Java | `javac` + `java` (OpenJDK 21, jlink'd in Docker) |
+| Go | `go` (1.22+) |
+| Rust | `rustc` (edition 2021) |
+| JavaScript / TypeScript | [`bun`](https://bun.sh/) |
 
 ## :pray: Acknowledgments
 
