@@ -21,10 +21,14 @@ jobs:
       - name: Symlink Bun to /usr/local/bin
         run: sudo ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
 
+      - name: Install C++ toolchain (ensures linker is available)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq g++ binutils
+
       - name: Verify language runtimes
         run: |
           python3 --version
           g++ --version | head -1
+          ld --version | head -1
           java -version 2>&1 | head -1
           javac -version 2>&1 | head -1
           bun --version
