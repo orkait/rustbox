@@ -373,11 +373,17 @@ pub fn launch_with_supervisor(
         ));
     }
 
+    // The supervisor's kill timeout includes a setup budget on top of the wall limit.
+    // Proxy setup (namespaces, mounts, chroot, creds, caps, seccomp) takes time that
+    // should NOT count against the user's wall time. The proxy reports its own wall
+    // time starting from after fork(), so the reported time is accurate regardless.
+    const SETUP_BUDGET: Duration = Duration::from_secs(15);
     let wall_limit = req
         .profile
         .wall_time_limit_ms
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_secs(30));
+    let kill_timeout = wall_limit + SETUP_BUDGET;
     let started = Instant::now();
 
     let mut timed_out = false;
@@ -397,7 +403,7 @@ pub fn launch_with_supervisor(
                     interrupted_by_signal = true;
                     interrupt_signal = Some(crate::kernel::signal::received_signal());
                     kill_report = Some(terminate_proxy_group(proxy_pid));
-                } else if started.elapsed() > wall_limit {
+                } else if started.elapsed() > kill_timeout {
                     timed_out = true;
                     kill_report = Some(terminate_proxy_group(proxy_pid));
                 } else if let (Some(limit_usec), Some(controller)) = (cpu_limit_usec, cgroup) {
@@ -554,11 +560,13 @@ fn launch_degraded(
     let cgroup_backend_selected = cgroup.map(|c| c.backend_name().to_string());
     let started = Instant::now();
 
+    const SETUP_BUDGET: Duration = Duration::from_secs(15);
     let wall_limit = req
         .profile
         .wall_time_limit_ms
         .map(Duration::from_millis)
         .unwrap_or_else(|| Duration::from_secs(30));
+    let kill_timeout = wall_limit + SETUP_BUDGET;
 
     let mut cmd = Command::new(&req.profile.command[0]);
     if req.profile.command.len() > 1 {
@@ -692,7 +700,7 @@ fn launch_degraded(
                     interrupt_signal = Some(crate::kernel::signal::received_signal());
                     early_exit = true;
                     break;
-                } else if started.elapsed() > wall_limit {
+                } else if started.elapsed() > kill_timeout {
                     timed_out = true;
                     early_exit = true;
                     break;
