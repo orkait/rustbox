@@ -125,8 +125,6 @@ fn wait_for_payload_and_reap(payload_pid: Pid) -> Result<(Option<i32>, Option<i3
 }
 
 fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
-    let start = Instant::now();
-
     let _ = setpgid(Pid::from_raw(0), Pid::from_raw(0));
     crate::exec::preexec::setup_parent_death_signal()?;
 
@@ -163,6 +161,10 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
             }
             ForkResult::Parent { child } => child,
         };
+
+    // Wall timer starts AFTER fork - measures payload execution only,
+    // not proxy setup (namespaces, mounts, creds, caps, seccomp).
+    let start = Instant::now();
 
     let _ = close(stdin_read);
     let _ = close(stdout_write);
