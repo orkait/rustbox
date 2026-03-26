@@ -98,7 +98,7 @@
 				"max_open_files": 64
 			},
 			"compilation": {
-				"command": ["/usr/bin/g++", "-pipe", "-o", "solution", "{source}", "-std=c++17", "-O2", "-DONLINE_JUDGE"],
+				"command": ["/usr/bin/g++", "-B/usr/bin", "-pipe", "-o", "solution", "{source}", "-std=c++17", "-O2", "-DONLINE_JUDGE"],
 				"source_file": "solution.cpp",
 				"limits": {
 					"memory_mb": 256,
@@ -124,7 +124,7 @@
 				"max_open_files": 32
 			},
 			"compilation": {
-				"command": ["/usr/bin/gcc", "-pipe", "-o", "solution", "{source}", "-std=c17", "-O2", "-lm", "-DONLINE_JUDGE"],
+				"command": ["/usr/bin/gcc", "-B/usr/bin", "-pipe", "-o", "solution", "{source}", "-std=c17", "-O2", "-lm", "-DONLINE_JUDGE"],
 				"source_file": "solution.c",
 				"limits": {
 					"memory_mb": 256,
