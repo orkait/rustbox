@@ -134,7 +134,7 @@ docker compose -f docker-compose.judge.yml up -d
 docker run -p 4096:4096 \
   --cap-add SYS_ADMIN --cap-add SETUID --cap-add SETGID \
   --cap-add NET_ADMIN --cap-add MKNOD --cap-add DAC_OVERRIDE \
-  --security-opt seccomp=unconfined \
+  --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
   --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
   rustbox judge-service
 ```
