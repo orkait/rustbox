@@ -75,9 +75,11 @@ async fn main() -> anyhow::Result<()> {
     let available_languages = detect_installed_languages();
     info!(languages = ?available_languages, "detected language runtimes");
 
-    let cgroup_backend = rustbox::kernel::cgroup::detect_cgroup_backend()
-        .map(rustbox::kernel::cgroup::backend_type_name)
-        .map(str::to_string);
+    let cgroup_backend = if rustbox::kernel::cgroup::is_cgroup_v2_available() {
+        Some("cgroup_v2".to_string())
+    } else {
+        None
+    };
     let namespace_support = rustbox::kernel::namespace::NamespaceIsolation::is_supported();
     let is_root = unsafe { libc::geteuid() } == 0;
     let enforcement_mode = match (&cgroup_backend, namespace_support, is_root) {

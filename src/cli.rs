@@ -73,8 +73,6 @@ enum Commands {
         wall_time: Option<u64>,
         #[arg(long)]
         processes: Option<u32>,
-        #[arg(long = "cgroup-v1")]
-        cgroup_v1: bool,
         #[arg(long)]
         strict: bool,
         #[arg(long)]
@@ -217,7 +215,6 @@ pub fn run(mode: CliMode) -> Result<()> {
             cpu,
             wall_time,
             processes,
-            cgroup_v1,
             strict,
             permissive,
             allow_degraded,
@@ -263,7 +260,6 @@ pub fn run(mode: CliMode) -> Result<()> {
                 "rustbox/0".to_string(),
             )?;
             config.strict_mode = strict;
-            config.force_cgroup_v1 = cgroup_v1;
             if allow_degraded {
                 config.allow_degraded = true;
             }
@@ -402,18 +398,12 @@ fn emit_judge_json(
 }
 
 fn perform_security_checks() {
-    match crate::kernel::cgroup::detect_cgroup_backend() {
-        Some(backend) => {
-            eprintln!(
-                "✅ {} available - resource limits enabled",
-                crate::kernel::cgroup::backend_type_name(backend)
-            );
-        }
-        None => {
-            eprintln!("⚠️  Warning: cgroups not available - resource limits will not be enforced");
-            eprintln!("   Ensure /proc/cgroups and /sys/fs/cgroup are properly mounted");
-            eprintln!("   Some contest systems may not function correctly without cgroups");
-        }
+    if crate::kernel::cgroup::is_cgroup_v2_available() {
+        eprintln!("✅ cgroup v2 available - resource limits enabled");
+    } else {
+        eprintln!("⚠️  Warning: cgroups not available - resource limits will not be enforced");
+        eprintln!("   Ensure /proc/cgroups and /sys/fs/cgroup are properly mounted");
+        eprintln!("   Some contest systems may not function correctly without cgroups");
     }
 
     if crate::kernel::namespace::NamespaceIsolation::is_supported() {
