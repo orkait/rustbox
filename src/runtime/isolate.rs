@@ -1,11 +1,11 @@
 use crate::config::types::{ExecutionResult, IsolateConfig, IsolateError, Result};
 use crate::config::validator::validate_config;
-use crate::sandbox::types::{LaunchEvidence, SandboxLaunchRequest};
 use crate::kernel::cgroup::{self, CgroupBackend};
 use crate::observability::audit::events;
 use crate::runtime::security::command_validation;
 use crate::safety::cleanup::BaselineChecker;
 use crate::safety::uid_pool;
+use crate::sandbox::types::{LaunchEvidence, SandboxLaunchRequest};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -266,15 +266,9 @@ impl Isolate {
         self.ensure_workdir()?;
         self.wipe_workdir();
 
-        let source_file_name = lang_cfg
-            .runtime
-            .source_file
-            .as_deref()
-            .ok_or_else(|| {
-                IsolateError::Config(
-                    "interpreted language must have runtime.source_file".into(),
-                )
-            })?;
+        let source_file_name = lang_cfg.runtime.source_file.as_deref().ok_or_else(|| {
+            IsolateError::Config("interpreted language must have runtime.source_file".into())
+        })?;
         let source_file = self.config.workdir.join(source_file_name);
 
         let mut command: Vec<String> = lang_cfg.runtime.command.clone();
@@ -374,26 +368,32 @@ impl Isolate {
         }
 
         use crate::config::loader::{
-            default_compile_cpu_time_sec, default_compile_max_processes,
-            default_compile_memory_mb, default_compile_wall_time_sec,
+            default_compile_cpu_time_sec, default_compile_max_processes, default_compile_memory_mb,
+            default_compile_wall_time_sec,
         };
-        let mem_mb = limits.map(|l| l.memory_mb).unwrap_or_else(default_compile_memory_mb);
+        let mem_mb = limits
+            .map(|l| l.memory_mb)
+            .unwrap_or_else(default_compile_memory_mb);
         config.memory_limit = Some(
             overrides
                 .max_memory
                 .map(|mb| mb * 1024 * 1024)
                 .unwrap_or(mem_mb * 1024 * 1024),
         );
-        config.process_limit =
-            Some(limits.map(|l| l.max_processes).unwrap_or_else(default_compile_max_processes));
+        config.process_limit = Some(
+            limits
+                .map(|l| l.max_processes)
+                .unwrap_or_else(default_compile_max_processes),
+        );
 
-        let cpu = limits.map(|l| l.cpu_time_sec).unwrap_or_else(default_compile_cpu_time_sec);
-        let wall = limits.map(|l| l.wall_time_sec).unwrap_or_else(default_compile_wall_time_sec);
+        let cpu = limits
+            .map(|l| l.cpu_time_sec)
+            .unwrap_or_else(default_compile_cpu_time_sec);
+        let wall = limits
+            .map(|l| l.wall_time_sec)
+            .unwrap_or_else(default_compile_wall_time_sec);
         let orig_cpu = original.cpu_time_limit.map(|d| d.as_secs()).unwrap_or(8);
-        let orig_wall = original
-            .wall_time_limit
-            .map(|d| d.as_secs())
-            .unwrap_or(10);
+        let orig_wall = original.wall_time_limit.map(|d| d.as_secs()).unwrap_or(10);
         let final_cpu = overrides
             .max_cpu
             .or(overrides.max_time)

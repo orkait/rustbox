@@ -137,30 +137,32 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
     let (stdin_read, stdin_write) =
         nix::unistd::pipe().map_err(|e| IsolateError::process("pipe(stdin)", e))?;
 
-    let payload_pid = match unsafe { fork() }.map_err(|e| IsolateError::process("fork(payload)", e))? {
-        ForkResult::Child => {
-            let _ = close(stdout_read);
-            let _ = close(stderr_read);
-            let _ = close(stdin_write);
+    let payload_pid =
+        match unsafe { fork() }.map_err(|e| IsolateError::process("fork(payload)", e))? {
+            ForkResult::Child => {
+                let _ = close(stdout_read);
+                let _ = close(stderr_read);
+                let _ = close(stdin_write);
 
-            dup2(stdin_read, libc::STDIN_FILENO).map_err(|e| IsolateError::process("dup2(stdin)", e))?;
-            dup2(stdout_write, libc::STDOUT_FILENO)
-                .map_err(|e| IsolateError::process("dup2(stdout)", e))?;
-            dup2(stderr_write, libc::STDERR_FILENO)
-                .map_err(|e| IsolateError::process("dup2(stderr)", e))?;
+                dup2(stdin_read, libc::STDIN_FILENO)
+                    .map_err(|e| IsolateError::process("dup2(stdin)", e))?;
+                dup2(stdout_write, libc::STDOUT_FILENO)
+                    .map_err(|e| IsolateError::process("dup2(stdout)", e))?;
+                dup2(stderr_write, libc::STDERR_FILENO)
+                    .map_err(|e| IsolateError::process("dup2(stderr)", e))?;
 
-            let _ = close(stdin_read);
-            let _ = close(stdout_write);
-            let _ = close(stderr_write);
+                let _ = close(stdin_read);
+                let _ = close(stdout_write);
+                let _ = close(stderr_write);
 
-            if let Err(err) = exec_payload_with_typestate(req) {
-                let _ = writeln!(std::io::stderr(), "proxy payload setup failed: {err}");
+                if let Err(err) = exec_payload_with_typestate(req) {
+                    let _ = writeln!(std::io::stderr(), "proxy payload setup failed: {err}");
+                    std::process::exit(127);
+                }
                 std::process::exit(127);
             }
-            std::process::exit(127);
-        }
-        ForkResult::Parent { child } => child,
-    };
+            ForkResult::Parent { child } => child,
+        };
 
     let _ = close(stdin_read);
     let _ = close(stdout_write);
@@ -185,8 +187,7 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
         .join()
         .unwrap_or_else(|_| (Vec::new(), OutputIntegrity::WriteError));
 
-    let output_integrity =
-        OutputIntegrity::resolve_combined(&stdout_integrity, &stderr_integrity);
+    let output_integrity = OutputIntegrity::resolve_combined(&stdout_integrity, &stderr_integrity);
 
     let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
     let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();

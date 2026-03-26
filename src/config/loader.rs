@@ -28,8 +28,12 @@ pub struct LimitsConfig {
     pub max_open_files: u32,
 }
 
-fn default_max_file_size_kb() -> u64 { 1024 }
-fn default_max_open_files() -> u32 { 64 }
+fn default_max_file_size_kb() -> u64 {
+    1024
+}
+fn default_max_open_files() -> u32 {
+    64
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompilationConfig {
@@ -55,10 +59,18 @@ pub struct CompilationLimits {
     pub file_size_mb: Option<u64>,
 }
 
-pub fn default_compile_memory_mb() -> u64 { 256 }
-pub fn default_compile_max_processes() -> u32 { 120 }
-pub fn default_compile_cpu_time_sec() -> u64 { 15 }
-pub fn default_compile_wall_time_sec() -> u64 { 30 }
+pub fn default_compile_memory_mb() -> u64 {
+    256
+}
+pub fn default_compile_max_processes() -> u32 {
+    120
+}
+pub fn default_compile_cpu_time_sec() -> u64 {
+    15
+}
+pub fn default_compile_wall_time_sec() -> u64 {
+    30
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeConfig {
@@ -79,11 +91,15 @@ pub struct SandboxConfig {
     pub tmpfs_size_mb: u64,
 }
 
-fn default_tmpfs_size_mb() -> u64 { 256 }
+fn default_tmpfs_size_mb() -> u64 {
+    256
+}
 
 impl Default for SandboxConfig {
     fn default() -> Self {
-        Self { tmpfs_size_mb: default_tmpfs_size_mb() }
+        Self {
+            tmpfs_size_mb: default_tmpfs_size_mb(),
+        }
     }
 }
 
@@ -171,11 +187,11 @@ impl IsolateConfig {
                 config.process_limit = Some(l.max_processes);
                 config.file_size_limit = Some(l.max_file_size_kb * 1024);
                 config.fd_limit = Some(l.max_open_files as u64);
-                config.virtual_memory_limit = l.virtual_memory_mb
+                config.virtual_memory_limit = l
+                    .virtual_memory_mb
                     .map(|v| v * 1024 * 1024)
                     .or(Some(1024 * 1024 * 1024));
-                config.tmpfs_size_bytes =
-                    Some(rustbox_config.sandbox.tmpfs_size_mb * 1024 * 1024);
+                config.tmpfs_size_bytes = Some(rustbox_config.sandbox.tmpfs_size_mb * 1024 * 1024);
 
                 for (key, value) in &lang.environment {
                     config.environment.push((key.clone(), value.clone()));
@@ -227,7 +243,10 @@ mod tests {
     #[test]
     fn virtual_memory_limits_per_language() {
         assert_eq!(load("java").virtual_memory_limit, Some(4096 * 1024 * 1024));
-        assert_eq!(load("python").virtual_memory_limit, Some(1024 * 1024 * 1024));
+        assert_eq!(
+            load("python").virtual_memory_limit,
+            Some(1024 * 1024 * 1024)
+        );
         assert_eq!(load("cpp").virtual_memory_limit, Some(1024 * 1024 * 1024));
     }
 

@@ -1,7 +1,7 @@
 use crate::config::types::{IsolateError, Result};
-use crate::sandbox::types::ExecutionProfile;
 use crate::kernel::capabilities::{self, check_no_new_privs, set_no_new_privs};
 use crate::kernel::credentials::transition_to_unprivileged;
+use crate::sandbox::types::ExecutionProfile;
 use crate::utils::fork_safe_log::{fs_debug, fs_info_parts, fs_warn_parts, itoa_buf, itoa_i32};
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -36,7 +36,13 @@ fn apply_rlimit_value(
     if strict_mode {
         fs_warn_parts(&[
             "FATAL: Failed to apply ",
-            name, "=", soft_s, " (hard=", hard_s, "): errno=", eno,
+            name,
+            "=",
+            soft_s,
+            " (hard=",
+            hard_s,
+            "): errno=",
+            eno,
         ]);
         Err(IsolateError::Process(
             "rlimit setup failed in strict mode (see stderr)".to_string(),
@@ -44,8 +50,13 @@ fn apply_rlimit_value(
     } else {
         fs_warn_parts(&[
             "Failed to apply ",
-            name, "=", soft_s, " (hard=", hard_s,
-            ") in permissive mode: errno=", eno,
+            name,
+            "=",
+            soft_s,
+            " (hard=",
+            hard_s,
+            ") in permissive mode: errno=",
+            eno,
         ]);
         Ok(())
     }
@@ -304,7 +315,12 @@ impl Sandbox<MountsPrivate> {
                     let mut ebuf = [0u8; 20];
                     let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
                     fs_warn_parts(&[
-                        "FATAL: cgroup attach PID ", pid_s, " to ", path, ": errno=", eno,
+                        "FATAL: cgroup attach PID ",
+                        pid_s,
+                        " to ",
+                        path,
+                        ": errno=",
+                        eno,
                     ]);
                     return Err(IsolateError::Cgroup(
                         "cgroup attach failed in strict mode (see stderr)".to_string(),
@@ -350,7 +366,10 @@ impl Sandbox<CgroupAttached> {
             profile.chroot_dir.clone(),
             profile.workdir.clone(),
             self.strict_mode,
-            profile.tmpfs_size_bytes.or(profile.file_size_limit).or(profile.memory_limit),
+            profile
+                .tmpfs_size_bytes
+                .or(profile.file_size_limit)
+                .or(profile.memory_limit),
             None,
         );
 
