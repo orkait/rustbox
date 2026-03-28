@@ -11,6 +11,10 @@ ARG LANG_JAVASCRIPT=true
 ARG LANG_TYPESCRIPT=true
 ARG LANG_GO=false
 ARG LANG_RUST=false
+ARG GO_VERSION=1.22.10
+ARG BUN_VERSION=1.2.5
+ARG GSON_VERSION=2.11.0
+ARG NLOHMANN_JSON_VERSION=3.11.3
 
 # ============================================================================
 # Stage 1: Rust builder
@@ -51,6 +55,10 @@ ARG LANG_JAVASCRIPT
 ARG LANG_TYPESCRIPT
 ARG LANG_GO
 ARG LANG_RUST
+ARG GO_VERSION
+ARG BUN_VERSION
+ARG GSON_VERSION
+ARG NLOHMANN_JSON_VERSION
 
 # All installs in ONE RUN = one layer = no wasted space from conditional copies
 RUN apt-get update \
@@ -68,7 +76,7 @@ RUN apt-get update \
     #
     # Python
     && if [ "$LANG_PYTHON" = "true" ]; then \
-         apt-get install -y --no-install-recommends python3.11 \
+         apt-get install -y --no-install-recommends python3.11 python3-pip \
          && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
          && ln -sf /usr/bin/python3.11 /usr/bin/python \
          && find /usr/lib/python3.11 -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true \
@@ -92,13 +100,13 @@ RUN apt-get update \
     # JavaScript / TypeScript (both use Bun)
     && if [ "$LANG_JAVASCRIPT" = "true" ] || [ "$LANG_TYPESCRIPT" = "true" ]; then \
          apt-get install -y --no-install-recommends unzip \
-         && curl -fsSL https://bun.sh/install | bash \
+         && curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash -s "bun-v${BUN_VERSION}" \
          && apt-get purge -y --auto-remove unzip; \
        fi \
     #
     # Go (download official tarball)
     && if [ "$LANG_GO" = "true" ]; then \
-         curl -fsSL "https://go.dev/dl/go1.22.10.linux-amd64.tar.gz" \
+         curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
          | tar -xz -C /usr/local \
          && mkdir -p /usr/local/go-cache \
          && GOCACHE=/usr/local/go-cache CGO_ENABLED=0 /usr/local/go/bin/go build -a std 2>/dev/null || true; \
@@ -119,29 +127,27 @@ RUN apt-get update \
     #
     # Executor-only: networking tools + pre-cached packages
     && if [ "$PROFILE" = "executor" ]; then \
-         apt-get install -y --no-install-recommends \
-           iproute2 nftables libgl1 libglib2.0-0; \
+         apt-get install -y --no-install-recommends iproute2 nftables; \
          #
          # Python packages (data science + viz + scraping + image)
          if [ "$LANG_PYTHON" = "true" ]; then \
            python3 -m pip install --no-cache-dir --target /opt/packages/python \
              numpy pandas matplotlib scipy scikit-learn \
              requests pillow sympy networkx \
-             beautifulsoup4 seaborn openpyxl plotly opencv-python \
-             2>/dev/null || true; \
+             beautifulsoup4 seaborn openpyxl plotly opencv-python-headless; \
          fi; \
          #
          # C++ header-only libraries
          if [ "$LANG_C_CPP" = "true" ]; then \
            mkdir -p /opt/packages/cpp/nlohmann \
-           && curl -fsSL https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp \
+           && curl -fsSL "https://github.com/nlohmann/json/releases/download/v${NLOHMANN_JSON_VERSION}/json.hpp" \
               -o /opt/packages/cpp/nlohmann/json.hpp; \
          fi; \
          #
          # Java JARs
          if [ "$LANG_JAVA" = "true" ]; then \
            mkdir -p /opt/packages/java \
-           && curl -fsSL https://repo1.maven.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar \
+           && curl -fsSL "https://repo1.maven.org/maven2/com/google/code/gson/gson/${GSON_VERSION}/gson-${GSON_VERSION}.jar" \
               -o /opt/packages/java/gson.jar; \
          fi; \
        fi \
@@ -155,7 +161,7 @@ RUN groupadd -r -g 65534 sandbox 2>/dev/null || true \
     && useradd -r -u 65534 -g 65534 -s /sbin/nologin sandbox 2>/dev/null || true
 
 # UID pool range (60000-60999) - one user per concurrent sandbox
-RUN for i in $(seq 60000 60099); do \
+RUN for i in $(seq 60000 60999); do \
         groupadd -r -g $i "sandbox-$i" 2>/dev/null || true; \
         useradd -r -u $i -g $i -s /sbin/nologin -d /nonexistent "sandbox-$i" 2>/dev/null || true; \
     done
