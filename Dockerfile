@@ -113,6 +113,16 @@ RUN apt-get update \
          && rm -rf /root/.cargo /root/.rustup; \
        fi \
     #
+    # Executor networking tools
+    && apt-get install -y --no-install-recommends iproute2 nftables \
+    #
+    # Executor Python packages (pre-cached, bind-mounted read-only)
+    && if [ "$LANG_PYTHON" = "true" ]; then \
+         python3 -m pip install --no-cache-dir --target /opt/packages \
+           numpy pandas matplotlib scipy scikit-learn \
+           requests pillow sympy networkx 2>/dev/null || true; \
+       fi \
+    #
     # Cleanup
     && rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale \
     && rm -rf /var/lib/apt/lists/*
