@@ -389,6 +389,15 @@ impl Sandbox<CgroupAttached> {
             fs_warn_parts(&["Directory binding setup failed (permissive mode)"]);
         }
 
+        if profile.packages_enabled {
+            if let Err(e) = fs_security.mount_packages() {
+                if self.strict_mode {
+                    return Err(e);
+                }
+                fs_warn_parts(&["Package mount failed (permissive mode)"]);
+            }
+        }
+
         if let Err(e) = fs_security.apply_chroot() {
             if self.strict_mode {
                 return Err(e);
@@ -468,6 +477,12 @@ impl Sandbox<RootTransitioned> {
             let mut env_map = hygiene.sanitize_environment()?;
             for (key, value) in &profile.environment {
                 env_map.insert(key.clone(), value.clone());
+            }
+            if profile.packages_enabled {
+                env_map.insert(
+                    constants::PYTHONPATH_ENV_KEY.to_string(),
+                    constants::PYTHONPATH_ENV_VALUE.to_string(),
+                );
             }
 
             crate::utils::env_hygiene::strip_dangerous_env(&mut env_map);
@@ -625,6 +640,7 @@ mod typestate_tests {
             tmpfs_size_bytes: None,
             pipe_buffer_size: None,
             output_limit: None,
+            packages_enabled: false,
             network_enabled: false,
             net_egress_bytes: 0,
             net_ingress_bytes: 0,

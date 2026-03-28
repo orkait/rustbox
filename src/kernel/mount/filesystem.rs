@@ -857,6 +857,30 @@ impl FilesystemSecurity {
         Ok(())
     }
 
+    #[cfg(unix)]
+    pub fn mount_packages(&self) -> Result<()> {
+        let host_path = Path::new(constants::PACKAGES_HOST_PATH);
+        if !host_path.exists() {
+            fs_warn_parts(&[
+                "Packages directory not found: ",
+                constants::PACKAGES_HOST_PATH,
+            ]);
+            return Ok(());
+        }
+
+        if let Some(ref chroot_path) = self.chroot_dir {
+            let target = chroot_path.join(constants::PACKAGES_SANDBOX_PATH);
+            if !target.exists() {
+                fs::create_dir_all(&target).map_err(|e| {
+                    IsolateError::Config(format!("Failed to create packages mount point: {}", e))
+                })?;
+            }
+            self.bind_mount_readonly(host_path, &target)?;
+            fs_info_parts(&["Mounted packages from ", constants::PACKAGES_HOST_PATH]);
+        }
+        Ok(())
+    }
+
     pub fn cleanup(&self) -> Result<()> {
         #[cfg(unix)]
         if let Some(ref chroot_path) = self.chroot_dir {

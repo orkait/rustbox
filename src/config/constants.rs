@@ -147,6 +147,15 @@ pub const BLOCKED_NET_RANGES: &[&str] = &[
 
 // --- Tier 1: Benchmark thresholds ---
 
+// --- Tier 1: Package mount ---
+
+pub const PACKAGES_HOST_PATH: &str = "/opt/packages";
+pub const PACKAGES_SANDBOX_PATH: &str = "opt/packages";
+pub const PYTHONPATH_ENV_KEY: &str = "PYTHONPATH";
+pub const PYTHONPATH_ENV_VALUE: &str = "/opt/packages";
+
+// --- Tier 1: Benchmark thresholds ---
+
 pub const BENCH_COLD_P50_MS: u64 = 100;
 pub const BENCH_COLD_P95_MS: u64 = 200;
 pub const BENCH_WARM_P50_MS: u64 = 150;
