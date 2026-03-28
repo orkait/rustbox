@@ -41,8 +41,41 @@ fn terminate_proxy_group(proxy_pid: Pid) -> KillReport {
     report
 }
 
+fn check_net_quota(
+    req: &SandboxLaunchRequest,
+    timed_out: &mut bool,
+    kill_report: &mut Option<KillReport>,
+    proxy_pid: Pid,
+    errors: &mut Vec<String>,
+) {
+    if req.profile.net_egress_bytes == 0 && req.profile.net_ingress_bytes == 0 {
+        return;
+    }
+    let uid = req.profile.uid.unwrap_or(constants::DEFAULT_UID_POOL_BASE);
+    let (tx_bytes, rx_bytes) = crate::kernel::network::read_veth_bytes(uid);
+    let egress_exceeded =
+        req.profile.net_egress_bytes > 0 && rx_bytes > req.profile.net_egress_bytes;
+    let ingress_exceeded =
+        req.profile.net_ingress_bytes > 0 && tx_bytes > req.profile.net_ingress_bytes;
+    if egress_exceeded || ingress_exceeded {
+        *timed_out = true;
+        *kill_report = Some(terminate_proxy_group(proxy_pid));
+        let which = if egress_exceeded { "egress" } else { "ingress" };
+        let used = if egress_exceeded { rx_bytes } else { tx_bytes };
+        let limit = if egress_exceeded {
+            req.profile.net_egress_bytes
+        } else {
+            req.profile.net_ingress_bytes
+        };
+        errors.push(format!(
+            "network_{}_quota_exceeded: {}B used > {}B limit",
+            which, used, limit
+        ));
+    }
+}
+
 pub fn launch_with_supervisor(
-    req: SandboxLaunchRequest,
+    mut req: SandboxLaunchRequest,
     cgroup: Option<&dyn CgroupBackend>,
 ) -> Result<SandboxLaunchOutcome> {
     if req.profile.command.is_empty() {
@@ -136,6 +169,30 @@ pub fn launch_with_supervisor(
         let _ = close(status_rd);
     };
 
+    let mut network_handle: Option<crate::kernel::network::NetworkHandle> = None;
+    if req.profile.network_enabled {
+        let uid = req.profile.uid.unwrap_or(constants::DEFAULT_UID_POOL_BASE);
+        match crate::kernel::network::create_sandbox_network(proxy_pid.as_raw() as u32, uid) {
+            Ok(handle) => {
+                let (_, gateway) = crate::kernel::network::sandbox_ip_for_uid(uid);
+                let (_, veth_sb) = crate::kernel::network::veth_names_for_uid(uid);
+                req.profile.sandbox_ip = Some(handle.sandbox_ip.clone());
+                req.profile.sandbox_cidr = Some(handle.sandbox_cidr.clone());
+                req.profile.gateway_ip = Some(gateway);
+                req.profile.veth_sandbox_name = Some(veth_sb);
+                network_handle = Some(handle);
+            }
+            Err(e) => {
+                evidence_collection_errors.push(format!("network_setup: {}", e));
+                if req.profile.strict_mode {
+                    let _ = close(launch_write);
+                    abort_proxy(status_read);
+                    return Err(e);
+                }
+            }
+        }
+    }
+
     if let Some(controller) = cgroup {
         if let Err(e) = controller.attach_process(&req.instance_id, proxy_pid.as_raw() as u32) {
             evidence_collection_errors.push(format!("cgroup_attach: {}", e));
@@ -228,10 +285,34 @@ pub fn launch_with_supervisor(
                         }
                     }
                     if !timed_out && !interrupted_by_signal {
+                        if let Some(ref _nh) = network_handle {
+                            check_net_quota(
+                                &req,
+                                &mut timed_out,
+                                &mut kill_report,
+                                proxy_pid,
+                                &mut evidence_collection_errors,
+                            );
+                        }
+                    }
+                    if !timed_out && !interrupted_by_signal {
                         std::thread::sleep(constants::SUPERVISOR_POLL_INTERVAL);
                     }
-                } else if !interrupted_by_signal {
-                    std::thread::sleep(constants::SUPERVISOR_POLL_INTERVAL);
+                } else {
+                    if !interrupted_by_signal {
+                        if let Some(ref _nh) = network_handle {
+                            check_net_quota(
+                                &req,
+                                &mut timed_out,
+                                &mut kill_report,
+                                proxy_pid,
+                                &mut evidence_collection_errors,
+                            );
+                        }
+                    }
+                    if !timed_out && !interrupted_by_signal {
+                        std::thread::sleep(constants::SUPERVISOR_POLL_INTERVAL);
+                    }
                 }
 
                 if interrupted_by_signal {

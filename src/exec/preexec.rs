@@ -625,6 +625,14 @@ mod typestate_tests {
             tmpfs_size_bytes: None,
             pipe_buffer_size: None,
             output_limit: None,
+            network_enabled: false,
+            net_egress_bytes: 0,
+            net_ingress_bytes: 0,
+            dns_servers: vec![],
+            sandbox_ip: None,
+            sandbox_cidr: None,
+            gateway_ip: None,
+            veth_sandbox_name: None,
         }
     }
 

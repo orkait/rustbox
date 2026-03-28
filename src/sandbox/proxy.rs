@@ -144,6 +144,19 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
     let _ = setpgid(Pid::from_raw(0), Pid::from_raw(0));
     crate::exec::preexec::setup_parent_death_signal()?;
 
+    if let (Some(ref veth), Some(ref cidr), Some(ref gateway)) = (
+        &req.profile.veth_sandbox_name,
+        &req.profile.sandbox_cidr,
+        &req.profile.gateway_ip,
+    ) {
+        crate::kernel::network::configure_sandbox_side(
+            veth,
+            cidr,
+            gateway,
+            &req.profile.dns_servers,
+        )?;
+    }
+
     let (stdout_read, stdout_write) =
         nix::unistd::pipe().map_err(|e| IsolateError::process("pipe(stdout)", e))?;
     let (stderr_read, stderr_write) =

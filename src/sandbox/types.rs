@@ -36,6 +36,14 @@ pub struct ExecutionProfile {
     pub tmpfs_size_bytes: Option<u64>,
     pub pipe_buffer_size: Option<u64>,
     pub output_limit: Option<u64>,
+    pub network_enabled: bool,
+    pub net_egress_bytes: u64,
+    pub net_ingress_bytes: u64,
+    pub dns_servers: Vec<String>,
+    pub sandbox_ip: Option<String>,
+    pub sandbox_cidr: Option<String>,
+    pub gateway_ip: Option<String>,
+    pub veth_sandbox_name: Option<String>,
 }
 
 impl ExecutionProfile {
@@ -73,6 +81,14 @@ impl ExecutionProfile {
             tmpfs_size_bytes: config.tmpfs_size_bytes,
             pipe_buffer_size: config.pipe_buffer_size,
             output_limit: config.output_limit,
+            network_enabled: false,
+            net_egress_bytes: 0,
+            net_ingress_bytes: 0,
+            dns_servers: vec![],
+            sandbox_ip: None,
+            sandbox_cidr: None,
+            gateway_ip: None,
+            veth_sandbox_name: None,
         }
     }
 }
