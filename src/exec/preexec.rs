@@ -493,6 +493,14 @@ impl Sandbox<RootTransitioned> {
                     constants::PYTHONPATH_ENV_VALUE.to_string(),
                 );
                 env_map.insert(
+                    constants::OPENBLAS_THREADS_KEY.to_string(),
+                    constants::OPENBLAS_THREADS_VALUE.to_string(),
+                );
+                env_map.insert(
+                    constants::OMP_THREADS_KEY.to_string(),
+                    constants::OMP_THREADS_VALUE.to_string(),
+                );
+                env_map.insert(
                     constants::CPP_INCLUDE_ENV_KEY.to_string(),
                     constants::CPP_INCLUDE_ENV_VALUE.to_string(),
                 );

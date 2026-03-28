@@ -76,7 +76,7 @@ RUN apt-get update \
          && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
          && ln -sf /usr/bin/python3.11 /usr/bin/python \
          && find /usr/lib/python3.11 -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true \
-         && rm -rf /usr/lib/python3.11/test /usr/lib/python3.11/unittest; \
+         && rm -rf /usr/lib/python3.11/test; \
        fi \
     #
     # Java (install full JDK, jlink to minimal, delete full JDK)
