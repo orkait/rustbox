@@ -1,6 +1,9 @@
 # ============================================================================
-# Language build args - set to "false" to exclude from image
+# Build args
 # ============================================================================
+# Profile: "judge" (slim, no packages, no networking tools)
+#          "executor" (fat, pre-cached packages, networking tools)
+ARG PROFILE=judge
 ARG LANG_PYTHON=true
 ARG LANG_C_CPP=true
 ARG LANG_JAVA=true
@@ -40,6 +43,7 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV BUN_INSTALL=/usr/local
 ENV PATH="/usr/local/go/bin:/usr/local/rust/bin:$PATH"
 
+ARG PROFILE
 ARG LANG_PYTHON
 ARG LANG_C_CPP
 ARG LANG_JAVA
@@ -113,14 +117,14 @@ RUN apt-get update \
          && rm -rf /root/.cargo /root/.rustup; \
        fi \
     #
-    # Executor networking tools
-    && apt-get install -y --no-install-recommends iproute2 nftables \
-    #
-    # Executor Python packages (pre-cached, bind-mounted read-only)
-    && if [ "$LANG_PYTHON" = "true" ]; then \
-         python3 -m pip install --no-cache-dir --target /opt/packages \
-           numpy pandas matplotlib scipy scikit-learn \
-           requests pillow sympy networkx 2>/dev/null || true; \
+    # Executor-only: networking tools + pre-cached Python packages
+    && if [ "$PROFILE" = "executor" ]; then \
+         apt-get install -y --no-install-recommends iproute2 nftables; \
+         if [ "$LANG_PYTHON" = "true" ]; then \
+           python3 -m pip install --no-cache-dir --target /opt/packages \
+             numpy pandas matplotlib scipy scikit-learn \
+             requests pillow sympy networkx 2>/dev/null || true; \
+         fi; \
        fi \
     #
     # Cleanup
