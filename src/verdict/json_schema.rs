@@ -221,6 +221,8 @@ mod tests {
             pidfd_mode: PidfdMode::Native,
             proc_policy_applied: "hardened".to_string(),
             sys_policy_applied: "disabled".to_string(),
+            profile: Some("judge".to_string()),
+            network_policy: None,
         };
 
         let evidence_bundle = EvidenceBundle {

@@ -86,6 +86,19 @@ pub struct CapabilityReport {
     pub pidfd_mode: PidfdMode,
     pub proc_policy_applied: String,
     pub sys_policy_applied: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_policy: Option<NetworkPolicy>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NetworkPolicy {
+    pub enabled: bool,
+    pub egress_quota_bytes: u64,
+    pub ingress_quota_bytes: u64,
+    pub blocked_ranges: Vec<String>,
+    pub dns_servers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

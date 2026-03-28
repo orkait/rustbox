@@ -176,6 +176,8 @@ impl LaunchEvidence {
             pidfd_mode: self.pidfd_mode.clone(),
             proc_policy_applied: self.proc_policy_applied.clone(),
             sys_policy_applied: self.sys_policy_applied.clone(),
+            profile: None,
+            network_policy: None,
         }
     }
 }
