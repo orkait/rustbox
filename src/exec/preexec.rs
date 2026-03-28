@@ -398,6 +398,15 @@ impl Sandbox<CgroupAttached> {
             }
         }
 
+        if profile.network_enabled && !profile.dns_servers.is_empty() {
+            if let Err(e) = fs_security.write_dns_config(&profile.dns_servers) {
+                if self.strict_mode {
+                    return Err(e);
+                }
+                fs_warn_parts(&["DNS resolv.conf write failed (permissive mode)"]);
+            }
+        }
+
         if let Err(e) = fs_security.apply_chroot() {
             if self.strict_mode {
                 return Err(e);

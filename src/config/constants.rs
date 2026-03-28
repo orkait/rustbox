@@ -134,6 +134,7 @@ pub const BRIDGE_GATEWAY_CIDR: &str = "10.200.0.1/16";
 pub const VETH_HOST_PREFIX: &str = "veth-rb-";
 pub const VETH_SANDBOX_PREFIX: &str = "veth-sb-";
 pub const NET_QUOTA_POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub const NFTABLES_NAT_PRIORITY: i32 = 100;
 
 // --- Tier 1: Blocked network ranges ---
 

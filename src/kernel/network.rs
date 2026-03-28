@@ -197,10 +197,11 @@ fn setup_nat() -> Result<()> {
     let nat_ruleset = format!(
         "table ip rustbox_nat {{\n\
          \x20 chain postrouting {{\n\
-         \x20   type nat hook postrouting priority 100; policy accept;\n\
+         \x20   type nat hook postrouting priority {}; policy accept;\n\
          \x20   ip saddr {} masquerade\n\
          \x20 }}\n\
          }}",
+        constants::NFTABLES_NAT_PRIORITY,
         constants::BRIDGE_SUBNET
     );
 

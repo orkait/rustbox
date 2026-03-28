@@ -881,6 +881,14 @@ impl FilesystemSecurity {
         Ok(())
     }
 
+    pub fn write_dns_config(&self, dns_servers: &[String]) -> Result<()> {
+        if let Some(ref chroot_path) = self.chroot_dir {
+            crate::kernel::network::write_resolv_conf(chroot_path, dns_servers)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn cleanup(&self) -> Result<()> {
         #[cfg(unix)]
         if let Some(ref chroot_path) = self.chroot_dir {
