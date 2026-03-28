@@ -1,9 +1,6 @@
 # ============================================================================
 # Build args
 # ============================================================================
-# Profile: "judge" (slim, no packages, no networking tools)
-#          "executor" (fat, pre-cached packages, networking tools)
-ARG PROFILE=judge
 ARG LANG_PYTHON=true
 ARG LANG_C_CPP=true
 ARG LANG_JAVA=true
@@ -47,7 +44,6 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV BUN_INSTALL=/usr/local
 ENV PATH="/usr/local/go/bin:/usr/local/rust/bin:$PATH"
 
-ARG PROFILE
 ARG LANG_PYTHON
 ARG LANG_C_CPP
 ARG LANG_JAVA
@@ -125,31 +121,31 @@ RUN apt-get update \
          && rm -rf /root/.cargo /root/.rustup; \
        fi \
     #
-    # Executor-only: networking tools + pre-cached packages
-    && if [ "$PROFILE" = "executor" ]; then \
-         apt-get install -y --no-install-recommends iproute2 nftables; \
-         #
-         # Python packages (data science + viz + scraping + image)
-         if [ "$LANG_PYTHON" = "true" ]; then \
-           python3 -m pip install --no-cache-dir --target /opt/packages/python \
-             numpy pandas matplotlib scipy scikit-learn \
-             requests pillow sympy networkx \
-             beautifulsoup4 seaborn openpyxl plotly opencv-python-headless; \
-         fi; \
-         #
-         # C++ header-only libraries
-         if [ "$LANG_C_CPP" = "true" ]; then \
-           mkdir -p /opt/packages/cpp/nlohmann \
-           && curl -fsSL "https://github.com/nlohmann/json/releases/download/v${NLOHMANN_JSON_VERSION}/json.hpp" \
-              -o /opt/packages/cpp/nlohmann/json.hpp; \
-         fi; \
-         #
-         # Java JARs
-         if [ "$LANG_JAVA" = "true" ]; then \
-           mkdir -p /opt/packages/java \
-           && curl -fsSL "https://repo1.maven.org/maven2/com/google/code/gson/gson/${GSON_VERSION}/gson-${GSON_VERSION}.jar" \
-              -o /opt/packages/java/gson.jar; \
-         fi; \
+    # Networking tools (executor profile uses bridge + veth)
+    && apt-get install -y --no-install-recommends iproute2 nftables \
+    #
+    # Pre-cached packages (visible only in executor mode, hidden in judge mode)
+    #
+    # Python: data science + viz + scraping + image
+    && if [ "$LANG_PYTHON" = "true" ]; then \
+         python3 -m pip install --no-cache-dir --target /opt/packages/python \
+           numpy pandas matplotlib scipy scikit-learn \
+           requests pillow sympy networkx \
+           beautifulsoup4 seaborn openpyxl plotly opencv-python-headless; \
+       fi \
+    #
+    # C++: nlohmann/json (header-only)
+    && if [ "$LANG_C_CPP" = "true" ]; then \
+         mkdir -p /opt/packages/cpp/nlohmann \
+         && curl -fsSL "https://github.com/nlohmann/json/releases/download/v${NLOHMANN_JSON_VERSION}/json.hpp" \
+            -o /opt/packages/cpp/nlohmann/json.hpp; \
+       fi \
+    #
+    # Java: Gson JAR
+    && if [ "$LANG_JAVA" = "true" ]; then \
+         mkdir -p /opt/packages/java \
+         && curl -fsSL "https://repo1.maven.org/maven2/com/google/code/gson/gson/${GSON_VERSION}/gson-${GSON_VERSION}.jar" \
+            -o /opt/packages/java/gson.jar; \
        fi \
     #
     # Cleanup

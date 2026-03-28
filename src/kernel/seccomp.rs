@@ -8,8 +8,17 @@ pub enum SeccompPolicy {
     Disabled,
     #[default]
     BuiltinDenyList,
+    ExecutorDenyList,
     CustomFile(std::path::PathBuf),
 }
+
+const EXECUTOR_ALLOWED_SYSCALLS: &[&str] = &[
+    "memfd_create",
+    "mbind",
+    "set_mempolicy",
+    "move_pages",
+    "personality",
+];
 
 struct SyscallRule {
     name: &'static str,
@@ -316,19 +325,23 @@ fn build_and_apply(
 pub fn install_filter(policy: &SeccompPolicy) -> Result<()> {
     match policy {
         SeccompPolicy::Disabled => Ok(()),
-        SeccompPolicy::BuiltinDenyList => install_builtin_deny_list(),
+        SeccompPolicy::BuiltinDenyList => install_builtin_deny_list(false),
+        SeccompPolicy::ExecutorDenyList => install_builtin_deny_list(true),
         SeccompPolicy::CustomFile(path) => install_custom_policy(path),
     }
 }
 
-fn install_builtin_deny_list() -> Result<()> {
+fn install_builtin_deny_list(executor_mode: bool) -> Result<()> {
     // Seccomp filters stack: kernel uses the most restrictive result.
     // We need multiple filters because SeccompFilter only supports one match_action.
+
+    let is_allowed =
+        |name: &str| -> bool { executor_mode && EXECUTOR_ALLOWED_SYSCALLS.contains(&name) };
 
     // Filter 1: io_uring → ERRNO(ENOSYS)
     let enosys_rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BUILTIN_DENY_LIST
         .iter()
-        .filter(|r| matches!(r.action, SeccompAction::Errno(_)))
+        .filter(|r| matches!(r.action, SeccompAction::Errno(_)) && !is_allowed(r.name))
         .map(|r| (r.num, vec![]))
         .collect();
     build_and_apply(
@@ -340,7 +353,7 @@ fn install_builtin_deny_list() -> Result<()> {
     // Filter 2: tracing/bpf/modules/mount → KILL_PROCESS
     let kill_rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BUILTIN_DENY_LIST
         .iter()
-        .filter(|r| matches!(r.action, SeccompAction::KillProcess))
+        .filter(|r| matches!(r.action, SeccompAction::KillProcess) && !is_allowed(r.name))
         .map(|r| (r.num, vec![]))
         .collect();
     build_and_apply(kill_rules, SeccompAction::Allow, SeccompAction::KillProcess)?;

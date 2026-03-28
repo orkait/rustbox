@@ -201,6 +201,15 @@ pub fn run(mode: CliMode) -> Result<()> {
     }
 
     crate::judge::checks::perform_security_checks();
+
+    match crate::kernel::network::setup_bridge() {
+        Ok(()) => eprintln!("✅ network bridge ready - executor profile available"),
+        Err(e) => eprintln!(
+            "⚠️  Network bridge setup failed: {} (executor profile will not work)",
+            e
+        ),
+    }
+
     maybe_exit_on_pending_signal();
 
     let command_result = match command {

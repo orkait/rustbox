@@ -253,7 +253,7 @@ pub fn veth_names_for_uid(uid: u32) -> (String, String) {
 pub fn create_sandbox_network(sandbox_pid: u32, uid: u32) -> Result<NetworkHandle> {
     let (veth_host, veth_sandbox) = veth_names_for_uid(uid);
     let (sandbox_ip, _gateway) = sandbox_ip_for_uid(uid);
-    let sandbox_cidr = format!("{}/30", sandbox_ip);
+    let sandbox_cidr = format!("{}/16", sandbox_ip);
     let pid_str = sandbox_pid.to_string();
 
     run_cmd(

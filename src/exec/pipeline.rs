@@ -367,6 +367,8 @@ pub fn exec_payload(req: &SandboxLaunchRequest) -> Result<()> {
         crate::kernel::seccomp::SeccompPolicy::Disabled
     } else if let Some(ref path) = req.profile.seccomp_policy_file {
         crate::kernel::seccomp::SeccompPolicy::CustomFile(path.clone())
+    } else if req.profile.packages_enabled {
+        crate::kernel::seccomp::SeccompPolicy::ExecutorDenyList
     } else {
         crate::kernel::seccomp::SeccompPolicy::BuiltinDenyList
     };
