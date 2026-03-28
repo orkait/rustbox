@@ -111,7 +111,8 @@ int main() {
     let stats = LatencyStats::from_samples(samples);
 
     // Judge-v1 budget: p50 < 100ms, p95 < 200ms
-    let passed = stats.p50 < Duration::from_millis(100) && stats.p95 < Duration::from_millis(200);
+    let passed = stats.p50 < Duration::from_millis(rustbox::config::constants::BENCH_COLD_P50_MS)
+        && stats.p95 < Duration::from_millis(rustbox::config::constants::BENCH_COLD_P95_MS);
     let reason = if !passed {
         Some(format!(
             "p50={:?} (target <100ms), p95={:?} (target <200ms)",
@@ -161,7 +162,8 @@ fn benchmark_python_hello_world() -> BenchmarkResult {
     let stats = LatencyStats::from_samples(samples);
 
     // Python has higher startup overhead: p50 < 150ms, p95 < 300ms
-    let passed = stats.p50 < Duration::from_millis(150) && stats.p95 < Duration::from_millis(300);
+    let passed = stats.p50 < Duration::from_millis(rustbox::config::constants::BENCH_WARM_P50_MS)
+        && stats.p95 < Duration::from_millis(rustbox::config::constants::BENCH_WARM_P95_MS);
     let reason = if !passed {
         Some(format!(
             "p50={:?} (target <150ms), p95={:?} (target <300ms)",
@@ -217,7 +219,8 @@ public class Main {
     let stats = LatencyStats::from_samples(samples);
 
     // Java has highest startup overhead: p50 < 250ms, p95 < 500ms
-    let passed = stats.p50 < Duration::from_millis(250) && stats.p95 < Duration::from_millis(500);
+    let passed = stats.p50 < Duration::from_millis(rustbox::config::constants::BENCH_FULL_P50_MS)
+        && stats.p95 < Duration::from_millis(rustbox::config::constants::BENCH_FULL_P95_MS);
     let reason = if !passed {
         Some(format!(
             "p50={:?} (target <250ms), p95={:?} (target <500ms)",

@@ -244,6 +244,48 @@ const BUILTIN_DENY_LIST: &[SyscallRule] = &[
         num: libc::SYS_move_pages,
         action: SeccompAction::KillProcess,
     },
+    // Newer syscalls (kernel 5.10+): cross-process, NUMA, mount info, LSM modification
+    // In-memory binary execution
+    SyscallRule {
+        name: "memfd_create",
+        num: libc::SYS_memfd_create,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "process_madvise",
+        num: crate::config::constants::SYS_PROCESS_MADVISE,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "process_mrelease",
+        num: crate::config::constants::SYS_PROCESS_MRELEASE,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "set_mempolicy_home_node",
+        num: crate::config::constants::SYS_SET_MEMPOLICY_HOME_NODE,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "map_shadow_stack",
+        num: crate::config::constants::SYS_MAP_SHADOW_STACK,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "statmount",
+        num: crate::config::constants::SYS_STATMOUNT,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "listmount",
+        num: crate::config::constants::SYS_LISTMOUNT,
+        action: SeccompAction::KillProcess,
+    },
+    SyscallRule {
+        name: "lsm_set_self_attr",
+        num: crate::config::constants::SYS_LSM_SET_SELF_ATTR,
+        action: SeccompAction::KillProcess,
+    },
 ];
 
 fn target_arch() -> Result<seccompiler::TargetArch> {
@@ -281,7 +323,7 @@ pub fn install_filter(policy: &SeccompPolicy) -> Result<()> {
 
 fn install_builtin_deny_list() -> Result<()> {
     // Seccomp filters stack: kernel uses the most restrictive result.
-    // We need two filters because SeccompFilter only supports one match_action.
+    // We need multiple filters because SeccompFilter only supports one match_action.
 
     // Filter 1: io_uring → ERRNO(ENOSYS)
     let enosys_rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BUILTIN_DENY_LIST
@@ -302,6 +344,26 @@ fn install_builtin_deny_list() -> Result<()> {
         .map(|r| (r.num, vec![]))
         .collect();
     build_and_apply(kill_rules, SeccompAction::Allow, SeccompAction::KillProcess)?;
+
+    // Filter 3: clone with CLONE_NEWUSER → KILL_PROCESS
+    // Blocks nested user namespace creation which expands kernel attack surface.
+    // clone() itself must remain allowed (threads, fork), only the user-namespace flag is blocked.
+    let clone_newuser_flag = libc::CLONE_NEWUSER as u64;
+    let clone_rule = seccompiler::SeccompRule::new(vec![seccompiler::SeccompCondition::new(
+        0,
+        seccompiler::SeccompCmpArgLen::Qword,
+        seccompiler::SeccompCmpOp::MaskedEq(clone_newuser_flag),
+        clone_newuser_flag,
+    )
+    .map_err(|e| IsolateError::Config(format!("seccomp clone condition: {}", e)))?])
+    .map_err(|e| IsolateError::Config(format!("seccomp clone rule: {}", e)))?;
+    let mut clone_rules = BTreeMap::new();
+    clone_rules.insert(libc::SYS_clone, vec![clone_rule]);
+    build_and_apply(
+        clone_rules,
+        SeccompAction::Allow,
+        SeccompAction::KillProcess,
+    )?;
 
     Ok(())
 }
@@ -432,6 +494,14 @@ fn syscall_name_to_number(name: &str) -> Option<i64> {
         "rt_sigreturn" => libc::SYS_rt_sigreturn,
         "getcwd" => libc::SYS_getcwd,
         "getpid" => libc::SYS_getpid,
+        "memfd_create" => libc::SYS_memfd_create,
+        "process_madvise" => crate::config::constants::SYS_PROCESS_MADVISE,
+        "process_mrelease" => crate::config::constants::SYS_PROCESS_MRELEASE,
+        "set_mempolicy_home_node" => crate::config::constants::SYS_SET_MEMPOLICY_HOME_NODE,
+        "map_shadow_stack" => crate::config::constants::SYS_MAP_SHADOW_STACK,
+        "statmount" => crate::config::constants::SYS_STATMOUNT,
+        "listmount" => crate::config::constants::SYS_LISTMOUNT,
+        "lsm_set_self_attr" => crate::config::constants::SYS_LSM_SET_SELF_ATTR,
         _ => return None,
     };
     Some(num)
@@ -448,7 +518,7 @@ mod tests {
 
     #[test]
     fn builtin_deny_list_has_expected_count() {
-        assert_eq!(BUILTIN_DENY_LIST.len(), 42);
+        assert_eq!(BUILTIN_DENY_LIST.len(), 50);
     }
 
     #[test]

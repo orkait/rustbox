@@ -125,7 +125,10 @@ async fn main() -> anyhow::Result<()> {
         let limiter = limiter.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(300)).await;
+                tokio::time::sleep(Duration::from_secs(
+                    judge_service::constants::RATE_LIMIT_BUCKET_RETENTION_SECS,
+                ))
+                .await;
                 limiter.cleanup_stale();
             }
         });
@@ -152,7 +155,9 @@ async fn main() -> anyhow::Result<()> {
 
     let app = judge_service::api::router()
         .layer(cors)
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(
+            judge_service::constants::HTTP_BODY_LIMIT,
+        ))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", cfg.port);

@@ -70,7 +70,7 @@ impl NamespaceIsolation {
             })?;
 
             if self.enable_uts_namespace {
-                let _ = sethostname("rustbox-sandbox");
+                let _ = sethostname(crate::config::constants::SANDBOX_HOSTNAME);
             }
             if self.enable_network_namespace {
                 self.bring_up_loopback()?;

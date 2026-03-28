@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::error::IsolateError;
+use crate::config::constants;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DirectoryBinding {
@@ -94,7 +95,6 @@ pub struct IsolateConfig {
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     pub memory_limit: Option<u64>,
-    pub time_limit: Option<Duration>,
     pub cpu_time_limit: Option<Duration>,
     pub wall_time_limit: Option<Duration>,
     pub process_limit: Option<u32>,
@@ -121,14 +121,16 @@ pub struct IsolateConfig {
     pub enable_network_namespace: bool,
     pub enable_user_namespace: bool,
     #[serde(default)]
-    pub allow_degraded: bool,
-    #[serde(default)]
     pub no_seccomp: bool,
     #[serde(default)]
     pub seccomp_policy_file: Option<PathBuf>,
     pub directory_bindings: Vec<DirectoryBinding>,
     #[serde(default)]
     pub tmpfs_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub pipe_buffer_size: Option<u64>,
+    #[serde(default)]
+    pub output_limit: Option<u64>,
 }
 
 impl IsolateConfig {
@@ -144,17 +146,16 @@ impl Default for IsolateConfig {
             instance_id: uuid::Uuid::new_v4().to_string(),
             workdir: Self::runtime_root_dir(),
             chroot_dir: None,
-            uid: Some(65534),
-            gid: Some(65534),
-            memory_limit: Some(128 * 1024 * 1024),
-            time_limit: Some(Duration::from_secs(10)),
-            cpu_time_limit: Some(Duration::from_secs(10)),
-            wall_time_limit: Some(Duration::from_secs(20)),
-            process_limit: Some(10),
-            file_size_limit: Some(64 * 1024 * 1024),
-            stack_limit: Some(8 * 1024 * 1024),
+            uid: Some(constants::NOBODY_UID),
+            gid: Some(constants::NOBODY_GID),
+            memory_limit: Some(constants::DEFAULT_MEMORY_LIMIT),
+            cpu_time_limit: Some(constants::DEFAULT_CPU_TIME_LIMIT),
+            wall_time_limit: Some(constants::DEFAULT_WALL_TIME_LIMIT),
+            process_limit: Some(constants::DEFAULT_PROCESS_LIMIT),
+            file_size_limit: Some(constants::DEFAULT_FILE_SIZE_LIMIT),
+            stack_limit: Some(constants::DEFAULT_STACK_LIMIT),
             core_limit: Some(0),
-            fd_limit: Some(64),
+            fd_limit: Some(constants::DEFAULT_FD_LIMIT),
             virtual_memory_limit: None,
             environment: Vec::new(),
             strict_mode: true,
@@ -165,17 +166,18 @@ impl Default for IsolateConfig {
             use_pipes: false,
             stdin_data: None,
             stdin_file: None,
-            io_buffer_size: 8192,
-            text_encoding: "utf-8".to_string(),
+            io_buffer_size: constants::DEFAULT_IO_BUFFER_SIZE,
+            text_encoding: constants::SANDBOX_TEXT_ENCODING.to_string(),
             enable_pid_namespace: true,
             enable_mount_namespace: true,
             enable_network_namespace: true,
             enable_user_namespace: false,
-            allow_degraded: false,
             no_seccomp: false,
             seccomp_policy_file: None,
             directory_bindings: Vec::new(),
             tmpfs_size_bytes: None,
+            pipe_buffer_size: Some(constants::DEFAULT_PIPE_BUFFER_SIZE),
+            output_limit: Some(constants::DEFAULT_OUTPUT_COMBINED_LIMIT as u64),
         }
     }
 }

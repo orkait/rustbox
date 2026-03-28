@@ -1,3 +1,5 @@
+use crate::constants;
+
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
     pub port: u16,
@@ -21,9 +23,9 @@ pub struct ServiceConfig {
 impl ServiceConfig {
     pub fn from_env() -> Self {
         Self {
-            port: env_or("RUSTBOX_PORT", 4096),
-            workers: env_or("RUSTBOX_WORKERS", 2),
-            queue_size: env_or("RUSTBOX_QUEUE_SIZE", 100),
+            port: env_or("RUSTBOX_PORT", constants::DEFAULT_PORT),
+            workers: env_or("RUSTBOX_WORKERS", constants::DEFAULT_WORKERS),
+            queue_size: env_or("RUSTBOX_QUEUE_SIZE", constants::DEFAULT_QUEUE_SIZE),
             database_url: std::env::var("RUSTBOX_DATABASE_URL")
                 .unwrap_or_else(|_| "sqlite:rustbox.db".to_string()),
             api_key: std::env::var("RUSTBOX_API_KEY")
@@ -31,14 +33,32 @@ impl ServiceConfig {
                 .filter(|k| !k.is_empty()),
             node_id: std::env::var("RUSTBOX_NODE_ID")
                 .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string()),
-            reaper_interval_secs: env_or("RUSTBOX_REAPER_INTERVAL_SECS", 60),
-            stale_timeout_secs: env_or("RUSTBOX_STALE_TIMEOUT_SECS", 300),
+            reaper_interval_secs: env_or(
+                "RUSTBOX_REAPER_INTERVAL_SECS",
+                constants::DEFAULT_REAPER_INTERVAL_SECS,
+            ),
+            stale_timeout_secs: env_or(
+                "RUSTBOX_STALE_TIMEOUT_SECS",
+                constants::DEFAULT_STALE_TIMEOUT_SECS,
+            ),
             allow_localhost_webhooks: env_or("RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS", false),
-            max_code_bytes: env_or("RUSTBOX_MAX_CODE_BYTES", 64 * 1024),
-            max_stdin_bytes: env_or("RUSTBOX_MAX_STDIN_BYTES", 256 * 1024),
-            sync_wait_timeout_secs: env_or("RUSTBOX_SYNC_WAIT_TIMEOUT_SECS", 30),
-            webhook_timeout_secs: env_or("RUSTBOX_WEBHOOK_TIMEOUT_SECS", 10),
-            drain_timeout_secs: env_or("RUSTBOX_DRAIN_TIMEOUT_SECS", 35),
+            max_code_bytes: env_or("RUSTBOX_MAX_CODE_BYTES", constants::DEFAULT_MAX_CODE_BYTES),
+            max_stdin_bytes: env_or(
+                "RUSTBOX_MAX_STDIN_BYTES",
+                constants::DEFAULT_MAX_STDIN_BYTES,
+            ),
+            sync_wait_timeout_secs: env_or(
+                "RUSTBOX_SYNC_WAIT_TIMEOUT_SECS",
+                constants::DEFAULT_SYNC_WAIT_TIMEOUT_SECS,
+            ),
+            webhook_timeout_secs: env_or(
+                "RUSTBOX_WEBHOOK_TIMEOUT_SECS",
+                constants::DEFAULT_WEBHOOK_TIMEOUT_SECS,
+            ),
+            drain_timeout_secs: env_or(
+                "RUSTBOX_DRAIN_TIMEOUT_SECS",
+                constants::DEFAULT_DRAIN_TIMEOUT_SECS,
+            ),
             rate_limit_per_minute: env_or("RUSTBOX_RATE_LIMIT", 0),
             trust_proxy_headers: env_or("RUSTBOX_TRUST_PROXY_HEADERS", false),
         }

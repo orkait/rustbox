@@ -1,3 +1,4 @@
+use crate::config::constants;
 use crate::config::types::{IsolateError, Result};
 use crate::utils::fork_safe_log::{fs_info_parts, fs_warn_parts, itoa_i32};
 use std::collections::HashMap;
@@ -126,9 +127,9 @@ pub struct PermissionPolicy {
 impl Default for PermissionPolicy {
     fn default() -> Self {
         PermissionPolicy {
-            umask: 0o077,
-            temp_dir_perms: 0o700,
-            work_dir_perms: 0o755,
+            umask: constants::PERM_UMASK_RESTRICTIVE,
+            temp_dir_perms: constants::PERM_DIR_TEMP,
+            work_dir_perms: constants::PERM_DIR_STANDARD,
             strict_mode: true,
         }
     }
@@ -170,19 +171,16 @@ impl EnvHygiene {
         }
 
         if self.env_policy.set_deterministic_path {
-            env_map.insert(
-                "PATH".to_string(),
-                "/usr/local/bin:/usr/bin:/bin".to_string(),
-            );
+            env_map.insert("PATH".to_string(), constants::SANDBOX_PATH.to_string());
         }
 
         if self.env_policy.set_deterministic_home {
-            env_map.insert("HOME".to_string(), "/tmp/sandbox".to_string());
+            env_map.insert("HOME".to_string(), constants::SANDBOX_HOME.to_string());
         }
 
         if self.env_policy.set_deterministic_locale {
-            env_map.insert("LANG".to_string(), "C.UTF-8".to_string());
-            env_map.insert("LC_ALL".to_string(), "C.UTF-8".to_string());
+            env_map.insert("LANG".to_string(), constants::SANDBOX_LOCALE.to_string());
+            env_map.insert("LC_ALL".to_string(), constants::SANDBOX_LOCALE.to_string());
         }
 
         if self.env_policy.set_deterministic_temp {
@@ -326,10 +324,16 @@ mod tests {
 
         assert_eq!(
             env_map.get("PATH"),
-            Some(&"/usr/local/bin:/usr/bin:/bin".to_string())
+            Some(&constants::SANDBOX_PATH.to_string())
         );
-        assert_eq!(env_map.get("HOME"), Some(&"/tmp/sandbox".to_string()));
-        assert_eq!(env_map.get("LANG"), Some(&"C.UTF-8".to_string()));
+        assert_eq!(
+            env_map.get("HOME"),
+            Some(&constants::SANDBOX_HOME.to_string())
+        );
+        assert_eq!(
+            env_map.get("LANG"),
+            Some(&constants::SANDBOX_LOCALE.to_string())
+        );
         assert_eq!(env_map.get("TMPDIR"), Some(&"/tmp".to_string()));
 
         assert!(!env_map.contains_key("LD_PRELOAD"));

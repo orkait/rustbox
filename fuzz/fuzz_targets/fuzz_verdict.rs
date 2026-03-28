@@ -9,9 +9,9 @@ fuzz_target!(|data: &[u8]| {
             let limits = LimitSnapshot {
                 cpu_limit_ms: Some(4000),
                 wall_limit_ms: Some(7000),
-                memory_limit_bytes: Some(128 * 1024 * 1024),
+                memory_limit_bytes: Some(rustbox::config::constants::DEFAULT_MEMORY_LIMIT),
                 process_limit: Some(10),
-                output_limit_bytes: Some(64 * 1024),
+                output_limit_bytes: Some(rustbox::config::constants::DEFAULT_FILE_SIZE_LIMIT),
             };
             let _ = VerdictClassifier::classify(&evidence, &limits);
         }

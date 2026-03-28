@@ -17,7 +17,6 @@ int main() {
     let mut config = IsolateConfig::with_language_defaults("cpp", "seccomp-test-1".to_string())
         .unwrap_or_default();
     config.strict_mode = false;
-    config.allow_degraded = true;
     let mut isolate = Isolate::new(config).expect("isolate creation");
     let result = isolate.execute_code_string("cpp", code, &ExecutionOverrides::default());
     isolate.cleanup().ok();
@@ -54,7 +53,6 @@ fn no_seccomp_flag_disables_filter() {
     let mut config = IsolateConfig::with_language_defaults("python", "seccomp-test-2".to_string())
         .unwrap_or_default();
     config.strict_mode = false;
-    config.allow_degraded = true;
     config.no_seccomp = true;
     let mut isolate = Isolate::new(config).expect("isolate creation");
     let result =
@@ -71,7 +69,6 @@ fn seccomp_enabled_by_default_python_works() {
     let mut config = IsolateConfig::with_language_defaults("python", "seccomp-test-3".to_string())
         .unwrap_or_default();
     config.strict_mode = false;
-    config.allow_degraded = true;
     let mut isolate = Isolate::new(config).expect("isolate creation");
     let result =
         isolate.execute_code_string("python", "print(2+2)", &ExecutionOverrides::default());

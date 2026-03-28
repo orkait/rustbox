@@ -44,8 +44,8 @@ async fn start_server() -> (String, Arc<dyn judge_service::database::Database>) 
         api_key: None,
         node_id: "test-node".to_string(),
         allow_localhost_webhooks: true,
-        max_code_bytes: 64 * 1024,
-        max_stdin_bytes: 256 * 1024,
+        max_code_bytes: judge_service::constants::DEFAULT_MAX_CODE_BYTES,
+        max_stdin_bytes: judge_service::constants::DEFAULT_MAX_STDIN_BYTES,
         sync_wait_timeout_secs: 30,
         webhook_timeout_secs: 10,
         cgroup_backend: None,
@@ -86,7 +86,8 @@ async fn start_server() -> (String, Arc<dyn judge_service::database::Database>) 
 /// or until the timeout expires. Returns the final JSON response body.
 async fn poll_until_done(client: &reqwest::Client, base_url: &str, id: &str) -> Value {
     let url = format!("{base_url}/api/result/{id}");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now()
+        + Duration::from_secs(judge_service::constants::TEST_DEADLINE_SECS);
 
     loop {
         let resp = client.get(&url).send().await.expect("poll request failed");
@@ -105,7 +106,7 @@ async fn poll_until_done(client: &reqwest::Client, base_url: &str, id: &str) -> 
             );
         }
 
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(judge_service::constants::TEST_POLL_INTERVAL).await;
     }
 }
 

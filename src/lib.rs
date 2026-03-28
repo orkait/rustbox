@@ -16,6 +16,8 @@ pub mod utils;
 
 pub mod cli;
 
+pub mod judge;
+
 pub mod runtime;
 
 pub use exec::preexec;

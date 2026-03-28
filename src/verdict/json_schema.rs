@@ -125,8 +125,10 @@ impl JudgeResultV1 {
             continued: false,
         };
 
-        let wall_elapsed_ms = (result.wall_time.max(0.0) * 1000.0) as u64;
-        let cpu_time_ms = (result.cpu_time.max(0.0) * 1000.0) as u64;
+        let wall_elapsed_ms =
+            (result.wall_time.max(0.0) * crate::config::constants::MS_PER_SEC_F64) as u64;
+        let cpu_time_ms =
+            (result.cpu_time.max(0.0) * crate::config::constants::MS_PER_SEC_F64) as u64;
         let timing_evidence = TimingEvidence {
             wall_elapsed_ms,
             cpu_time_ms,
@@ -205,6 +207,7 @@ impl JudgeResultV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::constants;
 
     fn create_test_result() -> JudgeResultV1 {
         let capability_report = CapabilityReport {
@@ -229,8 +232,8 @@ mod tests {
             },
             judge_actions: vec![],
             cgroup_evidence: Some(CgroupEvidence {
-                memory_peak: Some(1024 * 1024),
-                memory_limit: Some(128 * 1024 * 1024),
+                memory_peak: Some(constants::MB),
+                memory_limit: Some(constants::DEFAULT_MEMORY_LIMIT),
                 oom_events: 0,
                 oom_kill_events: 0,
                 cpu_usage_usec: Some(500000),
@@ -259,7 +262,7 @@ mod tests {
             OutputIntegrity::Complete,
             0.5,
             1.0,
-            1024 * 1024,
+            constants::MB,
             None,
             capability_report,
             "abc123def456".to_string(),

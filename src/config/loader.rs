@@ -1,3 +1,4 @@
+use crate::config::constants;
 use crate::config::types::{IsolateConfig, IsolateError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -22,17 +23,19 @@ pub struct LimitsConfig {
     pub cpu_time_sec: u64,
     pub wall_time_sec: u64,
     pub max_processes: u32,
-    #[serde(default = "default_max_file_size_kb")]
-    pub max_file_size_kb: u64,
+    #[serde(default = "default_max_file_size_mb")]
+    pub max_file_size_mb: u64,
     #[serde(default = "default_max_open_files")]
     pub max_open_files: u32,
+    #[serde(default)]
+    pub stack_limit_mb: Option<u64>,
 }
 
-fn default_max_file_size_kb() -> u64 {
-    1024
+fn default_max_file_size_mb() -> u64 {
+    1
 }
 fn default_max_open_files() -> u32 {
-    64
+    crate::config::constants::DEFAULT_FD_LIMIT as u32
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +92,14 @@ pub struct RustBoxConfig {
 pub struct SandboxConfig {
     #[serde(default = "default_tmpfs_size_mb")]
     pub tmpfs_size_mb: u64,
+    #[serde(default)]
+    pub pipe_buffer_mb: Option<u64>,
+    #[serde(default)]
+    pub output_combined_limit_mb: Option<u64>,
+    #[serde(default)]
+    pub output_stdout_limit_mb: Option<u64>,
+    #[serde(default)]
+    pub output_stderr_limit_mb: Option<u64>,
 }
 
 fn default_tmpfs_size_mb() -> u64 {
@@ -99,6 +110,10 @@ impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
             tmpfs_size_mb: default_tmpfs_size_mb(),
+            pipe_buffer_mb: None,
+            output_combined_limit_mb: None,
+            output_stdout_limit_mb: None,
+            output_stderr_limit_mb: None,
         }
     }
 }
@@ -130,14 +145,14 @@ impl RustBoxConfig {
                             if let Ok(meta) = std::fs::metadata(&candidate) {
                                 let is_wsl_mount = candidate.to_string_lossy().starts_with("/mnt/");
                                 if unsafe { libc::geteuid() } == 0
-                                    && (meta.mode() & 0o002) != 0
+                                    && (meta.mode() & constants::WORLD_WRITABLE_BIT) != 0
                                     && !is_wsl_mount
                                 {
                                     return Err(IsolateError::Config(format!(
                                         "REFUSED: config file {} is world-writable (mode {:o}). \
                                          Fix with: chmod 644 {}",
                                         candidate.display(),
-                                        meta.mode() & 0o777,
+                                        meta.mode() & constants::PERMISSION_MASK,
                                         candidate.display()
                                     )));
                                 }
@@ -180,18 +195,27 @@ impl IsolateConfig {
         if let Ok(rustbox_config) = RustBoxConfig::load_default() {
             if let Some(lang) = rustbox_config.get_language_config(language) {
                 let l = &lang.limits;
-                config.memory_limit = Some(l.memory_mb * 1024 * 1024);
+                config.memory_limit = Some(l.memory_mb * constants::MB);
                 config.cpu_time_limit = Some(Duration::from_secs(l.cpu_time_sec));
                 config.wall_time_limit = Some(Duration::from_secs(l.wall_time_sec));
-                config.time_limit = Some(Duration::from_secs(l.cpu_time_sec));
                 config.process_limit = Some(l.max_processes);
-                config.file_size_limit = Some(l.max_file_size_kb * 1024);
+                config.file_size_limit = Some(l.max_file_size_mb * constants::MB);
                 config.fd_limit = Some(l.max_open_files as u64);
+                if let Some(stack_mb) = l.stack_limit_mb {
+                    config.stack_limit = Some(stack_mb * constants::MB);
+                }
                 config.virtual_memory_limit = l
                     .virtual_memory_mb
-                    .map(|v| v * 1024 * 1024)
-                    .or(Some(1024 * 1024 * 1024));
-                config.tmpfs_size_bytes = Some(rustbox_config.sandbox.tmpfs_size_mb * 1024 * 1024);
+                    .map(|v| v * constants::MB)
+                    .or(Some(constants::DEFAULT_VIRTUAL_MEMORY_LIMIT));
+                config.tmpfs_size_bytes =
+                    Some(rustbox_config.sandbox.tmpfs_size_mb * constants::MB);
+                if let Some(mb) = rustbox_config.sandbox.pipe_buffer_mb {
+                    config.pipe_buffer_size = Some(mb * constants::MB);
+                }
+                if let Some(mb) = rustbox_config.sandbox.output_combined_limit_mb {
+                    config.output_limit = Some(mb * constants::MB);
+                }
 
                 for (key, value) in &lang.environment {
                     config.environment.push((key.clone(), value.clone()));
@@ -242,19 +266,25 @@ mod tests {
 
     #[test]
     fn virtual_memory_limits_per_language() {
-        assert_eq!(load("java").virtual_memory_limit, Some(4096 * 1024 * 1024));
+        assert_eq!(
+            load("java").virtual_memory_limit,
+            Some(4096 * constants::MB)
+        );
         assert_eq!(
             load("python").virtual_memory_limit,
-            Some(1024 * 1024 * 1024)
+            Some(constants::DEFAULT_VIRTUAL_MEMORY_LIMIT)
         );
-        assert_eq!(load("cpp").virtual_memory_limit, Some(1024 * 1024 * 1024));
+        assert_eq!(
+            load("cpp").virtual_memory_limit,
+            Some(constants::DEFAULT_VIRTUAL_MEMORY_LIMIT)
+        );
     }
 
     #[test]
     fn uid_gid_deferred_to_isolate() {
         let c = load("python");
-        assert_eq!(c.uid, Some(65534));
-        assert_eq!(c.gid, Some(65534));
+        assert_eq!(c.uid, Some(constants::NOBODY_UID));
+        assert_eq!(c.gid, Some(constants::NOBODY_GID));
     }
 
     #[test]

@@ -65,7 +65,7 @@ impl TestServer {
 
         let base_url = format!("http://127.0.0.1:{}", port);
         let client = Client::builder()
-            .timeout(Duration::from_secs(60))
+            .timeout(judge_service::constants::E2E_REQUEST_TIMEOUT)
             .build()
             .unwrap();
 
@@ -82,7 +82,7 @@ impl TestServer {
     async fn wait_ready(&self) {
         let start = Instant::now();
         loop {
-            if start.elapsed() > Duration::from_secs(10) {
+            if start.elapsed() > judge_service::constants::E2E_HEALTH_TIMEOUT {
                 panic!(
                     "judge-service did not become ready within 10s on port {}",
                     self.port
@@ -94,7 +94,7 @@ impl TestServer {
                     return;
                 }
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(judge_service::constants::E2E_POLL_INTERVAL).await;
         }
     }
 
@@ -160,6 +160,8 @@ impl Drop for TestServer {
         let _ = self.child.wait();
         let db_path = format!("rustbox-test-{}.db", self.port);
         let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(format!("{}-shm", db_path));
+        let _ = std::fs::remove_file(format!("{}-wal", db_path));
     }
 }
 

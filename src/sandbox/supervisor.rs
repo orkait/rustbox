@@ -1,215 +1,15 @@
-use crate::config::types::{
-    CgroupEvidence, ExecutionStatus, IsolateError, JudgeAction, JudgeActionType,
-    ProcessLifecycleEvidence, Result,
-};
+use crate::config::constants;
+use crate::config::types::{ExecutionStatus, IsolateError, Result};
 use crate::kernel::cgroup::CgroupBackend;
+use crate::sandbox::evidence::{build_launch_evidence, LaunchEvidenceParams};
 use crate::sandbox::proxy::{
     read_proxy_status_from_fd, run_proxy_main_from_fds, write_request_to_fd,
 };
-use crate::sandbox::types::{
-    KillReport, LaunchEvidence, ProxyStatus, SandboxLaunchOutcome, SandboxLaunchRequest,
-};
+use crate::sandbox::types::{KillReport, ProxyStatus, SandboxLaunchOutcome, SandboxLaunchRequest};
 use nix::sched::{clone, CloneFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, pipe, Pid};
-use std::time::{Duration, Instant, SystemTime};
-
-fn drain_reader(mut r: impl std::io::Read) -> String {
-    let mut s = String::new();
-    let _ = r.read_to_string(&mut s);
-    s
-}
-
-fn detect_pidfd_mode() -> crate::config::types::PidfdMode {
-    #[cfg(target_os = "linux")]
-    {
-        const SYS_PIDFD_OPEN: libc::c_long = 434;
-        let self_pid = std::process::id() as i32;
-        let pidfd = unsafe { libc::syscall(SYS_PIDFD_OPEN, self_pid, 0) as i32 };
-
-        if pidfd >= 0 {
-            unsafe {
-                libc::close(pidfd);
-            }
-            crate::config::types::PidfdMode::Native
-        } else {
-            crate::config::types::PidfdMode::Fallback
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        crate::config::types::PidfdMode::Fallback
-    }
-}
-
-fn build_configured_controls(req: &SandboxLaunchRequest) -> Vec<String> {
-    let mut controls = Vec::with_capacity(8);
-    if req.profile.enable_pid_namespace {
-        controls.push("pid_namespace".into());
-    }
-    if req.profile.enable_mount_namespace {
-        controls.push("mount_namespace".into());
-    }
-    if req.profile.enable_network_namespace {
-        controls.push("network_namespace".into());
-    }
-    if req.profile.enable_user_namespace {
-        controls.push("user_namespace".into());
-    }
-    if req.profile.memory_limit.is_some() {
-        controls.push("memory_limit".into());
-    }
-    if req.profile.process_limit.is_some() {
-        controls.push("process_limit".into());
-    }
-    controls.push("no_new_privileges".into());
-    controls
-}
-
-struct LaunchEvidenceParams<'a> {
-    running_as_root: bool,
-    cgroup_backend_selected: Option<String>,
-    cgroup_enforced: bool,
-    timed_out: bool,
-    kill_report: Option<&'a KillReport>,
-    proxy_status: &'a ProxyStatus,
-    cgroup_evidence: Option<CgroupEvidence>,
-    evidence_collection_errors: Vec<String>,
-    cleanup_verified: bool,
-}
-
-fn build_launch_evidence(
-    req: &SandboxLaunchRequest,
-    params: LaunchEvidenceParams<'_>,
-) -> LaunchEvidence {
-    let LaunchEvidenceParams {
-        running_as_root,
-        cgroup_backend_selected,
-        cgroup_enforced,
-        timed_out,
-        kill_report,
-        proxy_status,
-        cgroup_evidence,
-        evidence_collection_errors,
-        cleanup_verified,
-    } = params;
-    let configured = build_configured_controls(req);
-    let mut applied = Vec::with_capacity(configured.len());
-    let mut missing = Vec::new();
-    let setup_controls_applied = req.profile.strict_mode && proxy_status.internal_error.is_none();
-
-    for control in &configured {
-        let dest = match control.as_str() {
-            "memory_limit" | "process_limit" => {
-                if cgroup_enforced {
-                    &mut applied
-                } else {
-                    &mut missing
-                }
-            }
-            "pid_namespace" | "mount_namespace" | "network_namespace" | "user_namespace"
-            | "no_new_privileges" => {
-                if setup_controls_applied {
-                    &mut applied
-                } else {
-                    &mut missing
-                }
-            }
-            _ => &mut applied,
-        };
-        dest.push(control.clone());
-    }
-
-    if timed_out && !applied.iter().any(|c| c == "process_lifecycle") {
-        applied.push("process_lifecycle".into());
-    }
-
-    let reaped = proxy_status.reaped_descendants;
-    let process_lifecycle = ProcessLifecycleEvidence {
-        reap_summary: if reaped == 0 {
-            "clean".into()
-        } else {
-            format!("reaped_{reaped}_descendants")
-        },
-        descendant_containment: if cleanup_verified {
-            "ok".into()
-        } else {
-            "baseline_verification_failed".into()
-        },
-        zombie_count: 0,
-    };
-
-    let mode_decision_reason = match (missing.is_empty(), req.profile.strict_mode) {
-        (true, _) => "All configured controls applied".to_string(),
-        (false, true) => format!(
-            "Strict mode requested but mandatory controls missing: {}",
-            missing.join(", ")
-        ),
-        (false, false) => format!(
-            "Execution degraded; missing controls: {}",
-            missing.join(", ")
-        ),
-    };
-
-    let unsafe_execution_reason = (!missing.is_empty()).then(|| mode_decision_reason.clone());
-
-    let push_action = |actions: &mut Vec<JudgeAction>, atype, details: &str| {
-        actions.push(JudgeAction {
-            timestamp: SystemTime::now(),
-            action_type: atype,
-            details: details.to_string(),
-        });
-    };
-    let mut judge_actions = Vec::new();
-    if let Some(report) = kill_report {
-        if report.term_sent {
-            push_action(
-                &mut judge_actions,
-                JudgeActionType::SignalSent,
-                "SIGTERM sent to proxy group",
-            );
-        }
-        if report.kill_sent {
-            push_action(
-                &mut judge_actions,
-                JudgeActionType::ForcedKill,
-                "SIGKILL sent to proxy group",
-            );
-        }
-    }
-    if timed_out && kill_report.is_none() {
-        push_action(
-            &mut judge_actions,
-            JudgeActionType::ForcedKill,
-            "SIGKILL sent to child process (degraded mode)",
-        );
-    }
-
-    LaunchEvidence {
-        strict_requested: req.profile.strict_mode,
-        running_as_root,
-        configured_controls: configured,
-        applied_controls: applied,
-        missing_controls: missing,
-        mode_decision_reason,
-        unsafe_execution_reason,
-        cgroup_backend_selected,
-        pidfd_mode: detect_pidfd_mode(),
-        proc_policy_applied: if req.profile.enable_mount_namespace {
-            "hardened"
-        } else {
-            "default"
-        }
-        .into(),
-        sys_policy_applied: "disabled".to_string(),
-        judge_actions,
-        cgroup_evidence,
-        process_lifecycle,
-        evidence_collection_errors,
-        cleanup_verified,
-    }
-}
+use std::time::{Duration, Instant};
 
 fn send_signal_with_fallback(pid: Pid, sig: i32, report: &mut KillReport, label: &str) {
     // SAFETY: kill(2) with negative pid sends signal to the process group. Falls back to
@@ -232,7 +32,7 @@ fn terminate_proxy_group(proxy_pid: Pid) -> KillReport {
     send_signal_with_fallback(proxy_pid, libc::SIGTERM, &mut report, "SIGTERM");
     report.term_sent = true;
 
-    std::thread::sleep(Duration::from_millis(200));
+    std::thread::sleep(constants::runtime_tuning().sigterm_grace);
 
     send_signal_with_fallback(proxy_pid, libc::SIGKILL, &mut report, "SIGKILL");
     report.kill_sent = true;
@@ -267,8 +67,22 @@ pub fn launch_with_supervisor(
     let (status_read, status_write) =
         pipe().map_err(|e| IsolateError::process("pipe(status)", e))?;
 
-    let mut clone_flags =
-        CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
+    let pipe_buf = req
+        .profile
+        .pipe_buffer_size
+        .unwrap_or(constants::DEFAULT_PIPE_BUFFER_SIZE)
+        .min(libc::c_int::MAX as u64) as libc::c_int;
+    for fd in [launch_write, status_write] {
+        unsafe {
+            libc::fcntl(fd, libc::F_SETPIPE_SZ, pipe_buf);
+        }
+    }
+
+    let mut clone_flags = CloneFlags::empty();
+    if req.profile.enable_pid_namespace {
+        clone_flags |= CloneFlags::CLONE_NEWPID;
+    }
+    clone_flags |= CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
     if req.profile.enable_mount_namespace {
         clone_flags |= CloneFlags::CLONE_NEWNS;
     }
@@ -279,7 +93,7 @@ pub fn launch_with_supervisor(
         clone_flags |= CloneFlags::CLONE_NEWUSER;
     }
 
-    let mut child_stack = vec![0u8; 2 * 1024 * 1024];
+    let mut child_stack = vec![0u8; constants::CLONE_STACK_SIZE];
     let child_cb: Box<dyn FnMut() -> isize> = Box::new(move || {
         let _ = close(launch_write);
         let _ = close(status_read);
@@ -304,22 +118,12 @@ pub fn launch_with_supervisor(
 
     let proxy_pid = match clone_result {
         Ok(pid) => pid,
-        Err(nix::errno::Errno::EPERM) if !req.profile.strict_mode && req.profile.allow_degraded => {
-            close_all_pipes(launch_read, launch_write, status_read, status_write);
-            log::warn!("Falling back to degraded launch (--allow-degraded enabled)");
-            return launch_degraded(req, cgroup);
-        }
-        Err(nix::errno::Errno::EPERM) if !req.profile.strict_mode => {
-            close_all_pipes(launch_read, launch_write, status_read, status_write);
-            return Err(IsolateError::Privilege(
-                "Root privileges required for namespace isolation. \
-                 Use --allow-degraded for development without isolation (unsafe for untrusted code)."
-                    .to_string(),
-            ));
-        }
         Err(e) => {
             close_all_pipes(launch_read, launch_write, status_read, status_write);
-            return Err(IsolateError::process("clone(proxy)", e));
+            return Err(IsolateError::Privilege(format!(
+                "Root privileges required for namespace isolation: {}",
+                e
+            )));
         }
     };
 
@@ -377,13 +181,12 @@ pub fn launch_with_supervisor(
     // Proxy setup (namespaces, mounts, chroot, creds, caps, seccomp) takes time that
     // should NOT count against the user's wall time. The proxy reports its own wall
     // time starting from after fork(), so the reported time is accurate regardless.
-    const SETUP_BUDGET: Duration = Duration::from_secs(3);
     let wall_limit = req
         .profile
         .wall_time_limit_ms
         .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_secs(30));
-    let kill_timeout = wall_limit + SETUP_BUDGET;
+        .unwrap_or(constants::DEFAULT_SUPERVISOR_WALL_FALLBACK);
+    let kill_timeout = wall_limit + constants::SUPERVISOR_SETUP_BUDGET;
     let started = Instant::now();
 
     let mut timed_out = false;
@@ -394,7 +197,12 @@ pub fn launch_with_supervisor(
     let mut proxy_exit_code = None;
     let mut proxy_signal = None;
 
-    let cpu_limit_usec: Option<u64> = req.profile.cpu_time_limit_ms.map(|ms| ms * 1000);
+    let cpu_limit_usec: Option<u64> = req
+        .profile
+        .cpu_time_limit_ms
+        .map(|ms| ms * constants::USEC_PER_MS);
+
+    let status_reader = std::thread::spawn(move || read_proxy_status_from_fd(status_read));
 
     loop {
         match waitpid(proxy_pid, Some(WaitPidFlag::WNOHANG)) {
@@ -420,10 +228,10 @@ pub fn launch_with_supervisor(
                         }
                     }
                     if !timed_out && !interrupted_by_signal {
-                        std::thread::sleep(Duration::from_millis(10));
+                        std::thread::sleep(constants::SUPERVISOR_POLL_INTERVAL);
                     }
                 } else if !interrupted_by_signal {
-                    std::thread::sleep(Duration::from_millis(10));
+                    std::thread::sleep(constants::SUPERVISOR_POLL_INTERVAL);
                 }
 
                 if interrupted_by_signal {
@@ -441,7 +249,6 @@ pub fn launch_with_supervisor(
             Ok(_) => continue,
             Err(nix::errno::Errno::EINTR) => continue,
             Err(e) => {
-                let _ = close(status_read);
                 return Err(IsolateError::process("waitpid(proxy)", e));
             }
         }
@@ -455,16 +262,20 @@ pub fn launch_with_supervisor(
             Err(nix::errno::Errno::ECHILD) => {}
             Err(nix::errno::Errno::EINTR) => {}
             Err(e) => {
-                let _ = close(status_read);
                 return Err(IsolateError::process("waitpid(proxy-interrupt)", e));
             }
         }
     }
 
-    let mut status = read_proxy_status_from_fd(status_read).unwrap_or_else(|e| ProxyStatus {
+    let status_result = status_reader.join().unwrap_or_else(|_| {
+        Err(IsolateError::Process(
+            "status reader thread panicked".into(),
+        ))
+    });
+    let mut status = status_result.unwrap_or_else(|e| ProxyStatus {
         exit_code: proxy_exit_code,
         term_signal: proxy_signal,
-        timed_out: false, // Proxy never reported - don't pretend it did
+        timed_out: false,
         wall_time_ms: started.elapsed().as_millis() as u64,
         stdout: String::new(),
         stderr: String::new(),
@@ -479,7 +290,7 @@ pub fn launch_with_supervisor(
     // If supervisor's kill_timeout fires but proxy didn't report timeout,
     // sandbox setup hung - report as InternalError, not TLE.
     let proxy_reported_timeout = status.timed_out;
-    let supervisor_safety_timeout = timed_out && !proxy_reported_timeout;
+    let supervisor_safety_timeout = timed_out && !proxy_reported_timeout && !cpu_timed_out;
 
     if supervisor_safety_timeout {
         status.timed_out = false;
@@ -493,7 +304,7 @@ pub fn launch_with_supervisor(
     }
 
     let mut result = status.to_execution_result();
-    if proxy_reported_timeout {
+    if proxy_reported_timeout || cpu_timed_out {
         result.status = ExecutionStatus::TimeLimit;
         result.success = false;
     } else if supervisor_safety_timeout {
@@ -514,7 +325,7 @@ pub fn launch_with_supervisor(
     if cgroup_enforced {
         if let Some(controller) = cgroup {
             if let Ok(cpu_usec) = controller.get_cpu_usage() {
-                result.cpu_time = cpu_usec as f64 / 1_000_000.0;
+                result.cpu_time = cpu_usec as f64 / constants::USEC_PER_SEC;
             }
             if let Ok(mem_peak) = controller.get_memory_peak() {
                 result.memory_peak = mem_peak;
@@ -558,336 +369,70 @@ pub fn launch_with_supervisor(
     })
 }
 
-fn launch_degraded(
-    req: SandboxLaunchRequest,
-    cgroup: Option<&dyn CgroupBackend>,
-) -> Result<SandboxLaunchOutcome> {
-    use std::process::{Command, Stdio};
-
-    log::warn!(
-        "Falling back to degraded launch (no namespace isolation) for '{}'",
-        req.profile.command.first().unwrap_or(&String::new())
-    );
-
-    let cgroup_backend_selected = cgroup.map(|c| c.backend_name().to_string());
-    let started = Instant::now();
-
-    const SETUP_BUDGET: Duration = Duration::from_secs(3);
-    let wall_limit = req
-        .profile
-        .wall_time_limit_ms
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_secs(30));
-    let kill_timeout = wall_limit + SETUP_BUDGET;
-
-    let mut cmd = Command::new(&req.profile.command[0]);
-    if req.profile.command.len() > 1 {
-        cmd.args(&req.profile.command[1..]);
-    }
-    cmd.stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(if req.profile.stdin_data.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .current_dir(&req.profile.workdir);
-
-    cmd.env_clear();
-    for (key, value) in &req.profile.environment {
-        cmd.env(key, value);
-    }
-
-    for key in crate::utils::env_hygiene::DANGEROUS_ENV_VARS {
-        cmd.env_remove(key);
-    }
-
-    for (key, value) in &req.profile.environment {
-        if key == "JAVA_TOOL_OPTIONS" {
-            let lower = value.to_lowercase();
-            if crate::utils::env_hygiene::JAVA_AGENT_FLAGS
-                .iter()
-                .any(|flag| lower.contains(flag))
-            {
-                cmd.env_remove("JAVA_TOOL_OPTIONS");
-                log::warn!("Removed JAVA_TOOL_OPTIONS containing agent flag in degraded mode");
-            }
-        }
-    }
-
-    if unsafe { libc::geteuid() } == 0 {
-        if let (Some(uid), Some(gid)) = (req.profile.uid, req.profile.gid) {
-            use std::os::unix::process::CommandExt;
-            unsafe {
-                cmd.pre_exec(move || {
-                    libc::umask(0o077);
-
-                    if libc::setgroups(0, std::ptr::null()) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    if libc::setresgid(gid, gid, gid) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    if libc::setresuid(uid, uid, uid) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    for cap in 0..=40 {
-                        let _ = libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0);
-                    }
-
-                    let zero_limit = libc::rlimit {
-                        rlim_cur: 0,
-                        rlim_max: 0,
-                    };
-                    libc::setrlimit(libc::RLIMIT_CORE, &zero_limit);
-
-                    let fsize_limit = libc::rlimit {
-                        rlim_cur: 256 * 1024 * 1024,
-                        rlim_max: 256 * 1024 * 1024,
-                    };
-                    libc::setrlimit(libc::RLIMIT_FSIZE, &fsize_limit);
-
-                    let nofile_limit = libc::rlimit {
-                        rlim_cur: 256,
-                        rlim_max: 256,
-                    };
-                    libc::setrlimit(libc::RLIMIT_NOFILE, &nofile_limit);
-
-                    let nproc_limit = libc::rlimit {
-                        rlim_cur: 64,
-                        rlim_max: 64,
-                    };
-                    libc::setrlimit(libc::RLIMIT_NPROC, &nproc_limit);
-
-                    let memlock_limit = libc::rlimit {
-                        rlim_cur: 0,
-                        rlim_max: 0,
-                    };
-                    libc::setrlimit(libc::RLIMIT_MEMLOCK, &memlock_limit);
-
-                    if let Some(vm_limit) = req.profile.virtual_memory_limit {
-                        let as_limit = libc::rlimit {
-                            rlim_cur: vm_limit,
-                            rlim_max: vm_limit,
-                        };
-                        libc::setrlimit(libc::RLIMIT_AS, &as_limit);
-                    }
-
-                    libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
-
-                    for fd in 3..1024 {
-                        libc::close(fd);
-                    }
-
-                    Ok(())
-                });
-            }
-        }
-    }
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| IsolateError::Process(format!("spawn(degraded): {}", e)))?;
-
-    let child_pid = child.id() as i32;
-
-    if let (Some(data), Some(mut stdin)) = (&req.profile.stdin_data, child.stdin.take()) {
-        use std::io::Write;
-        let _ = stdin.write_all(data.as_bytes());
-    }
-
-    let mut timed_out = false;
-    let mut interrupted_by_signal = false;
-    let mut interrupt_signal = None;
-    let mut early_exit = false;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if !crate::kernel::signal::should_continue() {
-                    interrupted_by_signal = true;
-                    interrupt_signal = Some(crate::kernel::signal::received_signal());
-                    early_exit = true;
-                    break;
-                } else if started.elapsed() > kill_timeout {
-                    timed_out = true;
-                    early_exit = true;
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(e) => return Err(IsolateError::Process(format!("wait(degraded): {}", e))),
-        }
-    }
-
-    let (exit_code, stdout, stderr) = if early_exit {
-        let _ = child.kill();
-        let stdout_data = child.stdout.take().map(drain_reader).unwrap_or_default();
-        let stderr_data = child.stderr.take().map(drain_reader).unwrap_or_default();
-        let exit_status = child.wait().ok().and_then(|s| s.code());
-        (exit_status, stdout_data, stderr_data)
-    } else {
-        match child.wait_with_output() {
-            Ok(out) => (
-                out.status.code(),
-                String::from_utf8_lossy(&out.stdout).into_owned(),
-                String::from_utf8_lossy(&out.stderr).into_owned(),
-            ),
-            Err(_) => (None, String::new(), String::new()),
-        }
-    };
-
-    let sig_code = interrupt_signal.unwrap_or(0) as i32;
-    let status = ProxyStatus {
-        payload_pid: Some(child_pid),
-        exit_code,
-        term_signal: if interrupted_by_signal {
-            Some(sig_code)
-        } else {
-            None
-        },
-        timed_out,
-        wall_time_ms: started.elapsed().as_millis() as u64,
-        stdout,
-        stderr,
-        output_integrity: crate::config::types::OutputIntegrity::Complete,
-        internal_error: if interrupted_by_signal {
-            Some(format!("interrupted_by_signal:{sig_code}"))
-        } else {
-            None
-        },
-        reaped_descendants: 0,
-    };
-
-    let mut result = status.to_execution_result();
-    if timed_out {
-        result.status = ExecutionStatus::TimeLimit;
-        result.success = false;
-    }
-
-    let mut evidence_collection_errors =
-        vec!["degraded_launch: no namespace isolation (non-root)".to_string()];
-    if interrupted_by_signal {
-        evidence_collection_errors.push(format!("interrupted_by_signal:{sig_code}"));
-    }
-
-    let evidence = build_launch_evidence(
-        &req,
-        LaunchEvidenceParams {
-            running_as_root: false,
-            cgroup_backend_selected,
-            cgroup_enforced: false,
-            timed_out,
-            kill_report: None,
-            proxy_status: &status,
-            cgroup_evidence: None,
-            evidence_collection_errors,
-            cleanup_verified: true,
-        },
-    );
-
-    Ok(SandboxLaunchOutcome {
-        proxy_host_pid: child_pid,
-        payload_host_pid: Some(child_pid),
-        result,
-        evidence,
-        kill_report: None,
-        proxy_status: status,
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::types::{IsolateConfig, OutputIntegrity};
+    use crate::config::types::{ExecutionStatus, OutputIntegrity};
+    use crate::sandbox::types::ProxyStatus;
 
-    fn test_request(strict_mode: bool) -> SandboxLaunchRequest {
-        let config = IsolateConfig {
-            instance_id: "evidence-test".to_string(),
-            strict_mode,
-            enable_pid_namespace: true,
-            enable_mount_namespace: true,
-            enable_network_namespace: true,
-            enable_user_namespace: false,
-            memory_limit: Some(128 * 1024 * 1024),
-            process_limit: Some(2),
-            ..IsolateConfig::default()
+    #[test]
+    fn proxy_reported_timeout_produces_tle() {
+        let status = ProxyStatus {
+            timed_out: true,
+            exit_code: None,
+            term_signal: Some(9),
+            wall_time_ms: 10500,
+            internal_error: None,
+            ..ProxyStatus::default()
         };
-
-        SandboxLaunchRequest::from_config(&config, &[String::from("/bin/true")], None, None)
+        let result = status.to_execution_result();
+        assert_eq!(result.status, ExecutionStatus::TimeLimit);
     }
 
-    fn proxy_status(internal_error: Option<&str>) -> ProxyStatus {
-        ProxyStatus {
-            payload_pid: Some(1234),
-            exit_code: Some(0),
-            term_signal: None,
+    #[test]
+    fn supervisor_safety_timeout_without_proxy_timeout_is_not_tle() {
+        let status = ProxyStatus {
             timed_out: false,
-            wall_time_ms: 1,
-            stdout: String::new(),
-            stderr: String::new(),
+            exit_code: None,
+            term_signal: None,
+            wall_time_ms: 13000,
+            internal_error: Some(
+                "sandbox setup exceeded safety timeout (proxy did not respond)".to_string(),
+            ),
+            ..ProxyStatus::default()
+        };
+        let result = status.to_execution_result();
+        assert_eq!(
+            result.status,
+            ExecutionStatus::InternalError,
+            "safety timeout without proxy-reported timeout must be IE, not TLE"
+        );
+    }
+
+    #[test]
+    fn signal_interrupt_produces_signaled_status() {
+        let status = ProxyStatus {
+            timed_out: false,
+            exit_code: None,
+            term_signal: Some(15),
+            wall_time_ms: 500,
+            internal_error: Some("interrupted_by_signal:15".to_string()),
+            ..ProxyStatus::default()
+        };
+        let result = status.to_execution_result();
+        assert_eq!(result.status, ExecutionStatus::Signaled);
+        assert_eq!(result.signal, Some(15));
+    }
+
+    #[test]
+    fn clean_exit_zero_is_ok() {
+        let status = ProxyStatus {
+            exit_code: Some(0),
+            wall_time_ms: 100,
             output_integrity: OutputIntegrity::Complete,
-            internal_error: internal_error.map(str::to_string),
-            reaped_descendants: 0,
-        }
-    }
-
-    const SETUP_CONTROLS: [&str; 4] = [
-        "pid_namespace",
-        "mount_namespace",
-        "network_namespace",
-        "no_new_privileges",
-    ];
-
-    fn strict_evidence(internal_error: Option<&str>) -> LaunchEvidence {
-        let req = test_request(true);
-        let status = proxy_status(internal_error);
-        build_launch_evidence(
-            &req,
-            LaunchEvidenceParams {
-                running_as_root: true,
-                cgroup_backend_selected: Some("cgroup-v1".to_string()),
-                cgroup_enforced: true,
-                timed_out: false,
-                kill_report: None,
-                proxy_status: &status,
-                cgroup_evidence: None,
-                evidence_collection_errors: Vec::new(),
-                cleanup_verified: true,
-            },
-        )
-    }
-
-    #[test]
-    fn strict_mode_does_not_claim_setup_controls_on_proxy_failure() {
-        let evidence = strict_evidence(Some("pre-exec failed"));
-        for control in SETUP_CONTROLS {
-            assert!(
-                !evidence.applied_controls.iter().any(|c| c == control),
-                "control should not be reported as applied on proxy failure: {control}",
-            );
-            assert!(
-                evidence.missing_controls.iter().any(|c| c == control),
-                "control should be reported missing on proxy failure: {control}",
-            );
-        }
-    }
-
-    #[test]
-    fn strict_mode_claims_setup_controls_when_proxy_succeeds() {
-        let evidence = strict_evidence(None);
-        for control in SETUP_CONTROLS {
-            assert!(
-                evidence.applied_controls.iter().any(|c| c == control),
-                "control should be reported as applied on successful proxy setup: {control}",
-            );
-            assert!(
-                !evidence.missing_controls.iter().any(|c| c == control),
-                "control should not be reported missing on successful proxy setup: {control}",
-            );
-        }
+            ..ProxyStatus::default()
+        };
+        let result = status.to_execution_result();
+        assert_eq!(result.status, ExecutionStatus::Ok);
+        assert!(result.success);
     }
 }

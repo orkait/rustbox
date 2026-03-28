@@ -1,18 +1,34 @@
+use crate::config::constants;
 use crate::config::types::{IsolateError, OutputIntegrity, Result};
 use crate::sandbox::types::{ProxyStatus, SandboxLaunchRequest};
 use nix::errno::Errno;
 use nix::fcntl::{fcntl, FcntlArg, FdFlag};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{close, dup2, execvp, fork, setpgid, ForkResult, Pid};
+use nix::unistd::{close, dup2, fork, setpgid, ForkResult, Pid};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::ffi::CString;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::FromRawFd;
 use std::os::unix::io::RawFd;
 use std::thread;
 use std::time::Instant;
+
+#[cfg(target_os = "linux")]
+const SYS_PIDFD_OPEN: libc::c_long = 434;
+
+fn try_pidfd_open(pid: i32) -> Option<i32> {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: pidfd_open is a read-only syscall that returns a new fd or -1.
+        let fd = unsafe { libc::syscall(SYS_PIDFD_OPEN, pid, 0) as i32 };
+        if fd >= 0 {
+            return Some(fd);
+        }
+    }
+    let _ = pid;
+    None
+}
 
 fn read_json_from_fd<T: DeserializeOwned>(fd: RawFd) -> Result<T> {
     let mut file = unsafe { File::from_raw_fd(fd) };
@@ -47,7 +63,7 @@ fn read_fd_async(fd: RawFd, limit: usize) -> thread::JoinHandle<(Vec<u8>, Output
     thread::spawn(move || {
         let mut file = unsafe { File::from_raw_fd(fd) };
         let mut out = Vec::new();
-        let mut buf = [0u8; 4096];
+        let mut buf = [0u8; constants::READ_BUFFER_SIZE];
         let mut integrity = OutputIntegrity::Complete;
 
         loop {
@@ -80,7 +96,7 @@ fn read_fd_async(fd: RawFd, limit: usize) -> thread::JoinHandle<(Vec<u8>, Output
 }
 
 fn exec_payload_with_typestate(req: &SandboxLaunchRequest) -> Result<()> {
-    crate::kernel::exec_payload(req)
+    crate::exec::pipeline::exec_payload(req)
 }
 
 fn wait_for_payload_and_reap(payload_pid: Pid) -> Result<(Option<i32>, Option<i32>, u32)> {
@@ -135,6 +151,19 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
     let (stdin_read, stdin_write) =
         nix::unistd::pipe().map_err(|e| IsolateError::process("pipe(stdin)", e))?;
 
+    let pipe_buf = req
+        .profile
+        .pipe_buffer_size
+        .unwrap_or(constants::DEFAULT_PIPE_BUFFER_SIZE)
+        .min(libc::c_int::MAX as u64) as libc::c_int;
+    for fd in [stdout_write, stderr_write, stdin_read] {
+        // SAFETY: F_SETPIPE_SZ is a safe fcntl that resizes the pipe kernel buffer.
+        // Failure is non-fatal - the pipe works at default size (64KB).
+        unsafe {
+            libc::fcntl(fd, libc::F_SETPIPE_SZ, pipe_buf);
+        }
+    }
+
     let payload_pid =
         match unsafe { fork() }.map_err(|e| IsolateError::process("fork(payload)", e))? {
             ForkResult::Child => {
@@ -155,9 +184,9 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
 
                 if let Err(err) = exec_payload_with_typestate(req) {
                     let _ = writeln!(std::io::stderr(), "proxy payload setup failed: {err}");
-                    std::process::exit(127);
+                    std::process::exit(constants::EXIT_EXEC_FAILURE);
                 }
-                std::process::exit(127);
+                std::process::exit(constants::EXIT_EXEC_FAILURE);
             }
             ForkResult::Parent { child } => child,
         };
@@ -168,18 +197,46 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
 
     // Proxy-side wall timer watchdog: kills payload at exactly wall_limit.
     // The supervisor's kill_timeout is a safety net for hung setup only.
+    //
+    // Uses pidfd when available (kernel >= 5.3) for race-free process targeting.
+    // Falls back to sleep + kill(pid) on older kernels.
     let wall_limit_ms = req.profile.wall_time_limit_ms;
     let payload_raw_pid = payload_pid.as_raw();
     let timer_fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let timer_fired_clone = timer_fired.clone();
     let _watchdog = wall_limit_ms.map(|ms| {
         thread::spawn(move || {
-            thread::sleep(std::time::Duration::from_millis(ms));
-            timer_fired_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-            // SAFETY: SIGKILL to payload. After exit, kill returns ESRCH harmlessly.
-            unsafe {
-                libc::kill(-payload_raw_pid, libc::SIGKILL);
-                libc::kill(payload_raw_pid, libc::SIGKILL);
+            let pidfd = try_pidfd_open(payload_raw_pid);
+
+            let timed_out = match pidfd {
+                Some(fd) => {
+                    // pidfd available: poll with timeout. If poll returns 0, the
+                    // timeout fired before the process exited (wall limit exceeded).
+                    // If poll returns >0, the process exited before the timeout.
+                    let mut pfd = libc::pollfd {
+                        fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    // SAFETY: poll on a valid pidfd with initialized pollfd struct.
+                    let rc = unsafe { libc::poll(&mut pfd, 1, ms as libc::c_int) };
+                    // SAFETY: close the pidfd we opened.
+                    unsafe { libc::close(fd) };
+                    rc == 0
+                }
+                None => {
+                    thread::sleep(std::time::Duration::from_millis(ms));
+                    true
+                }
+            };
+
+            if timed_out {
+                timer_fired_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                // SAFETY: SIGKILL to payload group and individual pid.
+                unsafe {
+                    libc::kill(-payload_raw_pid, libc::SIGKILL);
+                    libc::kill(payload_raw_pid, libc::SIGKILL);
+                }
             }
         })
     });
@@ -188,18 +245,28 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<ProxyStatus> {
     let _ = close(stdout_write);
     let _ = close(stderr_write);
 
-    if let Some(data) = &req.profile.stdin_data {
-        let mut stdin_writer = unsafe { File::from_raw_fd(stdin_write) };
-        let _ = stdin_writer.write_all(data.as_bytes());
-        let _ = stdin_writer.flush();
-    } else {
-        let _ = close(stdin_write);
-    }
-
-    let stream_limit = req.profile.file_size_limit.unwrap_or(64 * 1024 * 1024) as usize;
+    let stream_limit = req
+        .profile
+        .output_limit
+        .or(req.profile.file_size_limit)
+        .unwrap_or(constants::DEFAULT_OUTPUT_COMBINED_LIMIT as u64) as usize;
     let stdout_handle = read_fd_async(stdout_read, stream_limit);
     let stderr_handle = read_fd_async(stderr_read, stream_limit);
+
+    let stdin_handle = if let Some(data) = req.profile.stdin_data.clone() {
+        Some(thread::spawn(move || {
+            let mut writer = unsafe { File::from_raw_fd(stdin_write) };
+            let _ = writer.write_all(data.as_bytes());
+        }))
+    } else {
+        let _ = close(stdin_write);
+        None
+    };
+
     let (exit_code, term_signal, reaped_descendants) = wait_for_payload_and_reap(payload_pid)?;
+    if let Some(h) = stdin_handle {
+        let _ = h.join();
+    }
     let (stdout_bytes, stdout_integrity) = stdout_handle
         .join()
         .unwrap_or_else(|_| (Vec::new(), OutputIntegrity::WriteError));
@@ -256,19 +323,4 @@ pub fn run_proxy_main_from_fds(launch_fd: RawFd, status_fd: RawFd) -> ! {
 
 pub fn run_proxy_role(launch_fd: i32, status_fd: i32) -> Result<()> {
     run_proxy_main_from_fds(launch_fd, status_fd)
-}
-
-pub fn exec_argv(argv: &[String]) -> Result<()> {
-    if argv.is_empty() {
-        return Err(IsolateError::Config("empty argv for exec".to_string()));
-    }
-    let mut cargv = Vec::with_capacity(argv.len());
-    for arg in argv {
-        let c = CString::new(arg.as_str())
-            .map_err(|_| IsolateError::Config("command contains NUL byte".to_string()))?;
-        cargv.push(c);
-    }
-    let refs: Vec<&std::ffi::CStr> = cargv.iter().map(|s| s.as_c_str()).collect();
-    execvp(cargv[0].as_c_str(), &refs).map_err(|e| IsolateError::process("execvp", e))?;
-    Ok(())
 }

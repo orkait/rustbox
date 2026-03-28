@@ -45,6 +45,30 @@ impl VerdictClassifier {
                 }
             }
 
+            if exit_code != 0 {
+                if let Some(cg) = &evidence.cgroup_evidence {
+                    if let (Some(count), Some(limit)) = (cg.process_count, cg.process_limit) {
+                        if count >= limit {
+                            return (
+                                ExecutionStatus::ProcessLimit,
+                                Self::provenance(
+                                    evidence,
+                                    limits,
+                                    VerdictActor::Kernel,
+                                    VerdictCause::PleCgroupPids,
+                                    vec![
+                                        "wait_outcome".into(),
+                                        "cgroup_evidence".into(),
+                                        "pids_limit".into(),
+                                    ],
+                                    None,
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+
             if exit_code == 0 {
                 return (
                     ExecutionStatus::Ok,
@@ -92,8 +116,10 @@ impl VerdictClassifier {
             verdict_cause: cause,
             verdict_evidence_sources: sources,
             termination_signal: signal,
-            cpu_time_used: evidence.timing_evidence.cpu_time_ms as f64 / 1000.0,
-            wall_time_used: evidence.timing_evidence.wall_elapsed_ms as f64 / 1000.0,
+            cpu_time_used: evidence.timing_evidence.cpu_time_ms as f64
+                / crate::config::constants::MS_PER_SEC_F64,
+            wall_time_used: evidence.timing_evidence.wall_elapsed_ms as f64
+                / crate::config::constants::MS_PER_SEC_F64,
             memory_peak: evidence
                 .cgroup_evidence
                 .as_ref()
@@ -174,23 +200,90 @@ impl VerdictClassifier {
     ) -> (ExecutionStatus, VerdictProvenance) {
         if signal == 9 {
             if let Some(cg) = &evidence.cgroup_evidence {
-                if cg.oom_events > 0 || cg.oom_kill_events > 0 {
-                    let mut prov = Self::provenance(
-                        evidence,
-                        limits,
-                        VerdictActor::Kernel,
-                        VerdictCause::MleKernelOom,
+                let has_oom = cg.oom_events > 0 || cg.oom_kill_events > 0;
+                let memory_at_limit = match (cg.memory_peak, cg.memory_limit) {
+                    (Some(peak), Some(limit)) if limit > 0 => peak as f64 / limit as f64 >= 0.9,
+                    _ => false,
+                };
+                if has_oom || memory_at_limit {
+                    let sources = if has_oom {
                         vec![
                             "wait_outcome".into(),
                             "cgroup_evidence".into(),
                             "oom_events".into(),
-                        ],
+                        ]
+                    } else {
+                        vec![
+                            "wait_outcome".into(),
+                            "cgroup_evidence".into(),
+                            "memory_at_limit".into(),
+                        ]
+                    };
+                    let cause = if has_oom {
+                        VerdictCause::MleKernelOom
+                    } else {
+                        VerdictCause::MleLimitBreach
+                    };
+                    let mut prov = Self::provenance(
+                        evidence,
+                        limits,
+                        VerdictActor::Kernel,
+                        cause,
+                        sources,
                         Some(signal),
                     );
                     prov.memory_peak = cg.memory_peak.unwrap_or(0);
                     return (ExecutionStatus::MemoryLimit, prov);
                 }
             }
+
+            let wall_ms = evidence.timing_evidence.wall_elapsed_ms;
+            let wall_limit_ms = limits.wall_limit_ms.unwrap_or(u64::MAX);
+            if wall_ms >= wall_limit_ms {
+                return (
+                    ExecutionStatus::TimeLimit,
+                    Self::provenance(
+                        evidence,
+                        limits,
+                        VerdictActor::Judge,
+                        VerdictCause::TleWallJudge,
+                        vec![
+                            "wait_outcome".into(),
+                            "timing_evidence".into(),
+                            "wall_at_limit".into(),
+                        ],
+                        Some(signal),
+                    ),
+                );
+            }
+        }
+
+        if signal == libc::SIGXCPU {
+            return (
+                ExecutionStatus::TimeLimit,
+                Self::provenance(
+                    evidence,
+                    limits,
+                    VerdictActor::Kernel,
+                    VerdictCause::TleCpuKernel,
+                    vec!["wait_outcome".into(), "signal_xcpu".into()],
+                    Some(signal),
+                ),
+            );
+        }
+
+        if signal == libc::SIGXFSZ {
+            return (
+                ExecutionStatus::FileSizeLimit,
+                Self::provenance(
+                    evidence,
+                    limits,
+                    VerdictActor::Kernel,
+                    VerdictCause::FseLimitExceeded,
+                    vec!["wait_outcome".into(), "signal_xfsz".into()],
+                    Some(signal),
+                ),
+            );
         }
 
         (
@@ -290,15 +383,16 @@ impl VerdictClassifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::constants;
     use std::time::SystemTime;
 
     fn test_limits() -> LimitSnapshot {
         LimitSnapshot {
             cpu_limit_ms: Some(10000),
             wall_limit_ms: Some(20000),
-            memory_limit_bytes: Some(128 * 1024 * 1024),
+            memory_limit_bytes: Some(constants::DEFAULT_MEMORY_LIMIT),
             process_limit: Some(1),
-            output_limit_bytes: Some(64 * 1024 * 1024),
+            output_limit_bytes: Some(constants::DEFAULT_FILE_SIZE_LIMIT),
         }
     }
 
@@ -418,6 +512,57 @@ mod tests {
         let (status, prov) = VerdictClassifier::classify(&evidence, &test_limits());
         assert_eq!(status, ExecutionStatus::MemoryLimit);
         assert_eq!(prov.verdict_cause, VerdictCause::MleKernelOom);
+    }
+
+    #[test]
+    fn test_sigxcpu_classified_as_tle() {
+        let evidence = base_evidence(None, Some(libc::SIGXCPU));
+        let (status, prov) = VerdictClassifier::classify(&evidence, &test_limits());
+        assert_eq!(status, ExecutionStatus::TimeLimit);
+        assert_eq!(prov.verdict_cause, VerdictCause::TleCpuKernel);
+    }
+
+    #[test]
+    fn test_sigxfsz_classified_as_fse() {
+        let evidence = base_evidence(None, Some(libc::SIGXFSZ));
+        let (status, prov) = VerdictClassifier::classify(&evidence, &test_limits());
+        assert_eq!(status, ExecutionStatus::FileSizeLimit);
+        assert_eq!(prov.verdict_cause, VerdictCause::FseLimitExceeded);
+    }
+
+    #[test]
+    fn test_classify_process_limit() {
+        let mut evidence = base_evidence(Some(1), None);
+        evidence.cgroup_evidence = Some(CgroupEvidence {
+            memory_peak: Some(constants::KB),
+            memory_limit: Some(constants::DEFAULT_MEMORY_LIMIT),
+            oom_events: 0,
+            oom_kill_events: 0,
+            cpu_usage_usec: Some(1000),
+            process_count: Some(10),
+            process_limit: Some(10),
+        });
+
+        let (status, prov) = VerdictClassifier::classify(&evidence, &test_limits());
+        assert_eq!(status, ExecutionStatus::ProcessLimit);
+        assert_eq!(prov.verdict_cause, VerdictCause::PleCgroupPids);
+    }
+
+    #[test]
+    fn test_process_limit_not_triggered_on_exit_zero() {
+        let mut evidence = base_evidence(Some(0), None);
+        evidence.cgroup_evidence = Some(CgroupEvidence {
+            memory_peak: Some(constants::KB),
+            memory_limit: Some(constants::DEFAULT_MEMORY_LIMIT),
+            oom_events: 0,
+            oom_kill_events: 0,
+            cpu_usage_usec: Some(1000),
+            process_count: Some(10),
+            process_limit: Some(10),
+        });
+
+        let (status, _) = VerdictClassifier::classify(&evidence, &test_limits());
+        assert_eq!(status, ExecutionStatus::Ok);
     }
 
     #[test]

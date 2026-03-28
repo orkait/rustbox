@@ -1,3 +1,4 @@
+use crate::config::constants;
 use crate::config::types::{CgroupEvidence, IsolateError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -98,7 +99,7 @@ impl CgroupV2 {
     }
 
     pub fn with_base_path(base_path: &str, instance_id: &str, strict_mode: bool) -> Result<Self> {
-        if instance_id.is_empty() || instance_id.len() > 255 {
+        if instance_id.is_empty() || instance_id.len() > constants::MAX_CGROUP_INSTANCE_ID_LEN {
             return Err(IsolateError::Cgroup(
                 "invalid cgroup v2 instance id length".to_string(),
             ));
@@ -275,15 +276,16 @@ impl CgroupBackend for CgroupV2 {
             let _ = fs::write(&kill_path, "1");
         }
 
-        for attempt in 0..20 {
+        let tuning = constants::runtime_tuning();
+        for attempt in 0..tuning.cgroup_retry_count {
             match fs::remove_dir(&path) {
                 Ok(()) => return Ok(()),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
                 Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
-                    if attempt == 5 && kill_path.exists() {
+                    if attempt == constants::CGROUP_SECOND_KILL_ATTEMPT && kill_path.exists() {
                         let _ = fs::write(&kill_path, "1");
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(25));
+                    std::thread::sleep(tuning.cgroup_retry_sleep);
                 }
                 Err(e) => {
                     return Err(IsolateError::Cgroup(format!(

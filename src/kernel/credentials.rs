@@ -257,6 +257,11 @@ mod tests {
 
     #[test]
     fn validate_ids_accepts_non_root() {
-        assert!(validate_ids(65534, 65534, true).is_ok());
+        assert!(validate_ids(
+            crate::config::constants::NOBODY_UID,
+            crate::config::constants::NOBODY_GID,
+            true
+        )
+        .is_ok());
     }
 }

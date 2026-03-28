@@ -18,7 +18,7 @@ impl RateLimiter {
     pub fn new(max_requests_per_minute: u32) -> Self {
         Self {
             max_requests: max_requests_per_minute,
-            window_secs: 60,
+            window_secs: crate::constants::RATE_LIMIT_WINDOW_SECS,
             buckets: Mutex::new(HashMap::new()),
         }
     }
@@ -56,7 +56,10 @@ impl RateLimiter {
     pub fn cleanup_stale(&self) {
         let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
-        buckets.retain(|_, b| now.duration_since(b.last_refill).as_secs() < 300);
+        buckets.retain(|_, b| {
+            now.duration_since(b.last_refill).as_secs()
+                < crate::constants::RATE_LIMIT_BUCKET_RETENTION_SECS
+        });
     }
 }
 
@@ -111,7 +114,10 @@ mod tests {
         {
             let mut buckets = limiter.buckets.lock().unwrap();
             let bucket = buckets.get_mut(&addr).unwrap();
-            bucket.last_refill = Instant::now() - std::time::Duration::from_secs(61);
+            bucket.last_refill = Instant::now()
+                - std::time::std::time::Duration::from_secs(
+                    crate::constants::RATE_LIMIT_WINDOW_SECS + 1,
+                );
         }
 
         assert!(limiter.check(addr));
@@ -128,7 +134,10 @@ mod tests {
         {
             let mut buckets = limiter.buckets.lock().unwrap();
             let bucket = buckets.get_mut(&a).unwrap();
-            bucket.last_refill = Instant::now() - std::time::Duration::from_secs(301);
+            bucket.last_refill = Instant::now()
+                - std::time::std::time::Duration::from_secs(
+                    crate::constants::RATE_LIMIT_BUCKET_RETENTION_SECS + 1,
+                );
         }
 
         limiter.cleanup_stale();
