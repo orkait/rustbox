@@ -130,3 +130,4 @@ judge-service/*.db-wal
 ## Astro build artifacts
 docs-site/.astro/
 .claude/
+summary.md
