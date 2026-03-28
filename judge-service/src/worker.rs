@@ -105,7 +105,7 @@ pub fn spawn_pg_workers(
                     }
                     Err(e) => {
                         warn!(error = %e, "pg listener error, reconnecting in 1s");
-                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        tokio::time::sleep(crate::constants::WORKER_RETRY_DELAY).await;
                     }
                 }
             }
@@ -263,7 +263,7 @@ async fn deliver_webhook(
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
-        .connect_timeout(Duration::from_secs(5))
+        .connect_timeout(crate::constants::WEBHOOK_CONNECT_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default();
@@ -312,11 +312,11 @@ fn sanitize_error(raw: &str) -> String {
         .replace("/sys/fs/cgroup/", "/cgroup/")
         .replace("/proc/self/", "/proc/.../<redacted>/")
         .replace("/etc/rustbox/", "/config/");
-    if sanitized.len() > 512 {
+    if sanitized.len() > crate::constants::MAX_LOG_CODE_LENGTH {
         let end = sanitized
             .char_indices()
             .map(|(i, _)| i)
-            .take_while(|&i| i <= 512)
+            .take_while(|&i| i <= crate::constants::MAX_LOG_CODE_LENGTH)
             .last()
             .unwrap_or(0);
         format!("{}... (truncated)", &sanitized[..end])
@@ -339,7 +339,6 @@ fn execute_in_sandbox(language: &str, code: &str, stdin: &str) -> Result<Executi
     let is_root = unsafe { libc::geteuid() } == 0;
     if !is_root {
         config.strict_mode = false;
-        config.allow_degraded = true;
     }
 
     let mut isolate = Isolate::new(config).map_err(|e| format!("isolate creation error: {e}"))?;
@@ -377,7 +376,7 @@ fn execute_in_sandbox(language: &str, code: &str, stdin: &str) -> Result<Executi
         error_message: result.error_message,
         cpu_time: result.cpu_time,
         wall_time: result.wall_time,
-        memory_peak: (result.memory_peak / 1024) as i64,
+        memory_peak: (result.memory_peak / crate::constants::KB) as i64,
     };
 
     let _ = isolate.cleanup();

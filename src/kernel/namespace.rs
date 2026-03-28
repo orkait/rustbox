@@ -70,7 +70,7 @@ impl NamespaceIsolation {
             })?;
 
             if self.enable_uts_namespace {
-                let _ = sethostname("rustbox-sandbox");
+                let _ = sethostname(crate::config::constants::SANDBOX_HOSTNAME);
             }
             if self.enable_network_namespace {
                 self.bring_up_loopback()?;
@@ -165,8 +165,21 @@ impl NamespaceIsolation {
 pub fn harden_mount_propagation() -> Result<()> {
     use nix::mount::{mount, MsFlags};
 
-    // Non-recursive MS_PRIVATE on / avoids walking all mounts (15+ cgroup v1
-    // controllers) which contends on the kernel mount lock under concurrent load.
+    let recursive_result = mount(
+        None::<&str>,
+        "/",
+        None::<&str>,
+        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+        None::<&str>,
+    );
+
+    if recursive_result.is_ok() {
+        return Ok(());
+    }
+
+    // Recursive MS_PRIVATE can fail with EACCES in Docker containers that
+    // use --cap-add SYS_ADMIN instead of --privileged. Fall back to
+    // non-recursive MS_PRIVATE on / plus targeted recursive on /tmp.
     mount(
         None::<&str>,
         "/",

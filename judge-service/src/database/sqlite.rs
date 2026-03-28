@@ -20,7 +20,7 @@ impl SqliteDatabase {
             .with_context(|| format!("Failed to open SQLite database at {}", path))?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-        conn.busy_timeout(Duration::from_millis(5000))?;
+        conn.busy_timeout(crate::constants::DB_BUSY_TIMEOUT)?;
         conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
 
         Ok(Self {

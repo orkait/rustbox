@@ -1,3 +1,4 @@
+use crate::config::constants;
 use crate::config::types::{IsolateError, Result};
 use crate::utils::fork_safe_log::{
     fs_debug_parts, fs_info_parts, fs_warn, fs_warn_parts, itoa_buf, itoa_i32,
@@ -146,8 +147,6 @@ fn bind_mount_path(
 }
 
 impl FilesystemSecurity {
-    const DEFAULT_TMPFS_SIZE_BYTES: u64 = 256 * 1024 * 1024;
-
     pub fn new(
         chroot_dir: Option<PathBuf>,
         workdir: PathBuf,
@@ -156,10 +155,13 @@ impl FilesystemSecurity {
         tmpfs_inode_limit: Option<u64>,
     ) -> Self {
         let size = tmpfs_size_bytes
-            .unwrap_or(Self::DEFAULT_TMPFS_SIZE_BYTES)
-            .max(4 * 1024 * 1024);
-        let default_inodes = (size / 16_384).clamp(4_096, 1_048_576);
-        let inodes = tmpfs_inode_limit.unwrap_or(default_inodes).max(1_024);
+            .unwrap_or(constants::DEFAULT_TMPFS_SIZE_BYTES)
+            .max(constants::MIN_TMPFS_SIZE);
+        let default_inodes = (size / constants::INODE_SIZE_RATIO)
+            .clamp(constants::MIN_INODES, constants::MAX_INODES);
+        let inodes = tmpfs_inode_limit
+            .unwrap_or(default_inodes)
+            .max(constants::MIN_INODE_OVERRIDE);
 
         Self {
             chroot_dir,
@@ -555,7 +557,7 @@ impl FilesystemSecurity {
 
             let metadata = fs::metadata(&dir_path)?;
             let mut perms = metadata.permissions();
-            perms.set_mode(0o755);
+            perms.set_mode(constants::PERM_DIR_STANDARD);
             fs::set_permissions(&dir_path, perms)?;
         }
 
@@ -582,7 +584,7 @@ impl FilesystemSecurity {
         let rc = unsafe {
             libc::mknod(
                 cstr.as_ptr(),
-                device.mode | 0o666,
+                device.mode | constants::PERM_DEVICE_NODE as libc::mode_t,
                 libc::makedev(device.major, device.minor),
             )
         };
@@ -609,9 +611,10 @@ impl FilesystemSecurity {
 
     #[cfg(unix)]
     fn setup_hardened_mounts(&self, chroot_path: &Path) -> Result<()> {
-        // Minimal mounts for code execution. Skipped: sysfs (not needed),
-        // shm (not needed). procfs mounted without hidepid cascade (single
-        // mount vs 1-4 attempts that contend on kernel mount lock).
+        let sys_path = chroot_path.join("sys");
+        if sys_path.exists() {
+            self.mount_hardened_sysfs(&sys_path)?;
+        }
 
         let dev_path = chroot_path.join("dev");
         if dev_path.exists() {
@@ -620,8 +623,15 @@ impl FilesystemSecurity {
 
         let proc_path = chroot_path.join("proc");
         if proc_path.exists() {
-            let flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
-            mount_special_fs(&proc_path, "proc", flags, None, "procfs", self.strict_mode)?;
+            self.mount_hardened_procfs(&proc_path)?;
+        }
+
+        let shm_path = chroot_path.join("dev").join("shm");
+        if !shm_path.exists() {
+            let _ = fs::create_dir_all(&shm_path);
+        }
+        if shm_path.exists() {
+            self.mount_limited_shm(&shm_path)?;
         }
 
         let tmp_path = chroot_path.join("tmp");
@@ -634,9 +644,14 @@ impl FilesystemSecurity {
 
     #[cfg(unix)]
     fn mount_limited_shm(&self, shm_path: &Path) -> Result<()> {
-        let shm_size = (self.tmpfs_size_bytes / 16).max(1024 * 1024);
+        let shm_size =
+            (self.tmpfs_size_bytes / constants::SHM_SIZE_DIVISOR).max(constants::MIN_SHM_SIZE);
         let flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV | libc::MS_NOATIME;
-        let opts = format!("size={},nr_inodes=128,mode=1777", shm_size);
+        let opts = format!(
+            "size={},nr_inodes={},mode=1777",
+            shm_size,
+            constants::SHM_INODE_LIMIT
+        );
         mount_special_fs(
             shm_path,
             "tmpfs",
@@ -671,10 +686,10 @@ impl FilesystemSecurity {
         let flags = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
         mount_special_fs(
             sys_path,
-            "sysfs",
+            "tmpfs",
             flags,
-            None,
-            "hardened sysfs",
+            Some("size=0,nr_inodes=1,mode=555"),
+            "empty sysfs (no host info)",
             self.strict_mode,
         )?;
         Ok(())
@@ -714,14 +729,16 @@ impl FilesystemSecurity {
             }
         }
 
-        fs_warn_parts(&["All hardened procfs options failed, mounting without hidepid"]);
+        fs_warn_parts(&[
+            "All hardened procfs options failed, mounting minimal procfs (no host info)",
+        ]);
         mount_special_fs(
             proc_path,
             "proc",
             flags,
-            None,
-            "fallback procfs",
-            self.strict_mode,
+            Some("hidepid=2"),
+            "minimal procfs",
+            false,
         )?;
         Ok(())
     }
@@ -790,7 +807,7 @@ impl FilesystemSecurity {
             } else {
                 let metadata = fs::metadata(&actual_workdir)?;
                 let mut perms = metadata.permissions();
-                perms.set_mode(0o755);
+                perms.set_mode(constants::PERM_DIR_STANDARD);
                 fs::set_permissions(&actual_workdir, perms)?;
             }
         }

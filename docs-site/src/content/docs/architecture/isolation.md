@@ -42,7 +42,7 @@ Each layer defends against a different class of attack. No single layer is suffi
 | 1. PID namespace | `CLONE_NEWPID` | Seeing or signalling host processes |
 | 2. Mount namespace | `CLONE_NEWNS` + chroot | Accessing host filesystem |
 | 3. Network namespace | `CLONE_NEWNET` | Network access (no sockets, no DNS) |
-| 4. Cgroups | cgroup v2 (v1 fallback) | Memory bombs, fork bombs, CPU hogging |
+| 4. Cgroups | cgroup v2 | Memory bombs, fork bombs, CPU hogging |
 | 5. Seccomp-BPF | `prctl` + BPF | Dangerous syscalls (ptrace, mount, bpf) |
 | 6. Capabilities | `capset` + bounding set | Privilege escalation |
 | 7. Credential drop | `setresuid`/`setresgid` | Running as root |
@@ -61,7 +61,7 @@ We use IPC namespace isolation too, but we don't use user namespaces by default.
 The enforcer for resource limits. Cgroups are the only mechanism that can actually kill a process for using too much memory - rlimits can only limit virtual memory, not resident memory.
 
 :::note[Design Note]
-We don't use cgroup v2 exclusively because Docker on older hosts often mounts a hybrid v1/v2 setup. Auto-detection with logged selection means you don't need to think about it.
+Rustbox requires cgroup v2. Cgroup v1 support was removed. If your host uses a hybrid v1/v2 setup, ensure the v2 hierarchy is available with memory, pids, and cpu controllers delegated.
 :::
 
 ## Seccomp-BPF (layer 5)

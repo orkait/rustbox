@@ -5,7 +5,7 @@ use std::time::Duration;
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_RECEIVED: AtomicU32 = AtomicU32::new(0);
-const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(100);
+use crate::config::constants;
 
 pub fn request_shutdown(signal: i32) {
     SIGNAL_RECEIVED.store(signal as u32, Ordering::SeqCst);
@@ -67,7 +67,7 @@ impl SignalHandler {
             if self.shutdown_requested() {
                 return true;
             }
-            std::thread::sleep(SIGNAL_POLL_INTERVAL);
+            std::thread::sleep(constants::SIGNAL_POLL_INTERVAL);
         }
         false
     }

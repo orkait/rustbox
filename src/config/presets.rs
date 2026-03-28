@@ -1,3 +1,4 @@
+use crate::config::constants;
 use crate::config::types::IsolateConfig;
 use std::collections::HashMap;
 
@@ -41,7 +42,7 @@ impl LanguageEnvelope {
         use std::time::Duration;
         let l = &self.default_limits;
         if config.memory_limit.is_none() {
-            config.memory_limit = l.memory_mb.map(|v| v * 1024 * 1024);
+            config.memory_limit = l.memory_mb.map(|v| v * constants::MB);
         }
         if config.cpu_time_limit.is_none() {
             config.cpu_time_limit = l.cpu_time_sec.map(Duration::from_secs);
@@ -302,8 +303,14 @@ mod tests {
         config.wall_time_limit = None;
         config.process_limit = None;
         cpp.apply_to_config(&mut config);
-        assert_eq!(config.memory_limit, Some(256 * 1024 * 1024));
-        assert_eq!(config.cpu_time_limit, Some(Duration::from_secs(10)));
+        assert_eq!(
+            config.memory_limit,
+            Some(256 * crate::config::constants::MB)
+        );
+        assert_eq!(
+            config.cpu_time_limit,
+            Some(constants::DEFAULT_CPU_TIME_LIMIT)
+        );
         assert_eq!(config.wall_time_limit, Some(Duration::from_secs(15)));
         assert_eq!(config.process_limit, Some(1));
     }

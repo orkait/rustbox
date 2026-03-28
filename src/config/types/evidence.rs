@@ -45,6 +45,12 @@ pub enum VerdictCause {
     #[serde(rename = "abuse_exec_churn")]
     AbuseExecChurn,
 
+    #[serde(rename = "ple_cgroup_pids")]
+    PleCgroupPids,
+
+    #[serde(rename = "fse_limit_exceeded")]
+    FseLimitExceeded,
+
     #[serde(rename = "ie_missing_evidence")]
     IeMissingEvidence,
     #[serde(rename = "ie_contradictory_evidence")]

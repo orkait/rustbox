@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::sync::atomic::{AtomicI32, Ordering};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CliMode {
@@ -73,14 +72,10 @@ enum Commands {
         wall_time: Option<u64>,
         #[arg(long)]
         processes: Option<u32>,
-        #[arg(long = "cgroup-v1")]
-        cgroup_v1: bool,
         #[arg(long)]
         strict: bool,
         #[arg(long)]
         permissive: bool,
-        #[arg(long)]
-        allow_degraded: bool,
         #[arg(long)]
         no_seccomp: bool,
         #[arg(long)]
@@ -133,10 +128,7 @@ fn validate_command_mode(mode: CliMode, command: &Commands) {
     std::process::exit(2);
 }
 
-static SIGNAL_RECEIVED: AtomicI32 = AtomicI32::new(0);
-
 extern "C" fn signal_handler(sig: i32) {
-    SIGNAL_RECEIVED.store(sig, Ordering::SeqCst);
     crate::kernel::signal::request_shutdown(sig);
 }
 
@@ -149,13 +141,13 @@ fn setup_signal_handlers() {
 }
 
 fn maybe_exit_on_pending_signal() {
-    let sig = SIGNAL_RECEIVED.swap(0, Ordering::SeqCst);
-    if sig <= 0 {
+    let sig = crate::kernel::signal::received_signal();
+    if sig == 0 {
         return;
     }
 
     eprintln!("Signal {} received; exiting", sig);
-    std::process::exit(128 + sig);
+    std::process::exit(128 + sig as i32);
 }
 
 pub fn run(mode: CliMode) -> Result<()> {
@@ -204,7 +196,7 @@ pub fn run(mode: CliMode) -> Result<()> {
         eprintln!("  - Chroot directory creation");
     }
 
-    perform_security_checks();
+    crate::judge::checks::perform_security_checks();
     maybe_exit_on_pending_signal();
 
     let command_result = match command {
@@ -217,10 +209,8 @@ pub fn run(mode: CliMode) -> Result<()> {
             cpu,
             wall_time,
             processes,
-            cgroup_v1,
             strict,
             permissive,
-            allow_degraded,
             no_seccomp,
             seccomp_policy,
         } => {
@@ -231,8 +221,8 @@ pub fn run(mode: CliMode) -> Result<()> {
             let strict = !permissive;
             let is_root = unsafe { libc::getuid() } == 0;
 
-            if strict && !is_root {
-                eprintln!("Error: --strict mode requires root privileges");
+            if !is_root {
+                eprintln!("Error: rustbox requires root privileges for sandbox isolation");
                 std::process::exit(1);
             }
 
@@ -245,28 +235,14 @@ pub fn run(mode: CliMode) -> Result<()> {
                 other => other.to_string(),
             };
 
-            if !is_root {
-                eprintln!("Warning: Running without root - no isolation enforced");
-            }
-
-            let mode_label = if strict {
-                "STRICT"
-            } else if is_root {
-                "ROOT"
-            } else {
-                "DEV"
-            };
+            let mode_label = if strict { "STRICT" } else { "ROOT" };
             eprintln!("Executing {} code ({})", language, mode_label);
 
             let mut config = crate::config::types::IsolateConfig::with_language_defaults(
                 &language,
-                "rustbox/0".to_string(),
+                crate::config::constants::DEFAULT_INSTANCE_ID.to_string(),
             )?;
             config.strict_mode = strict;
-            config.force_cgroup_v1 = cgroup_v1;
-            if allow_degraded {
-                config.allow_degraded = true;
-            }
             config.no_seccomp = no_seccomp;
             config.seccomp_policy_file = seccomp_policy.map(std::path::PathBuf::from);
 
@@ -325,133 +301,12 @@ fn emit_execution_result(
     let output_config =
         crate::runtime::isolate::apply_overrides_to_config(isolate.config(), overrides);
     let launch_evidence = isolate.take_last_launch_evidence();
-    emit_judge_json(result, &output_config, language, launch_evidence.as_ref())
-}
-
-fn build_envelope_id(
-    config: &crate::config::types::IsolateConfig,
-    capability_report: &crate::config::types::CapabilityReport,
-    language_runtime_envelope: Option<&str>,
-) -> String {
-    use sha2::{Digest, Sha256};
-
-    let mut hasher = Sha256::new();
-
-    hasher.update(format!("rustbox-{}", env!("CARGO_PKG_VERSION")));
-    hasher.update(format!(
-        "uid:{}",
-        config
-            .uid
-            .unwrap_or_else(|| unsafe { libc::geteuid() as u32 })
-    ));
-    hasher.update(format!(
-        "gid:{}",
-        config
-            .gid
-            .unwrap_or_else(|| unsafe { libc::getegid() as u32 })
-    ));
-
-    if let Some(mem) = config.memory_limit {
-        hasher.update(format!("mem:{}", mem));
-    }
-    if let Some(cpu) = config.cpu_time_limit {
-        hasher.update(format!("cpu:{}", cpu.as_millis()));
-    }
-    if let Some(wall) = config.wall_time_limit {
-        hasher.update(format!("wall:{}", wall.as_millis()));
-    }
-    if let Some(procs) = config.process_limit {
-        hasher.update(format!("procs:{}", procs));
-    }
-
-    if let Some(backend) = &capability_report.cgroup_backend_selected {
-        hasher.update(format!("cgroup:{}", backend));
-    }
-
-    if let Some(lang) = language_runtime_envelope {
-        hasher.update(format!("lang:{}", lang));
-    }
-
-    format!("{:x}", hasher.finalize())
-}
-
-fn emit_judge_json(
-    result: &crate::config::types::ExecutionResult,
-    config: &crate::config::types::IsolateConfig,
-    language_runtime_envelope: Option<&str>,
-    launch_evidence: Option<&crate::sandbox::types::LaunchEvidence>,
-) -> Result<crate::config::types::ExecutionStatus> {
-    let evidence = launch_evidence.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Missing runtime launch evidence; refusing to emit static capability claims"
-        )
-    })?;
-    let capability_report = evidence.to_capability_report();
-    let envelope_id = build_envelope_id(config, &capability_report, language_runtime_envelope);
-    let judge_result = crate::verdict::json_schema::JudgeResultV1::from_execution_result(
+    crate::judge::envelope::emit_judge_json(
         result,
-        config,
-        evidence,
-        capability_report,
-        envelope_id,
-        language_runtime_envelope.map(|s| s.to_string()),
-    );
-
-    println!("{}", judge_result.to_json()?);
-    Ok(judge_result.status)
-}
-
-fn perform_security_checks() {
-    match crate::kernel::cgroup::detect_cgroup_backend() {
-        Some(backend) => {
-            eprintln!(
-                "✅ {} available - resource limits enabled",
-                crate::kernel::cgroup::backend_type_name(backend)
-            );
-        }
-        None => {
-            eprintln!("⚠️  Warning: cgroups not available - resource limits will not be enforced");
-            eprintln!("   Ensure /proc/cgroups and /sys/fs/cgroup are properly mounted");
-            eprintln!("   Some contest systems may not function correctly without cgroups");
-        }
-    }
-
-    if crate::kernel::namespace::NamespaceIsolation::is_supported() {
-        eprintln!("✅ namespace isolation available - full process isolation enabled");
-    } else {
-        eprintln!("⚠️  Warning: namespace isolation not supported");
-        eprintln!("   Limited process isolation capabilities available");
-    }
-
-    if std::path::Path::new("/proc/self/ns").exists() {
-        eprintln!("✅ namespace filesystem available - isolation monitoring enabled");
-    }
-
-    validate_system_directories();
-}
-
-fn validate_system_directories() {
-    if !std::path::Path::new("/tmp").exists() || !std::path::Path::new("/tmp").is_dir() {
-        eprintln!("⚠️  Warning: /tmp directory not accessible");
-        eprintln!("   Sandbox operations may fail without writable temporary space");
-    }
-
-    if !std::path::Path::new("/proc/self").exists() {
-        eprintln!("⚠️  Warning: /proc filesystem not mounted");
-        eprintln!("   Process monitoring and resource tracking may be limited");
-    }
-
-    if !std::path::Path::new("/sys").exists() {
-        eprintln!("⚠️  Warning: /sys filesystem not mounted");
-        eprintln!("   Cgroups and hardware information may be unavailable");
-    }
-
-    let sensitive_dirs = ["/etc", "/root", "/boot"];
-    for dir in &sensitive_dirs {
-        if !std::path::Path::new(dir).exists() {
-            eprintln!("⚠️  Warning: {} directory not found", dir);
-        }
-    }
+        &output_config,
+        language,
+        launch_evidence.as_ref(),
+    )
 }
 
 fn check_language_dependencies(verbose: bool, primary_binary: &str) -> Result<()> {

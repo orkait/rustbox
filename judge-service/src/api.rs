@@ -186,14 +186,14 @@ async fn submit(
     if req.code.len() > state.max_code_bytes {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("code exceeds maximum size of {}KB", state.max_code_bytes / 1024)})),
+            Json(serde_json::json!({"error": format!("code exceeds maximum size of {}KB", state.max_code_bytes / crate::constants::KB as usize)})),
         )
             .into_response();
     }
     if req.stdin.len() > state.max_stdin_bytes {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("stdin exceeds maximum size of {}KB", state.max_stdin_bytes / 1024)})),
+            Json(serde_json::json!({"error": format!("stdin exceeds maximum size of {}KB", state.max_stdin_bytes / crate::constants::KB as usize)})),
         )
             .into_response();
     }
@@ -216,7 +216,7 @@ async fn submit(
             )
                 .into_response();
         }
-        if secret.len() > 256 {
+        if secret.len() > crate::constants::MAX_API_SECRET_LENGTH {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!(ErrorResponse {

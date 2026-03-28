@@ -1,7 +1,7 @@
 /// End-to-end integration tests for rustbox execution pipeline.
 ///
-/// Tier 1 (no root): permissive + allow_degraded — verifies output correctness,
-///   error classification, and verdict logic without isolation enforcement.
+/// Tier 1 (requires root): permissive — verifies output correctness,
+///   error classification, and verdict logic with namespace isolation.
 ///
 /// Tier 2 (requires root): strict mode — verifies full kernel isolation chain:
 ///   namespaces, cgroups, capability drop, pdeathsig, no_new_privs.
@@ -26,10 +26,6 @@ fn permissive_config(language: &str, box_id: u32) -> IsolateConfig {
     let mut config = IsolateConfig::with_language_defaults(language, format!("rustbox/{}", box_id))
         .unwrap_or_default();
     config.strict_mode = false;
-    config.allow_degraded = true;
-    config.enable_pid_namespace = false;
-    config.enable_mount_namespace = false;
-    config.enable_network_namespace = false;
     config
 }
 
@@ -151,12 +147,12 @@ fn python_cpu_time_limit_enforced_permissive() {
     init_subsystems();
     let code = "while True: pass";
     let mut ov = no_overrides();
-    ov.max_cpu = Some(1);
-    ov.max_wall_time = Some(3);
+    ov.max_cpu = Some(rustbox::config::constants::TEST_SHORT_CPU_SECS);
+    ov.max_wall_time = Some(rustbox::config::constants::TEST_SHORT_WALL_SECS);
     let config = {
         let mut c = permissive_config("python", 107);
-        c.cpu_time_limit = Some(std::time::Duration::from_secs(1));
-        c.wall_time_limit = Some(std::time::Duration::from_secs(3));
+        c.cpu_time_limit = Some(rustbox::config::constants::TEST_SHORT_CPU_LIMIT);
+        c.wall_time_limit = Some(rustbox::config::constants::TEST_SHORT_WALL_LIMIT);
         c
     };
     let mut isolate = Isolate::new(config).expect("Isolate::new");
@@ -340,8 +336,8 @@ fn python_tle_is_classified_strict() {
     let code = "while True: pass";
     let config = {
         let mut c = strict_config("python", 503);
-        c.cpu_time_limit = Some(std::time::Duration::from_secs(1));
-        c.wall_time_limit = Some(std::time::Duration::from_secs(3));
+        c.cpu_time_limit = Some(rustbox::config::constants::TEST_SHORT_CPU_LIMIT);
+        c.wall_time_limit = Some(rustbox::config::constants::TEST_SHORT_WALL_LIMIT);
         c
     };
     let mut isolate = Isolate::new(config).expect("Isolate::new");

@@ -21,7 +21,6 @@ pub struct ExecutionProfile {
     pub enable_mount_namespace: bool,
     pub enable_network_namespace: bool,
     pub enable_user_namespace: bool,
-    pub allow_degraded: bool,
     pub memory_limit: Option<u64>,
     pub file_size_limit: Option<u64>,
     pub stack_limit: Option<u64>,
@@ -35,6 +34,8 @@ pub struct ExecutionProfile {
     pub enable_seccomp: bool,
     pub seccomp_policy_file: Option<std::path::PathBuf>,
     pub tmpfs_size_bytes: Option<u64>,
+    pub pipe_buffer_size: Option<u64>,
+    pub output_limit: Option<u64>,
 }
 
 impl ExecutionProfile {
@@ -57,7 +58,6 @@ impl ExecutionProfile {
             enable_mount_namespace: config.enable_mount_namespace,
             enable_network_namespace: config.enable_network_namespace,
             enable_user_namespace: config.enable_user_namespace,
-            allow_degraded: config.allow_degraded,
             memory_limit: config.memory_limit,
             file_size_limit: config.file_size_limit,
             stack_limit: config.stack_limit,
@@ -71,6 +71,8 @@ impl ExecutionProfile {
             enable_seccomp: !config.no_seccomp,
             seccomp_policy_file: config.seccomp_policy_file.clone(),
             tmpfs_size_bytes: config.tmpfs_size_bytes,
+            pipe_buffer_size: config.pipe_buffer_size,
+            output_limit: config.output_limit,
         }
     }
 }
@@ -203,7 +205,7 @@ impl ProxyStatus {
             stderr: self.stderr.clone(),
             output_integrity: self.output_integrity.clone(),
             cpu_time: 0.0,
-            wall_time: self.wall_time_ms as f64 / 1000.0,
+            wall_time: self.wall_time_ms as f64 / crate::config::constants::MS_PER_SEC_F64,
             memory_peak: 0,
             signal: resolved_signal,
             success: status == ExecutionStatus::Ok,

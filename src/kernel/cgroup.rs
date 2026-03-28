@@ -1,7 +1,6 @@
 use crate::config::types::{CgroupEvidence, IsolateError, Result};
 use std::path::PathBuf;
 
-use super::cgroup_v1::CgroupV1;
 use super::cgroup_v2::CgroupV2;
 
 pub(crate) fn sanitize_instance_id(instance_id: &str) -> String {
@@ -40,36 +39,6 @@ pub trait CgroupBackend: Send + Sync {
     fn collect_evidence(&self, instance_id: &str) -> Result<CgroupEvidence>;
     fn get_cgroup_path(&self, instance_id: &str) -> PathBuf;
     fn is_empty(&self) -> Result<bool>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CgroupBackendType {
-    V1,
-    V2,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackendSelector {
-    AutoPreferV2,
-    ForceV1,
-}
-
-impl BackendSelector {
-    pub const fn auto() -> Self {
-        Self::AutoPreferV2
-    }
-
-    pub const fn force_v1() -> Self {
-        Self::ForceV1
-    }
-
-    pub const fn from_force_v1(force_v1: bool) -> Self {
-        if force_v1 {
-            Self::ForceV1
-        } else {
-            Self::AutoPreferV2
-        }
-    }
 }
 
 pub(crate) fn read_cgroup_u64(path: &std::path::Path, field_name: &str) -> Result<u64> {
@@ -177,126 +146,34 @@ pub(crate) fn collect_cgroup_optional_metric<T>(
     collect_cgroup_metric(strict_mode, field_name, result.map(Some), None)
 }
 
-pub struct SelectedBackend {
-    pub backend_type: CgroupBackendType,
-    pub backend: Box<dyn CgroupBackend>,
-}
-
 #[must_use]
-pub fn detect_cgroup_backend() -> Option<CgroupBackendType> {
-    if std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
-        return Some(CgroupBackendType::V2);
-    }
-
-    if std::path::Path::new("/sys/fs/cgroup/memory").exists()
-        && std::path::Path::new("/sys/fs/cgroup/cpu").exists()
-    {
-        return Some(CgroupBackendType::V1);
-    }
-
-    None
-}
-
-pub fn backend_type_name(backend_type: CgroupBackendType) -> &'static str {
-    match backend_type {
-        CgroupBackendType::V1 => "cgroup_v1",
-        CgroupBackendType::V2 => "cgroup_v2",
-    }
+pub fn is_cgroup_v2_available() -> bool {
+    std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists()
 }
 
 pub fn select_cgroup_backend(
-    selector: BackendSelector,
-    strict_mode: bool,
-    instance_id: &str,
-) -> Result<SelectedBackend> {
-    let detected = detect_cgroup_backend();
-    log::info!(
-        "cgroup backend selector: selector={:?}, strict_mode={}, detected={:?}",
-        selector,
-        strict_mode,
-        detected
-    );
-
-    match selector {
-        BackendSelector::AutoPreferV2 => match detected {
-            Some(CgroupBackendType::V2) => Ok(SelectedBackend {
-                backend_type: CgroupBackendType::V2,
-                backend: Box::new(CgroupV2::new(instance_id, strict_mode)?),
-            }),
-            Some(CgroupBackendType::V1) => Ok(SelectedBackend {
-                backend_type: CgroupBackendType::V1,
-                backend: Box::new(CgroupV1::new(instance_id, strict_mode)?),
-            }),
-            None => {
-                let mut msg = "No cgroup backend available on this host".to_string();
-                if crate::utils::container::is_container() {
-                    msg.push_str(".\n");
-                    msg.push_str(crate::utils::container::docker_cgroup_hint());
-                }
-                Err(IsolateError::Cgroup(msg))
-            }
-        },
-        BackendSelector::ForceV1 => match detected {
-            Some(CgroupBackendType::V1) => Ok(SelectedBackend {
-                backend_type: CgroupBackendType::V1,
-                backend: Box::new(CgroupV1::new(instance_id, strict_mode)?),
-            }),
-            Some(CgroupBackendType::V2) => {
-                if strict_mode {
-                    Err(IsolateError::Cgroup(
-                        "cgroup v1 forced, but host only exposes v2 in strict mode".to_string(),
-                    ))
-                } else {
-                    log::warn!("cgroup v1 forced but unavailable; falling back to cgroup v2");
-                    Ok(SelectedBackend {
-                        backend_type: CgroupBackendType::V2,
-                        backend: Box::new(CgroupV2::new(instance_id, false)?),
-                    })
-                }
-            }
-            None => {
-                let mut msg = "cgroup v1 forced, but no cgroup backend is available".to_string();
-                if crate::utils::container::is_container() {
-                    msg.push_str(".\n");
-                    msg.push_str(crate::utils::container::docker_cgroup_hint());
-                }
-                Err(IsolateError::Cgroup(msg))
-            }
-        },
-    }
-}
-
-pub fn create_cgroup_backend(
-    force_v1: bool,
     strict_mode: bool,
     instance_id: &str,
 ) -> Result<Box<dyn CgroupBackend>> {
-    let selector = BackendSelector::from_force_v1(force_v1);
-    let selected = select_cgroup_backend(selector, strict_mode, instance_id)?;
-    Ok(selected.backend)
+    if is_cgroup_v2_available() {
+        let backend = CgroupV2::new(instance_id, strict_mode)?;
+        return Ok(Box::new(backend));
+    }
+
+    let mut msg = "Cgroup v2 not available on this host.\n\
+                   Rustbox requires cgroup v2 for resource enforcement.\n\
+                   Enable with: systemd.unified_cgroup_hierarchy=1 on kernel command line"
+        .to_string();
+    if crate::utils::container::is_container() {
+        msg.push_str(".\n");
+        msg.push_str(crate::utils::container::docker_cgroup_hint());
+    }
+    Err(IsolateError::Cgroup(msg))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn backend_type_name_is_stable() {
-        assert_eq!(backend_type_name(CgroupBackendType::V1), "cgroup_v1");
-        assert_eq!(backend_type_name(CgroupBackendType::V2), "cgroup_v2");
-    }
-
-    #[test]
-    fn selector_conversion_is_deterministic() {
-        assert_eq!(
-            BackendSelector::from_force_v1(false),
-            BackendSelector::AutoPreferV2
-        );
-        assert_eq!(
-            BackendSelector::from_force_v1(true),
-            BackendSelector::ForceV1
-        );
-    }
 
     #[test]
     fn sanitize_instance_id_blocks_path_traversal() {
@@ -312,5 +189,10 @@ mod tests {
         assert_eq!(sanitize_instance_id("box-42"), "box-42");
         assert_eq!(sanitize_instance_id("rustbox_1"), "rustbox_1");
         assert_eq!(sanitize_instance_id("test.instance"), "test.instance");
+    }
+
+    #[test]
+    fn v2_detection_returns_bool() {
+        let _ = is_cgroup_v2_available();
     }
 }

@@ -1,0 +1,132 @@
+[
+  {
+    "id": "sieve",
+    "name": "Sieve of Eratosthenes",
+    "category": "cpu-bound",
+    "input_format": "Single integer N",
+    "output_format": "Count of primes <= N",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 256, "wall_sec": 10}
+  },
+  {
+    "id": "kadane",
+    "name": "Kadane's Max Subarray",
+    "category": "light-cpu",
+    "input_format": "Line 1: N\nLine 2: N integers",
+    "output_format": "Maximum subarray sum",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 256, "wall_sec": 10}
+  },
+  {
+    "id": "mergesort",
+    "name": "Sort Verification",
+    "category": "cpu-memory",
+    "input_format": "Line 1: N\nLine 2: N integers",
+    "output_format": "Line 1: first 5 sorted\nLine 2: last 5 sorted",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 512, "wall_sec": 30}
+  },
+  {
+    "id": "bfs",
+    "name": "BFS Shortest Path",
+    "category": "graph",
+    "input_format": "Line 1: N M\nNext M lines: u v w\nLast line: src dest",
+    "output_format": "Shortest distance (unweighted hops)",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 256, "wall_sec": 10}
+  },
+  {
+    "id": "nqueens",
+    "name": "N-Queens Count",
+    "category": "backtracking",
+    "input_format": "Single integer N",
+    "output_format": "Number of valid placements",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 256, "wall_sec": 30}
+  },
+  {
+    "id": "lcs",
+    "name": "Longest Common Subsequence",
+    "category": "dp-memory",
+    "input_format": "Line 1: string A\nLine 2: string B",
+    "output_format": "LCS length",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 512, "wall_sec": 120}
+  },
+  {
+    "id": "binsearch",
+    "name": "Binary Search Queries",
+    "category": "minimal",
+    "input_format": "Line 1: N\nLine 2: N sorted integers\nLine 3: Q\nNext Q lines: target",
+    "output_format": "Q lines: index or -1",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 256, "wall_sec": 10}
+  },
+  {
+    "id": "rabinkarp",
+    "name": "Rabin-Karp String Match",
+    "category": "string",
+    "input_format": "Line 1: text\nLine 2: pattern",
+    "output_format": "Number of occurrences",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 256, "wall_sec": 30}
+  },
+  {
+    "id": "rangesum",
+    "name": "Range Sum Queries",
+    "category": "multiline-io",
+    "input_format": "Line 1: N\nLine 2: N integers\nLine 3: Q\nNext Q lines: L R",
+    "output_format": "Q lines: sum of arr[L..R]",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 256, "wall_sec": 30}
+  },
+  {
+    "id": "dijkstra",
+    "name": "Dijkstra Shortest Paths",
+    "category": "multiline-io",
+    "input_format": "Line 1: N M\nNext M lines: u v w\nLine M+2: Q\nNext Q lines: target node",
+    "output_format": "Q lines: shortest distance from node 0",
+    "expected_status": "OK",
+    "languages": ["python", "cpp", "java"],
+    "limits": {"mem_mb": 256, "wall_sec": 30}
+  },
+  {
+    "id": "deliberate_tle",
+    "name": "Deliberate TLE",
+    "category": "verdict",
+    "input_format": "None",
+    "output_format": "None (killed by wall timer)",
+    "expected_status": "TLE",
+    "languages": ["python"],
+    "limits": {"mem_mb": 256, "wall_sec": 3}
+  },
+  {
+    "id": "deliberate_mle",
+    "name": "Deliberate MLE",
+    "category": "verdict",
+    "input_format": "None",
+    "output_format": "None (killed by OOM)",
+    "expected_status": "MLE",
+    "languages": ["python"],
+    "limits": {"mem_mb": 64, "wall_sec": 30}
+  },
+  {
+    "id": "deliberate_re",
+    "name": "Deliberate RE",
+    "category": "verdict",
+    "input_format": "None",
+    "output_format": "None (division by zero)",
+    "expected_status": "RE",
+    "languages": ["python"],
+    "limits": {"mem_mb": 256, "wall_sec": 10}
+  }
+]

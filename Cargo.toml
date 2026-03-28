@@ -6,7 +6,7 @@ resolver = "2"
 name = "rustbox"
 version = "0.1.0"
 edition = "2021"
-license = "GPL-3.0-only"
+license = "LicenseRef-Proprietary"
 
 [features]
 default = ["core"]

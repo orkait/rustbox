@@ -1,3 +1,4 @@
+use crate::config::constants;
 use crate::config::types::{IsolateError, Result};
 use crate::kernel::capabilities::{self, check_no_new_privs, set_no_new_privs};
 use crate::kernel::credentials::transition_to_unprivileged;
@@ -162,6 +163,7 @@ pub struct NamespacesReady;
 pub struct MountsPrivate;
 pub struct CgroupAttached;
 pub struct RootTransitioned;
+pub struct HygieneApplied;
 pub struct CredsDropped;
 pub struct PrivsLocked;
 pub struct ExecReady;
@@ -402,7 +404,7 @@ impl Sandbox<RootTransitioned> {
     pub fn apply_runtime_hygiene(
         self,
         profile: &ExecutionProfile,
-    ) -> Result<Sandbox<RootTransitioned>> {
+    ) -> Result<Sandbox<HygieneApplied>> {
         #[cfg(unix)]
         {
             let rlimits: &[(&str, libc::__rlimit_resource_t, Option<(u64, u64)>)] = &[
@@ -439,14 +441,6 @@ impl Sandbox<RootTransitioned> {
                     "RLIMIT_NOFILE",
                     libc::RLIMIT_NOFILE,
                     profile.fd_limit.map(|v| (v, v)),
-                ),
-                (
-                    "RLIMIT_CPU",
-                    libc::RLIMIT_CPU,
-                    profile.cpu_time_limit_ms.map(|ms| {
-                        let s = (ms / 1000).max(1);
-                        (s, s + 1)
-                    }),
                 ),
             ];
             for &(name, resource, ref limits) in rlimits {
@@ -506,7 +500,9 @@ impl Sandbox<RootTransitioned> {
 
         Ok(self.transition())
     }
+}
 
+impl Sandbox<HygieneApplied> {
     pub fn drop_credentials(
         self,
         uid: Option<u32>,
@@ -524,9 +520,11 @@ impl Sandbox<RootTransitioned> {
                 ));
             }
             (None, None) => {
-                fs_warn_parts(&[
-                    "No uid/gid specified for credential drop; process retains current credentials",
-                ]);
+                return Err(IsolateError::Privilege(
+                    "uid and gid must both be set for credential drop; \
+                     running the sandbox as current user is never safe"
+                        .to_string(),
+                ));
             }
         }
 
@@ -612,7 +610,6 @@ mod typestate_tests {
             enable_mount_namespace: false,
             enable_network_namespace: false,
             enable_user_namespace: false,
-            allow_degraded: true,
             memory_limit: None,
             file_size_limit: None,
             stack_limit: None,
@@ -626,11 +623,37 @@ mod typestate_tests {
             enable_seccomp: false,
             seccomp_policy_file: None,
             tmpfs_size_bytes: None,
+            pipe_buffer_size: None,
+            output_limit: None,
         }
     }
 
     #[test]
     fn test_typestate_chain_happy_path() {
+        if unsafe { libc::geteuid() } == 0 {
+            use nix::sys::wait::{waitpid, WaitStatus};
+            use nix::unistd::{fork, ForkResult};
+            match unsafe { fork() } {
+                Ok(ForkResult::Child) => {
+                    run_typestate_chain_happy_path();
+                    std::process::exit(0);
+                }
+                Ok(ForkResult::Parent { child }) => match waitpid(child, None) {
+                    Ok(WaitStatus::Exited(_, 0)) => return,
+                    Ok(WaitStatus::Exited(_, code)) => {
+                        panic!("typestate happy path child exited with code {}", code)
+                    }
+                    Ok(status) => panic!("typestate happy path child: {:?}", status),
+                    Err(e) => panic!("waitpid failed: {}", e),
+                },
+                Err(_) => return,
+            }
+        } else {
+            run_typestate_chain_happy_path();
+        }
+    }
+
+    fn run_typestate_chain_happy_path() {
         let sandbox = Sandbox::<FreshChild>::new("test-001".to_string(), false);
 
         let Ok(sandbox) = sandbox.setup_namespaces(false, false, false, false) else {
@@ -651,8 +674,16 @@ mod typestate_tests {
             .setup_mounts_and_root(&profile)
             .expect("mount root transition failed");
 
+        let sandbox = match sandbox.apply_runtime_hygiene(&profile) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
         let sandbox = sandbox
-            .drop_credentials(None, None)
+            .drop_credentials(
+                Some(crate::config::constants::NOBODY_UID),
+                Some(crate::config::constants::NOBODY_GID),
+            )
             .expect("credential drop failed");
 
         let sandbox = sandbox.lock_privileges().expect("privilege lock failed");
@@ -676,7 +707,16 @@ mod typestate_tests {
         let cgroup = mounts.attach_to_cgroup(None).expect("cgroup attach");
         let profile = test_profile();
         let root = cgroup.setup_mounts_and_root(&profile).expect("mount root");
-        let creds = root.drop_credentials(None, None).expect("drop_credentials");
+        let hygiene = match root.apply_runtime_hygiene(&profile) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let creds = hygiene
+            .drop_credentials(
+                Some(crate::config::constants::NOBODY_UID),
+                Some(crate::config::constants::NOBODY_GID),
+            )
+            .expect("drop_credentials");
         let privs = match creds.lock_privileges() {
             Ok(s) => s,
             Err(_) => return,
@@ -736,6 +776,33 @@ mod typestate_tests {
 
     #[test]
     fn test_credential_drop_ordering() {
+        // Credential drop + lock_privileges is irreversible (setresuid, NO_NEW_PRIVS).
+        // When running as root, fork a child so the parent process keeps its privileges
+        // for subsequent tests.
+        if unsafe { libc::geteuid() } == 0 {
+            use nix::sys::wait::{waitpid, WaitStatus};
+            use nix::unistd::{fork, ForkResult};
+            match unsafe { fork() } {
+                Ok(ForkResult::Child) => {
+                    run_credential_drop_test();
+                    std::process::exit(0);
+                }
+                Ok(ForkResult::Parent { child }) => match waitpid(child, None) {
+                    Ok(WaitStatus::Exited(_, 0)) => return,
+                    Ok(WaitStatus::Exited(_, code)) => {
+                        panic!("credential drop test child exited with code {}", code)
+                    }
+                    Ok(status) => panic!("credential drop test child: {:?}", status),
+                    Err(e) => panic!("waitpid failed: {}", e),
+                },
+                Err(_) => return,
+            }
+        } else {
+            run_credential_drop_test();
+        }
+    }
+
+    fn run_credential_drop_test() {
         let sandbox = Sandbox::<FreshChild>::new("test-007".to_string(), false);
 
         let sandbox = match sandbox.setup_namespaces(false, false, false, false) {
@@ -757,6 +824,11 @@ mod typestate_tests {
             .setup_mounts_and_root(&profile)
             .expect("mount root transition failed");
 
+        let sandbox = match sandbox.apply_runtime_hygiene(&profile) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
         let sandbox = sandbox
             .drop_credentials(Some(1000), Some(1000))
             .expect("credential drop failed");
@@ -764,5 +836,39 @@ mod typestate_tests {
         let sandbox = sandbox.lock_privileges().expect("privilege lock failed");
 
         let _sandbox = sandbox.ready_for_exec();
+    }
+
+    #[test]
+    fn test_credential_drop_rejects_none_none() {
+        let sandbox = Sandbox::<FreshChild>::new("test-008".to_string(), false);
+        let sandbox = match sandbox.setup_namespaces(false, false, false, false) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let sandbox = match sandbox.harden_mount_propagation() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let sandbox = sandbox.attach_to_cgroup(None).expect("cgroup attach");
+        let profile = test_profile();
+        let sandbox = sandbox
+            .setup_mounts_and_root(&profile)
+            .expect("mount root transition");
+        let sandbox = match sandbox.apply_runtime_hygiene(&profile) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let result = sandbox.drop_credentials(None, None);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("drop_credentials(None, None) must be rejected"),
+        };
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("uid and gid must both be set"),
+            "expected credential error, got: {}",
+            msg
+        );
     }
 }
