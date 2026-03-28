@@ -152,7 +152,10 @@ pub const BLOCKED_NET_RANGES: &[&str] = &[
 pub const PACKAGES_HOST_PATH: &str = "/opt/packages";
 pub const PACKAGES_SANDBOX_PATH: &str = "opt/packages";
 pub const PYTHONPATH_ENV_KEY: &str = "PYTHONPATH";
-pub const PYTHONPATH_ENV_VALUE: &str = "/opt/packages";
+pub const PYTHONPATH_ENV_VALUE: &str = "/opt/packages/python";
+pub const CPP_INCLUDE_ENV_KEY: &str = "CPLUS_INCLUDE_PATH";
+pub const CPP_INCLUDE_ENV_VALUE: &str = "/opt/packages/cpp";
+pub const JAVA_CLASSPATH_EXTRA: &str = "/opt/packages/java/*";
 
 // --- Tier 1: Benchmark thresholds ---
 

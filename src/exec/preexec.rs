@@ -483,6 +483,21 @@ impl Sandbox<RootTransitioned> {
                     constants::PYTHONPATH_ENV_KEY.to_string(),
                     constants::PYTHONPATH_ENV_VALUE.to_string(),
                 );
+                env_map.insert(
+                    constants::CPP_INCLUDE_ENV_KEY.to_string(),
+                    constants::CPP_INCLUDE_ENV_VALUE.to_string(),
+                );
+                if let Some(existing_cp) = env_map.get("CLASSPATH") {
+                    env_map.insert(
+                        "CLASSPATH".to_string(),
+                        format!("{}:{}", existing_cp, constants::JAVA_CLASSPATH_EXTRA),
+                    );
+                } else {
+                    env_map.insert(
+                        "CLASSPATH".to_string(),
+                        format!(".:{}", constants::JAVA_CLASSPATH_EXTRA),
+                    );
+                }
             }
 
             crate::utils::env_hygiene::strip_dangerous_env(&mut env_map);

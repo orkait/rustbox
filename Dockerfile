@@ -117,13 +117,32 @@ RUN apt-get update \
          && rm -rf /root/.cargo /root/.rustup; \
        fi \
     #
-    # Executor-only: networking tools + pre-cached Python packages
+    # Executor-only: networking tools + pre-cached packages
     && if [ "$PROFILE" = "executor" ]; then \
-         apt-get install -y --no-install-recommends iproute2 nftables; \
+         apt-get install -y --no-install-recommends \
+           iproute2 nftables libgl1 libglib2.0-0; \
+         #
+         # Python packages (data science + viz + scraping + image)
          if [ "$LANG_PYTHON" = "true" ]; then \
-           python3 -m pip install --no-cache-dir --target /opt/packages \
+           python3 -m pip install --no-cache-dir --target /opt/packages/python \
              numpy pandas matplotlib scipy scikit-learn \
-             requests pillow sympy networkx 2>/dev/null || true; \
+             requests pillow sympy networkx \
+             beautifulsoup4 seaborn openpyxl plotly opencv-python \
+             2>/dev/null || true; \
+         fi; \
+         #
+         # C++ header-only libraries
+         if [ "$LANG_C_CPP" = "true" ]; then \
+           mkdir -p /opt/packages/cpp/nlohmann \
+           && curl -fsSL https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp \
+              -o /opt/packages/cpp/nlohmann/json.hpp; \
+         fi; \
+         #
+         # Java JARs
+         if [ "$LANG_JAVA" = "true" ]; then \
+           mkdir -p /opt/packages/java \
+           && curl -fsSL https://repo1.maven.org/maven2/com/google/code/gson/gson/2.11.0/gson-2.11.0.jar \
+              -o /opt/packages/java/gson.jar; \
          fi; \
        fi \
     #
