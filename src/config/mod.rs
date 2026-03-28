@@ -3,4 +3,5 @@ pub mod loader;
 pub mod presets;
 pub mod profile;
 pub mod types;
+pub mod validation;
 pub mod validator;
