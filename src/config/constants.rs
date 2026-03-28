@@ -101,6 +101,52 @@ pub const DEFAULT_UID_POOL_SIZE: u32 = 1000;
 pub const DEFAULT_SIGTERM_GRACE: Duration = Duration::from_millis(200);
 pub const DEFAULT_SUPERVISOR_WALL_FALLBACK: Duration = DEFAULT_WALL_TIME_LIMIT;
 
+// --- Tier 1: Absolute ceilings (nobody can exceed, not even operator) ---
+
+pub const MAX_ABSOLUTE_WALL_TIME: Duration = Duration::from_secs(600);
+pub const MAX_ABSOLUTE_CPU_TIME: Duration = Duration::from_secs(300);
+pub const MAX_ABSOLUTE_MEMORY: u64 = 8 * 1024 * MB;
+pub const MAX_ABSOLUTE_PROCESSES: u32 = 1024;
+pub const MAX_ABSOLUTE_FD_LIMIT: u64 = 4096;
+pub const MAX_DNS_ENTRIES: usize = 3;
+pub const MIN_UID_BASE: u32 = 1000;
+
+// --- Tier 1: Executor profile defaults ---
+
+pub const EXECUTOR_DEFAULT_WALL_TIME: Duration = Duration::from_secs(60);
+pub const EXECUTOR_DEFAULT_CPU_TIME: Duration = Duration::from_secs(30);
+pub const EXECUTOR_DEFAULT_MEMORY: u64 = 2048 * MB;
+pub const EXECUTOR_DEFAULT_PROCESSES: u32 = 64;
+pub const EXECUTOR_DEFAULT_FD_LIMIT: u64 = 256;
+pub const EXECUTOR_DEFAULT_FILE_SIZE: u64 = 64 * MB;
+pub const EXECUTOR_DEFAULT_DISK_QUOTA: u64 = 1024 * MB;
+
+// --- Tier 1: Network defaults (executor only) ---
+
+pub const DEFAULT_NET_EGRESS: u64 = 100 * MB;
+pub const DEFAULT_NET_INGRESS: u64 = 100 * MB;
+pub const SANDBOX_DNS_PRIMARY: &str = "1.1.1.1";
+pub const SANDBOX_DNS_SECONDARY: &str = "8.8.8.8";
+pub const BRIDGE_NAME: &str = "br-rustbox";
+pub const BRIDGE_SUBNET: &str = "10.200.0.0/16";
+pub const BRIDGE_GATEWAY: &str = "10.200.0.1";
+pub const BRIDGE_GATEWAY_CIDR: &str = "10.200.0.1/16";
+pub const VETH_HOST_PREFIX: &str = "veth-rb-";
+pub const VETH_SANDBOX_PREFIX: &str = "veth-sb-";
+pub const NET_QUOTA_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+// --- Tier 1: Blocked network ranges ---
+
+pub const BLOCKED_NET_RANGES: &[&str] = &[
+    "169.254.0.0/16",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
+];
+
+// --- Tier 1: Benchmark thresholds ---
+
 pub const BENCH_COLD_P50_MS: u64 = 100;
 pub const BENCH_COLD_P95_MS: u64 = 200;
 pub const BENCH_WARM_P50_MS: u64 = 150;

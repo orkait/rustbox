@@ -80,6 +80,10 @@ enum Commands {
         no_seccomp: bool,
         #[arg(long)]
         seccomp_policy: Option<String>,
+        #[arg(long, default_value = "judge")]
+        profile: String,
+        #[arg(long, value_delimiter = ',')]
+        dns: Option<Vec<String>>,
     },
     Status,
     CheckDeps {
@@ -213,6 +217,8 @@ pub fn run(mode: CliMode) -> Result<()> {
             permissive,
             no_seccomp,
             seccomp_policy,
+            profile,
+            dns,
         } => {
             if strict && permissive {
                 eprintln!("Error: --strict and --permissive are mutually exclusive");
@@ -235,8 +241,40 @@ pub fn run(mode: CliMode) -> Result<()> {
                 other => other.to_string(),
             };
 
+            let security_profile = match profile.to_lowercase().as_str() {
+                "judge" => crate::config::profile::SecurityProfile::Judge,
+                "executor" => crate::config::profile::SecurityProfile::Executor,
+                other => {
+                    eprintln!(
+                        "Error: unknown profile '{}'. Use 'judge' or 'executor'",
+                        other
+                    );
+                    std::process::exit(1);
+                }
+            };
+
+            let resolved = crate::config::profile::resolve_limits(
+                security_profile,
+                None,
+                wall_time.or(time),
+                cpu,
+                mem,
+                processes,
+                dns,
+            );
+
             let mode_label = if strict { "STRICT" } else { "ROOT" };
-            eprintln!("Executing {} code ({})", language, mode_label);
+            eprintln!(
+                "Executing {} code ({}, profile={:?}{})",
+                language,
+                mode_label,
+                security_profile,
+                if resolved.was_capped {
+                    ", limits capped"
+                } else {
+                    ""
+                }
+            );
 
             let mut config = crate::config::types::IsolateConfig::with_language_defaults(
                 &language,
@@ -245,6 +283,10 @@ pub fn run(mode: CliMode) -> Result<()> {
             config.strict_mode = strict;
             config.no_seccomp = no_seccomp;
             config.seccomp_policy_file = seccomp_policy.map(std::path::PathBuf::from);
+            config.wall_time_limit = Some(resolved.wall_time);
+            config.cpu_time_limit = Some(resolved.cpu_time);
+            config.memory_limit = Some(resolved.memory_bytes);
+            config.process_limit = Some(resolved.process_limit);
 
             let mut isolate = crate::runtime::isolate::Isolate::new(config)?;
 
