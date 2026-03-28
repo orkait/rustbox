@@ -131,6 +131,16 @@ pub struct IsolateConfig {
     pub pipe_buffer_size: Option<u64>,
     #[serde(default)]
     pub output_limit: Option<u64>,
+    #[serde(default)]
+    pub packages_enabled: bool,
+    #[serde(default)]
+    pub network_enabled: bool,
+    #[serde(default)]
+    pub net_egress_bytes: u64,
+    #[serde(default)]
+    pub net_ingress_bytes: u64,
+    #[serde(default)]
+    pub dns_servers: Vec<String>,
 }
 
 impl IsolateConfig {
@@ -178,6 +188,11 @@ impl Default for IsolateConfig {
             tmpfs_size_bytes: None,
             pipe_buffer_size: Some(constants::DEFAULT_PIPE_BUFFER_SIZE),
             output_limit: Some(constants::DEFAULT_OUTPUT_COMBINED_LIMIT as u64),
+            packages_enabled: false,
+            network_enabled: false,
+            net_egress_bytes: 0,
+            net_ingress_bytes: 0,
+            dns_servers: Vec::new(),
         }
     }
 }

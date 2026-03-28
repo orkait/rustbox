@@ -287,6 +287,11 @@ pub fn run(mode: CliMode) -> Result<()> {
             config.cpu_time_limit = Some(resolved.cpu_time);
             config.memory_limit = Some(resolved.memory_bytes);
             config.process_limit = Some(resolved.process_limit);
+            config.packages_enabled = resolved.packages;
+            config.network_enabled = resolved.network;
+            config.net_egress_bytes = resolved.net_egress_bytes;
+            config.net_ingress_bytes = resolved.net_ingress_bytes;
+            config.dns_servers = resolved.dns_servers.clone();
 
             let mut isolate = crate::runtime::isolate::Isolate::new(config)?;
 
