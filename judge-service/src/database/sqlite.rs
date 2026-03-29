@@ -1,36 +1,42 @@
-use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, Row};
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{params, Row};
 use uuid::Uuid;
 
 use super::types::{ExecutionOutput, Submission};
 use super::Database;
 
 pub struct SqliteDatabase {
-    conn: Mutex<Connection>,
+    pool: Pool<SqliteConnectionManager>,
 }
 
 impl SqliteDatabase {
     pub fn open(path: &str) -> anyhow::Result<Self> {
-        let conn = Connection::open(path)
-            .with_context(|| format!("Failed to open SQLite database at {}", path))?;
+        let manager = SqliteConnectionManager::file(path);
+        let pool = Pool::builder()
+            .max_size(16)
+            .build(manager)
+            .with_context(|| format!("Failed to create SQLite pool for {}", path))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-        conn.busy_timeout(crate::constants::DB_BUSY_TIMEOUT)?;
-        conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
+        // Configure the first connection (pragmas apply per-connection in SQLite,
+        // but WAL journal mode is database-wide and persists).
+        {
+            let conn = pool.get()?;
+            conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+            conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
+            conn.busy_timeout(crate::constants::DB_BUSY_TIMEOUT)?;
+        }
 
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        Ok(Self { pool })
     }
 
     pub fn run_migrations(&self) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-
+        let conn = self.pool.get()?;
         conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS submissions (
@@ -63,7 +69,6 @@ impl SqliteDatabase {
                 ON submissions (status, created_at);
             "#,
         )?;
-
         Ok(())
     }
 }
@@ -133,7 +138,7 @@ fn parse_optional_datetime(row: &Row, idx: usize) -> rusqlite::Result<Option<Dat
 #[async_trait]
 impl Database for SqliteDatabase {
     async fn insert_submission(&self, sub: &Submission) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.pool.get()?;
         conn.execute(
             r#"
             INSERT OR IGNORE INTO submissions (
@@ -178,8 +183,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn claim_pending(&self, node_id: &str) -> anyhow::Result<Option<Submission>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-
+        let conn = self.pool.get()?;
         let result = conn.query_row(
             r#"
             UPDATE submissions
@@ -210,7 +214,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn mark_running(&self, id: Uuid, node_id: &str, sandbox_id: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.pool.get()?;
         conn.execute(
             r#"
             UPDATE submissions
@@ -220,13 +224,13 @@ impl Database for SqliteDatabase {
                 started_at = ?4
             WHERE id = ?1
             "#,
-            params![id.to_string(), node_id, sandbox_id, Utc::now().to_rfc3339(),],
+            params![id.to_string(), node_id, sandbox_id, Utc::now().to_rfc3339()],
         )?;
         Ok(())
     }
 
     async fn mark_completed(&self, id: Uuid, result: &ExecutionOutput) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.pool.get()?;
         conn.execute(
             r#"
             UPDATE submissions
@@ -261,7 +265,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn mark_error(&self, id: Uuid, error: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.pool.get()?;
         conn.execute(
             r#"
             UPDATE submissions
@@ -276,7 +280,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn get_submission(&self, id: Uuid) -> anyhow::Result<Option<Submission>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.pool.get()?;
         let result = conn.query_row(
             r#"
             SELECT
@@ -299,7 +303,7 @@ impl Database for SqliteDatabase {
     }
 
     async fn reap_stale(&self, timeout: Duration) -> anyhow::Result<u64> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.pool.get()?;
         let cutoff = Utc::now() - chrono::Duration::from_std(timeout)?;
         let rows_updated = conn.execute(
             r#"
