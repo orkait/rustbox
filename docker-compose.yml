@@ -18,27 +18,49 @@ x-judge-common: &judge-common
     start_period: 5s
   volumes:
     - /sys/fs/cgroup:/sys/fs/cgroup:rw
+  environment: &judge-env
+    RUSTBOX_WORKERS: "4"
+    RUSTBOX_PORT: "4096"
+    RUST_LOG: "info"
 
 services:
+  # Judge profile: tight limits (256MB, 7s wall) for competitive programming
   judge:
     <<: *judge-common
     ports:
       - "4096:4096"
     environment:
+      <<: *judge-env
       RUSTBOX_DATABASE_URL: "sqlite:///tmp/rustbox.db"
-      RUSTBOX_WORKERS: "4"
-      RUSTBOX_PORT: "4096"
-      RUST_LOG: "info"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ./tests/config/config-judge.json:/etc/rustbox/config.json:ro
 
+  # Executor profile: relaxed limits (2GB, 60s wall) for LLM agents
+  executor:
+    <<: *judge-common
+    ports:
+      - "4096:4096"
+    environment:
+      <<: *judge-env
+      RUSTBOX_DATABASE_URL: "sqlite:///tmp/rustbox.db"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ./tests/config/config-executor.json:/etc/rustbox/config.json:ro
+    profiles:
+      - executor
+
+  # Judge with Postgres backend
   judge-postgres:
     <<: *judge-common
     ports:
       - "4096:4096"
     environment:
+      <<: *judge-env
       RUSTBOX_DATABASE_URL: "postgresql://rustbox:rustbox@postgres:5432/rustbox"
-      RUSTBOX_WORKERS: "4"
-      RUSTBOX_PORT: "4096"
-      RUST_LOG: "info"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - ./tests/config/config-judge.json:/etc/rustbox/config.json:ro
     depends_on:
       postgres:
         condition: service_healthy
