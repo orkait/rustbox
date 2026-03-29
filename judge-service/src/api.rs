@@ -341,7 +341,7 @@ async fn submit(
             .into_response();
     }
 
-    const SYNC_POLL_INTERVAL_MS: u64 = 200;
+    const SYNC_POLL_INTERVAL_MS: u64 = 10;
     let poll_interval = std::time::Duration::from_millis(SYNC_POLL_INTERVAL_MS);
     let max_wait = std::time::Duration::from_secs(state.sync_wait_timeout_secs);
     let deadline = tokio::time::Instant::now() + max_wait;

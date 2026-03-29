@@ -25,7 +25,7 @@ print(sieve(500000))
 '
 
 EXPECTED="41538"
-POLL_INTERVAL=0.3
+POLL_INTERVAL=0.05
 POLL_TIMEOUT=300
 
 # ── helpers ──────────────────────────────────────────────────────────────────
