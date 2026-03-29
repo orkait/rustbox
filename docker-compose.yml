@@ -38,7 +38,23 @@ services:
 
   # Executor profile: relaxed limits (2GB, 60s wall) for LLM agents
   executor:
-    <<: *judge-common
+    build:
+      context: .
+      dockerfile: Dockerfile.executor
+    command: ["/usr/local/bin/judge-service"]
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN, SETUID, SETGID, NET_ADMIN, MKNOD, DAC_OVERRIDE]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=unconfined
+    cgroupns: host
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4096/api/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     ports:
       - "4096:4096"
     environment:
@@ -46,7 +62,6 @@ services:
       RUSTBOX_DATABASE_URL: "sqlite:///tmp/rustbox.db"
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ./tests/config/config-executor.json:/etc/rustbox/config.json:ro
     profiles:
       - executor
 

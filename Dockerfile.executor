@@ -1,14 +1,14 @@
 # ============================================================================
-# Rustbox Judge Profile (default)
+# Rustbox Executor Profile
 #
-# Competitive programming mode. Tight limits, all languages enabled.
-#   Memory: 256 MB | Wall: 7s | CPU: 4s | Processes: 10
+# LLM agent mode. Relaxed limits, all languages enabled.
+#   Memory: 2 GB | Wall: 60s | CPU: 30s | Processes: 64
 #
 # Build:
-#   docker build -t rustbox .
+#   docker build -t rustbox-executor -f Dockerfile.executor .
 #
 # Run:
-#   docker run --privileged --cpus=4 --memory=4g -p 4096:4096 rustbox
+#   docker run --privileged --cpus=4 --memory=8g -p 4096:4096 rustbox-executor
 # ============================================================================
 ARG LANG_PYTHON=true
 ARG LANG_C_CPP=true
@@ -58,7 +58,7 @@ ARG LANG_GO
 ARG LANG_RUST
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl iproute2 nftables \
     && if [ "$LANG_C_CPP" = "true" ]; then \
          apt-get install -y --no-install-recommends g++ \
          && g++ -std=c++17 -O2 -x c++-header \
@@ -125,9 +125,9 @@ RUN for i in $(seq 60000 60999); do \
 COPY --from=builder /build/target/release/rustbox       /usr/local/bin/rustbox
 COPY --from=builder /build/target/release/judge-service  /usr/local/bin/judge-service
 
-# Config: judge profile
+# Config: executor profile
 RUN mkdir -p /etc/rustbox /var/run/rustbox /tmp/rustbox
-COPY config.json /etc/rustbox/config.json
+COPY config-executor.json /etc/rustbox/config.json
 RUN chmod 644 /etc/rustbox/config.json
 
 EXPOSE 4096
