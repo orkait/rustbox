@@ -33,18 +33,6 @@ pub enum VerdictCause {
     #[serde(rename = "re_fatal_signal")]
     ReFatalSignal,
 
-    #[serde(rename = "sig_unattributed")]
-    SigUnattributed,
-
-    #[serde(rename = "abuse_fork_bomb")]
-    AbuseForkBomb,
-    #[serde(rename = "abuse_fd_exhaustion")]
-    AbuseFdExhaustion,
-    #[serde(rename = "abuse_signal_storm")]
-    AbuseSignalStorm,
-    #[serde(rename = "abuse_exec_churn")]
-    AbuseExecChurn,
-
     #[serde(rename = "ple_cgroup_pids")]
     PleCgroupPids,
 
@@ -53,8 +41,6 @@ pub enum VerdictCause {
 
     #[serde(rename = "ie_missing_evidence")]
     IeMissingEvidence,
-    #[serde(rename = "ie_contradictory_evidence")]
-    IeContradictoryEvidence,
     #[serde(rename = "ie_supervisor_failure")]
     IeSupervisorFailure,
     #[serde(rename = "ie_cleanup_failure")]

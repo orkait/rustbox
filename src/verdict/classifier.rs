@@ -1,5 +1,9 @@
 use crate::config::types::*;
 
+const MEMORY_PEAK_THRESHOLD_RATIO: f64 = 0.9;
+const CPU_BOUND_THRESHOLD: f64 = 0.8;
+const SLEEP_BLOCK_THRESHOLD: f64 = 0.2;
+
 pub struct VerdictClassifier;
 
 impl VerdictClassifier {
@@ -198,11 +202,13 @@ impl VerdictClassifier {
         limits: &LimitSnapshot,
         signal: i32,
     ) -> (ExecutionStatus, VerdictProvenance) {
-        if signal == 9 {
+        if signal == libc::SIGKILL {
             if let Some(cg) = &evidence.cgroup_evidence {
                 let has_oom = cg.oom_events > 0 || cg.oom_kill_events > 0;
                 let memory_at_limit = match (cg.memory_peak, cg.memory_limit) {
-                    (Some(peak), Some(limit)) if limit > 0 => peak as f64 / limit as f64 >= 0.9,
+                    (Some(peak), Some(limit)) if limit > 0 => {
+                        peak as f64 / limit as f64 >= MEMORY_PEAK_THRESHOLD_RATIO
+                    }
                     _ => false,
                 };
                 if has_oom || memory_at_limit {
@@ -370,9 +376,9 @@ impl VerdictClassifier {
             return DivergenceClass::CpuBound;
         }
         let ratio = cpu_time_ms as f64 / wall_time_ms as f64;
-        if ratio >= 0.8 {
+        if ratio >= CPU_BOUND_THRESHOLD {
             DivergenceClass::CpuBound
-        } else if ratio <= 0.2 {
+        } else if ratio <= SLEEP_BLOCK_THRESHOLD {
             DivergenceClass::SleepOrBlockBound
         } else {
             DivergenceClass::HostInterferenceSuspected
