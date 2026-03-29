@@ -3,9 +3,9 @@ name: rustbox-ci
 on:
   push:
     branches: ["**"]
-    paths-ignore: ["docs/**", "docs-site/**", "*.md", "LICENSE", "isolate-read-only/**"]
+    paths-ignore: ["docs/**", "documentation/**", "*.md", "LICENSE", "isolate-read-only/**"]
   pull_request:
-    paths-ignore: ["docs/**", "docs-site/**", "*.md", "LICENSE", "isolate-read-only/**"]
+    paths-ignore: ["docs/**", "documentation/**", "*.md", "LICENSE", "isolate-read-only/**"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

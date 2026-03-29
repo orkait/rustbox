@@ -46,8 +46,3 @@ path = "src/bin/isolate.rs"
 [[bin]]
 name = "judge"
 path = "src/bin/judge.rs"
-
-[[bench]]
-name = "cold_start_bench"
-path = "benches/cold_start_bench.rs"
-harness = false

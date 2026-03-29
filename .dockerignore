@@ -17,7 +17,7 @@ tmp/
 docker-compose.yml
 docker-compose.judge.yml
 docs/
-docs-site/
+documentation/
 isolate-read-only/
 fuzz/
 benches/
