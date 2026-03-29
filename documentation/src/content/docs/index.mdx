@@ -3,146 +3,131 @@ title: rustbox
 description: Kernel-enforced sandboxing for untrusted code execution
 ---
 
-**rustbox** is a secure code execution sandbox for competitive programming judges and LLM agent runtimes. It provides kernel-enforced isolation with deterministic resource limits, seccomp-bpf syscall filtering, and evidence-backed verdicts.
+Run untrusted code from strangers on the internet. Python, C++, Java - 8 languages, kernel-isolated, 260+ executions per second. One binary, no Docker daemon, no Redis.
 
-Two profiles, same binary. **Judge** mode for tight competitive programming limits. **Executor** mode for relaxed LLM agent workloads.
-
-### What it does
-
-- Runs 8 languages (Python, C, C++, Java, Go, Rust, JavaScript, TypeScript) in isolated sandboxes
-- Enforces wall time, memory, CPU, process, file size, and fd limits via the kernel
-- Classifies verdicts (AC, TLE, MLE, RE, SIG) from kernel evidence, not guesswork
-- Exposes a REST API with async polling, sync `?wait=true`, and webhook delivery
-- Ships as a single binary. No Docker daemon, no Redis, no JVM dependency.
-- 260+ req/s throughput with full isolation (measured, not projected)
-
-### How it's different
-
-| | rustbox | Judge0 | Isolate (IOI) |
-|---|---|---|---|
-| Deployment | 1 binary + SQLite | Docker + Rails + PostgreSQL + Redis | `make install` |
-| Languages | 8 | 60+ | Any (manual config) |
-| Isolation | Namespaces + cgroups v2 + seccomp + capabilities | Docker container | cgroups + mount |
-| Safety model | Compile-time typestate (misordering = compiler error) | Runtime checks | Runtime checks |
-| Verdict source | Kernel evidence (cgroup OOM, waitpid, /proc) | Exit code heuristics | Exit code heuristics |
-| API modes | Async + sync `?wait=true` + webhooks (HMAC) | Polling only | CLI only |
-| Profiles | Judge (tight) + Executor (relaxed) | Single mode | Single mode |
-
-### Security model
-
-8 layers of kernel-enforced isolation, applied in a compile-time verified order:
-
-| Layer | Primitive | What it prevents |
-|---|---|---|
-| 1 | PID + IPC + UTS namespaces | Seeing or signalling host processes |
-| 2 | Mount namespace + chroot | Accessing host filesystem |
-| 3 | Network namespace | Network access (judge mode) |
-| 4 | Cgroups v2 (memory, CPU, PIDs) | Memory bombs, fork bombs, CPU abuse |
-| 5 | Seccomp-BPF (52 rules) | Dangerous syscalls (ptrace, mount, bpf, io_uring) |
-| 6 | Capability drop (all 5 sets zeroed) | Privilege escalation |
-| 7 | Credential drop (setresuid/setresgid) | Running as root |
-| 8 | NO_NEW_PRIVS | Regaining privileges via setuid binaries |
-
-Only `Sandbox<ExecReady>` can call `exec_payload()`. Misordering is a compile error. See [Architecture](/architecture/) for the full story.
-
----
-
-## Installation
+Built for online judges, LLM agent runtimes, code playgrounds, and interview platforms. If you need to run code you don't trust, this is the engine.
 
 ```bash
-cargo build --release -p rustbox -p judge-service
-```
-
-Two packages:
-- `rustbox` - the sandbox binary (CLI + proxy)
-- `judge-service` - HTTP API server
-
-### System requirements
-
-- Linux with cgroups v2
-- Root access for sandbox isolation (namespaces, cgroups, chroot)
-- Language runtimes for the languages you want to support (Python 3, g++, JDK 21, etc.)
-
-```bash
-# Check what's available
-sudo target/release/rustbox check-deps --verbose
-```
-
-## Your first execution
-
-Requires root for namespace isolation:
-
-```bash
-# Python
-sudo target/release/rustbox execute-code \
-  --language python --code 'print(2 ** 10)'
-
-# C++ (compiled + executed)
-sudo target/release/rustbox execute-code \
-  --language cpp --code '#include<iostream>
-int main() { std::cout << 42 << std::endl; }'
-
-# Java
-sudo target/release/rustbox execute-code \
-  --language java --code 'public class Main {
-    public static void main(String[] args) {
-        System.out.println(42);
-    }
-}'
-```
-
-The output is a JSON verdict with stdout, stderr, timing, memory usage, and exit code.
-
-## HTTP API
-
-```bash
-# Start judge service (judge profile, SQLite)
-docker compose up judge
-
-# Or executor profile
-docker compose up executor
-
-# Submit and wait
 curl -s -X POST "http://localhost:4096/api/submit?wait=true" \
   -H "Content-Type: application/json" \
   -d '{"language": "python", "code": "print(42)"}' | jq
 ```
 
-See [API Reference](/api/) for full endpoint documentation.
+```json
+{
+  "verdict": "AC",
+  "stdout": "42\n",
+  "cpu_time": 0.012,
+  "wall_time": 0.025,
+  "memory_peak": 3145728
+}
+```
 
-## Two profiles
+25ms. Full namespace isolation, cgroup enforcement, seccomp filtering, capability drop. Not a container - direct kernel primitives composed in a fixed order enforced by the Rust compiler.
 
-| | Judge | Executor |
+---
+
+## Why not Judge0?
+
+| | rustbox | Judge0 |
 |---|---|---|
-| Config | `config.json` | `config-executor.json` |
-| Memory | 256 MB | 2 GB |
-| Wall time | 7 seconds | 60 seconds |
-| CPU time | 4 seconds | 30 seconds |
-| Processes | 10 | 64 |
-| Network | Blocked | Filtered |
-| Use case | Competitive programming | LLM agents, notebooks |
+| Deploy | `docker compose up judge` | Docker + Rails + PostgreSQL + Redis |
+| Throughput | 260 req/s (measured, every result verified) | ~30 req/s |
+| Cold start | 25ms | 500ms+ |
+| Isolation | 8 kernel layers, compile-time enforced | Docker container defaults |
+| Syscall filter | 52-rule seccomp deny-list | Docker's 300-rule default |
+| Verdicts | Kernel evidence (OOM events, cgroup stats) | Exit code guessing |
+| Binary size | 3 MB | 4 containers |
+
+## Two profiles, one binary
+
+**Judge** - competitive programming. 256 MB memory, 7 second wall time, no network. The code runs for a few seconds in a bare sandbox with just the language runtime. This is what Codeforces needs.
+
+**Executor** - LLM agents. 2 GB memory, 60 second wall time, filtered network. numpy, pandas, the works. This is what Claude Code and GPT tool-use need.
+
+Same Docker image. Profile selected by config file.
 
 ```bash
-# Docker
-docker build -t rustbox .                                  # judge
-docker build -t rustbox-executor -f Dockerfile.executor .  # executor
+docker compose up judge       # tight limits
+docker compose up executor    # relaxed limits
+docker compose up judge-pg    # judge + Postgres (multi-node)
+```
 
-# Docker Compose
-docker compose up judge       # judge + SQLite
-docker compose up executor    # executor + SQLite
-docker compose up judge-pg    # judge + PostgreSQL (multi-node)
+## 8 layers of isolation
+
+Every layer stops a different class of attack. No single layer is enough. Together, they make sandbox escape require defeating all eight simultaneously.
+
+| # | What | Stops |
+|---|---|---|
+| 1 | PID + IPC + UTS namespaces | Seeing host processes, IPC channels |
+| 2 | Mount namespace + chroot | Accessing host filesystem |
+| 3 | Network namespace | Sockets, DNS, cloud metadata |
+| 4 | Cgroups v2 | Memory bombs, fork bombs, CPU abuse |
+| 5 | Seccomp-BPF (52 rules) | ptrace, mount, bpf, io_uring, kexec |
+| 6 | All 5 capability sets zeroed | Privilege escalation |
+| 7 | Credential drop to UID 60000+ | Running as root |
+| 8 | NO_NEW_PRIVS | Regaining privileges via setuid |
+
+The order is enforced by the Rust type system. You can't call `exec_payload()` without completing all 8 steps. Skip one and the compiler rejects your code. Not a convention - a type error.
+
+22 adversarial tests run on every build. Fork bombs, memory bombs, chroot escapes, seccomp bypasses, privilege escalation attempts. 0 escapes across 22 attack vectors.
+
+## Get started
+
+```bash
+# Build
+cargo build --release -p rustbox -p judge-service
+
+# Run (needs root for kernel isolation)
+sudo target/release/rustbox execute-code \
+  --language python --code 'print(2 ** 10)'
+
+# Or use Docker
+docker build -t rustbox .
+docker run --privileged -p 4096:4096 rustbox
+```
+
+8 languages out of the box: **Python, C, C++, Java, JavaScript, TypeScript, Go, Rust**
+
+## API in 30 seconds
+
+```bash
+# Async (returns job ID immediately)
+curl -X POST http://localhost:4096/api/submit \
+  -H "Content-Type: application/json" \
+  -d '{"language": "python", "code": "print(42)"}'
+
+# Sync (waits for result)
+curl -X POST "http://localhost:4096/api/submit?wait=true" \
+  -H "Content-Type: application/json" \
+  -d '{"language": "python", "code": "print(42)"}'
+
+# Webhooks (HMAC-SHA256 signed, Standard Webhooks spec)
+curl -X POST http://localhost:4096/api/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "python",
+    "code": "print(42)",
+    "webhook_url": "https://myapp.com/callback",
+    "webhook_secret": "your-secret"
+  }'
 ```
 
 ## Development
 
 ```bash
-python dev.py build        # cargo build
-python dev.py test         # fmt + clippy + cargo test
-python dev.py stress       # parallel stress test (260+ req/s, verifies results)
-python dev.py bench        # throughput benchmark (tiers 1-1000)
-python dev.py adversarial  # 22 adversarial + 4 correctness + 11 recovery tests
-python dev.py curl         # quick smoke test
-python dev.py backend      # start judge-service locally (sudo)
+python dev.py test          # fmt + clippy + cargo test
+python dev.py stress        # 260+ req/s, verifies every result
+python dev.py adversarial   # 22 adversarial + 4 correctness + 11 recovery
+python dev.py bench         # throughput benchmark (tiers 1-1000)
 ```
 
-Set `RUSTBOX_API_KEY=your-secret` for production deployments.
+---
+
+[Architecture](/architecture/) - how the sandbox works internally
+
+[API Reference](/api/) - full endpoint documentation
+
+[Docker Deployment](/getting-started/docker/) - production setup with minimal capabilities
+
+[Security Internals](/architecture/isolation/) - the 8-layer isolation model in detail
