@@ -1,41 +1,49 @@
 ---
 title: Cgroups
-description: v1/v2 dual support, Docker compatibility, auto-detection
+description: Cgroup v2 resource enforcement and evidence collection
 ---
 
-## v1 vs v2
+## Cgroup v2 only
 
-Linux has two cgroup implementations. rustbox supports both and auto-detects:
+rustbox requires cgroup v2. Cgroup v1 support was removed. The supervisor detects v2 by checking for `/sys/fs/cgroup/cgroup.controllers`.
 
-1. `/sys/fs/cgroup/cgroup.controllers` exists → v2
-2. `/sys/fs/cgroup/memory` exists → v1
-3. Neither → no cgroup support (permissive mode only)
-
-The selection is logged so you always know which backend is active.
-
-:::note[Design Note]
-We don't force v2 because Docker on older hosts (Ubuntu 20.04, CentOS 7/8) often runs a hybrid v1/v2 setup where v2 is mounted but controllers aren't delegated. Rather than fail mysteriously, we probe for writable controllers and fall back gracefully.
-:::
-
-## Docker compatibility
-
-Inside Docker, cgroup access is restricted:
-
-- **Probe before use.** We test writability, never assume.
-- **Permissive fallback.** Can't create a cgroup? Warn and continue. Seccomp and namespaces still work.
-- **Strict mode fails.** No cgroups + strict mode = rejected execution.
+If your host uses a hybrid v1/v2 setup, ensure the v2 hierarchy is available with `memory`, `pids`, and `cpu` controllers delegated.
 
 ## Resource enforcement
 
-| Resource | v2 | v1 |
-|----------|----|----|
-| Memory | `memory.max` | `memory.limit_in_bytes` |
-| CPU | `cpu.max` (quota/period) | `cpu.cfs_quota_us` |
-| Processes | `pids.max` | `pids.max` |
-| OOM detection | `memory.events` | `memory.oom_control` |
-| CPU usage | `cpu.stat` (usage_usec) | `cpuacct.usage` |
-| Memory peak | `memory.peak` | `memory.max_usage_in_bytes` |
+The supervisor sets cgroup limits after spawning the proxy child:
+
+| Resource | Cgroup file | What happens on limit |
+|---|---|---|
+| Memory | `memory.max` | Kernel OOM kills the process (SIGKILL) |
+| Processes | `pids.max` | `fork()` returns EAGAIN |
+| CPU rate | `cpu.max` (quota/period) | Kernel throttles (doesn't kill) |
+
+Wall time is enforced by the supervisor's `try_wait` poll loop, not by cgroups. CPU time is throttled by `cpu.max` but not used as a kill trigger - the wall timer catches everything.
+
+## Post-mortem evidence
+
+After the child exits, the supervisor reads cgroup counters:
+
+| Metric | Cgroup file | Used for |
+|---|---|---|
+| CPU usage | `cpu.stat` (usage_usec) | `result.cpu_time` |
+| Memory peak | `memory.peak` | `result.memory_peak` |
+| OOM killed | `memory.events` (oom_kill) | Verdict = MLE |
+| Full evidence | All of the above | `cgroup_evidence` in launch evidence |
+
+## Docker compatibility
+
+Inside Docker, cgroup access requires `--cap-add SYS_ADMIN` and `--cgroupns=host`. The supervisor:
+
+1. Probes for writable controllers before use
+2. Falls back gracefully in permissive mode (warns, continues without limits)
+3. Fails closed in strict mode (rejects execution if cgroup setup fails)
 
 ## Instance isolation
 
-Each sandbox gets its own cgroup with a sanitised instance ID. Path traversal characters in instance IDs are rejected. On cleanup, all processes in the cgroup are killed before removal.
+Each sandbox gets a unique cgroup at `/sys/fs/cgroup/rustbox/sb-{uid}`. The instance ID is derived from the UID pool allocation (60000-60999). Path traversal in instance IDs is rejected. On cleanup, `Isolate::drop` removes the cgroup directory.
+
+## Per-job reaper
+
+The reaper polls every 5 seconds and checks each running job against its `wall_time_limit_secs + 10s` grace period. Jobs without a wall time limit fall back to 120s. This catches orphaned jobs from crashed nodes without interfering with legitimately long executor workloads.

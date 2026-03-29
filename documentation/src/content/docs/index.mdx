@@ -3,17 +3,18 @@ title: rustbox
 description: Kernel-enforced sandboxing for untrusted code execution
 ---
 
-**rustbox** is a secure process isolation system for competitive programming judges, inspired by [IOI Isolate](https://github.com/ioi/isolate). It provides kernel-enforced sandboxing for untrusted code execution with deterministic resource enforcement and evidence-backed verdict provenance.
+**rustbox** is a secure code execution sandbox for competitive programming judges and LLM agent runtimes. It provides kernel-enforced isolation with deterministic resource limits, seccomp-bpf syscall filtering, and evidence-backed verdicts.
 
-Built for anyone running code from strangers on the internet - online judges, code playgrounds, interview platforms, educational tools.
+Two profiles, same binary. **Judge** mode for tight competitive programming limits. **Executor** mode for relaxed LLM agent workloads.
 
 ### What it does
 
 - Runs 8 languages (Python, C, C++, Java, Go, Rust, JavaScript, TypeScript) in isolated sandboxes
-- Enforces CPU time, wall time, memory, and process limits via the kernel (not userspace polling)
+- Enforces wall time, memory, CPU, process, file size, and fd limits via the kernel
 - Classifies verdicts (AC, TLE, MLE, RE, SIG) from kernel evidence, not guesswork
 - Exposes a REST API with async polling, sync `?wait=true`, and webhook delivery
-- Ships as a single static binary. No Docker, no VMs, no JVM dependency.
+- Ships as a single binary. No Docker daemon, no Redis, no JVM dependency.
+- 260+ req/s throughput with full isolation (measured, not projected)
 
 ### How it's different
 
@@ -21,67 +22,69 @@ Built for anyone running code from strangers on the internet - online judges, co
 |---|---|---|---|
 | Deployment | 1 binary + SQLite | Docker + Rails + PostgreSQL + Redis | `make install` |
 | Languages | 8 | 60+ | Any (manual config) |
-| Isolation | Namespaces + cgroups + seccomp + capabilities | Docker container (same primitives, thicker abstraction) | cgroups + mount |
-| Compile-time safety | Typestate chain (misordering = compiler error) | Runtime checks | Runtime checks |
-| Verdict source | Kernel evidence (cgroup OOM events, /proc, waitpid) | Exit code + wall time heuristics | Exit code heuristics |
-| API modes | Async polling + sync `?wait=true` + webhooks (HMAC) | Polling only | CLI only |
-| Security audit | All 11 findings resolved ([audit report](/specs)) | Community-tested, CVE-2024-28185 patched | Mature, well-reviewed |
-| Setup time | `docker compose up` | Docker Compose + env config (~15 min) | `make install` |
+| Isolation | Namespaces + cgroups v2 + seccomp + capabilities | Docker container | cgroups + mount |
+| Safety model | Compile-time typestate (misordering = compiler error) | Runtime checks | Runtime checks |
+| Verdict source | Kernel evidence (cgroup OOM, waitpid, /proc) | Exit code heuristics | Exit code heuristics |
+| API modes | Async + sync `?wait=true` + webhooks (HMAC) | Polling only | CLI only |
+| Profiles | Judge (tight) + Executor (relaxed) | Single mode | Single mode |
 
-### Security model at a glance
+### Security model
+
+8 layers of kernel-enforced isolation, applied in a compile-time verified order:
 
 | Layer | Primitive | What it prevents |
-|-------|----------|-----------------|
-| 1 | PID namespace | Seeing host processes |
+|---|---|---|
+| 1 | PID + IPC + UTS namespaces | Seeing or signalling host processes |
 | 2 | Mount namespace + chroot | Accessing host filesystem |
-| 3 | Network namespace | Network access |
-| 4 | Cgroups v1/v2 | Memory bombs, fork bombs, CPU hogging |
-| 5 | Seccomp-BPF | Dangerous syscalls (ptrace, mount, bpf) |
-| 6 | Capability drop | Privilege escalation |
-| 7 | Credential drop | Running as root |
-| 8 | NO_NEW_PRIVS | Regaining privileges via setuid |
+| 3 | Network namespace | Network access (judge mode) |
+| 4 | Cgroups v2 (memory, CPU, PIDs) | Memory bombs, fork bombs, CPU abuse |
+| 5 | Seccomp-BPF (52 rules) | Dangerous syscalls (ptrace, mount, bpf, io_uring) |
+| 6 | Capability drop (all 5 sets zeroed) | Privilege escalation |
+| 7 | Credential drop (setresuid/setresgid) | Running as root |
+| 8 | NO_NEW_PRIVS | Regaining privileges via setuid binaries |
 
-:::note[Design Note]
-Most sandboxing tools bolt security on as an afterthought. rustbox starts from the kernel and works up. The typestate chain makes it a compiler error to run code without applying all 8 layers first. See [Architecture](/architecture/) for the full story.
-:::
+Only `Sandbox<ExecReady>` can call `exec_payload()`. Misordering is a compile error. See [Architecture](/architecture/) for the full story.
 
 ---
 
 ## Installation
 
 ```bash
-cargo build --release
+cargo build --release -p rustbox -p judge-service
 ```
 
-Three binaries, same codebase:
-- `target/release/judge` - judge-focused commands (recommended)
-- `target/release/isolate` - sandbox-only commands
-- `target/release/rustbox` - accepts all commands
+Two packages:
+- `rustbox` - the sandbox binary (CLI + proxy)
+- `judge-service` - HTTP API server
 
 ### System requirements
 
-- Linux with cgroups v2 (or v1 fallback)
-- Python 3, g++, OpenJDK 21 for the respective languages
-- Root access for strict mode (permissive works without it)
+- Linux with cgroups v2
+- Root access for sandbox isolation (namespaces, cgroups, chroot)
+- Language runtimes for the languages you want to support (Python 3, g++, JDK 21, etc.)
 
 ```bash
-judge check-deps --verbose
+# Check what's available
+sudo target/release/rustbox check-deps --verbose
 ```
 
 ## Your first execution
 
-No root needed. Start with permissive mode.
+Requires root for namespace isolation:
 
 ```bash
 # Python
-judge execute-code --permissive --language python --code 'print(2 ** 10)'
+sudo target/release/rustbox execute-code \
+  --language python --code 'print(2 ** 10)'
 
-# C++
-judge execute-code --permissive --language cpp --code '#include<iostream>
-int main(){std::cout<<42<<std::endl;}'
+# C++ (compiled + executed)
+sudo target/release/rustbox execute-code \
+  --language cpp --code '#include<iostream>
+int main() { std::cout << 42 << std::endl; }'
 
 # Java
-judge execute-code --permissive --language java --code 'public class Main {
+sudo target/release/rustbox execute-code \
+  --language java --code 'public class Main {
     public static void main(String[] args) {
         System.out.println(42);
     }
@@ -90,25 +93,56 @@ judge execute-code --permissive --language java --code 'public class Main {
 
 The output is a JSON verdict with stdout, stderr, timing, memory usage, and exit code.
 
-## Permissive vs Strict
-
-| | Permissive | Strict |
-|---|---|---|
-| Needs root | No | Yes |
-| Namespaces | Skipped | PID + mount + network |
-| Cgroups | Best-effort | Enforced |
-| Seccomp | Applied | Applied |
-| Credential drop | Skipped (can't without root) | Enforced |
-| Use case | Development, CI | Production |
-
-:::note[Design Note]
-Permissive mode isn't "insecure mode". It still applies seccomp filters, rlimits, and whatever controls it can without root. It gracefully degrades instead of failing. This lets you develop and test without `sudo` while strict mode guarantees the full chain in production.
-:::
-
-## Strict mode
+## HTTP API
 
 ```bash
-sudo judge execute-code --strict --language python --code 'print(1)'
+# Start judge service (judge profile, SQLite)
+docker compose up judge
+
+# Or executor profile
+docker compose up executor
+
+# Submit and wait
+curl -s -X POST "http://localhost:4096/api/submit?wait=true" \
+  -H "Content-Type: application/json" \
+  -d '{"language": "python", "code": "print(42)"}' | jq
 ```
 
-Strict mode fails closed. If any security control can't be applied, the execution is rejected outright. There's no "try anyway" path.
+See [API Reference](/api/) for full endpoint documentation.
+
+## Two profiles
+
+| | Judge | Executor |
+|---|---|---|
+| Config | `config.json` | `config-executor.json` |
+| Memory | 256 MB | 2 GB |
+| Wall time | 7 seconds | 60 seconds |
+| CPU time | 4 seconds | 30 seconds |
+| Processes | 10 | 64 |
+| Network | Blocked | Filtered |
+| Use case | Competitive programming | LLM agents, notebooks |
+
+```bash
+# Docker
+docker build -t rustbox .                                  # judge
+docker build -t rustbox-executor -f Dockerfile.executor .  # executor
+
+# Docker Compose
+docker compose up judge       # judge + SQLite
+docker compose up executor    # executor + SQLite
+docker compose up judge-pg    # judge + PostgreSQL (multi-node)
+```
+
+## Development
+
+```bash
+python dev.py build        # cargo build
+python dev.py test         # fmt + clippy + cargo test
+python dev.py stress       # parallel stress test (260+ req/s, verifies results)
+python dev.py bench        # throughput benchmark (tiers 1-1000)
+python dev.py adversarial  # 22 adversarial + 4 correctness + 11 recovery tests
+python dev.py curl         # quick smoke test
+python dev.py backend      # start judge-service locally (sudo)
+```
+
+Set `RUSTBOX_API_KEY=your-secret` for production deployments.

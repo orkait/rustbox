@@ -98,8 +98,7 @@ The HTTP service reads these at startup. All have sensible defaults.
 | `RUSTBOX_SYNC_WAIT_TIMEOUT_SECS` | `30` | Seconds before `?wait=true` times out |
 | `RUSTBOX_WEBHOOK_TIMEOUT_SECS` | `10` | Seconds for webhook HTTP delivery |
 | `RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS` | `false` | Allow `http://localhost` webhook URLs (dev mode) |
-| `RUSTBOX_STALE_TIMEOUT_SECS` | `300` | Reaper timeout for stuck jobs |
-| `RUSTBOX_REAPER_INTERVAL_SECS` | `60` | How often the reaper runs |
+| `RUSTBOX_REAPER_INTERVAL_SECS` | `5` | How often the reaper checks for stuck jobs |
 | `RUSTBOX_RATE_LIMIT` | `0` (off) | Requests per minute per IP |
 | `RUSTBOX_TRUST_PROXY_HEADERS` | `false` | Use X-Forwarded-For for rate limiting IP |
 | `RUSTBOX_DRAIN_TIMEOUT_SECS` | `35` | Graceful shutdown drain timeout |
