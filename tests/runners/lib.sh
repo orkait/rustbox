@@ -179,6 +179,12 @@ assert_result() {
     stdout=$(parse_field "$resp" "stdout")
     signal=$(parse_field "$resp" "signal")
 
+    if [ -z "$verdict" ]; then
+        red "  FAIL"; printf " [%s] no verdict received\n" "$test_name"
+        dim "        response: "; echo "$resp" | python3 -c "import sys,json; json.dump(json.load(sys.stdin),sys.stdout,indent=2)" 2>/dev/null; echo
+        return 1
+    fi
+
     local passed=true
     local reason=""
 
@@ -259,7 +265,7 @@ run_manifest() {
         [ -z "$timeout_sec" ] && timeout_sec=10
 
         _TOTAL=$((_TOTAL + 1))
-        local progress="[$_TOTAL/$((count + _TOTAL - _TOTAL))]"
+        local progress="[$_TOTAL]"
 
         dim "  $progress $name"; [ -n "$description" ] && dim " - $description"; echo
 
