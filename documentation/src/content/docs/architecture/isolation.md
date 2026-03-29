@@ -70,13 +70,13 @@ A BPF program loaded into the kernel that intercepts every syscall. `io_uring` g
 
 ## Privilege stripping (layers 6-8)
 
-After the sandbox environment is set up, we strip everything:
+After the sandbox environment is set up, we strip everything in three steps:
 
-1. **Drop all capabilities** from bounding, ambient, effective, permitted, and inheritable sets
+1. **Drop bounding + ambient capabilities** during runtime hygiene (before credential drop)
 2. **Drop to unprivileged UID/GID** from the UID pool (range 60000-60999)
-3. **Set NO_NEW_PRIVS** - even setuid binaries won't grant privileges
+3. **Zero remaining caps + set NO_NEW_PRIVS** - effective, permitted, inheritable sets cleared, then NO_NEW_PRIVS locked
 
-The order matters. You must drop capabilities before dropping UID. You must set NO_NEW_PRIVS last.
+The order matters. Bounding caps must drop before UID change (they control what the process CAN gain). Process caps drop after UID change (they control what the process HAS). NO_NEW_PRIVS is last because it's irreversible.
 
 :::note[Design Note]
 This ordering is enforced by the [typestate chain](/architecture/typestate/), not by convention. If you try to call `exec_payload()` before credentials are dropped, it's a compile error. We don't trust developers (including ourselves) to remember the right order.
