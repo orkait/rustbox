@@ -21,7 +21,8 @@ docs-site/
 isolate-read-only/
 fuzz/
 benches/
-tests/
+tests/*.rs
+tests/typestate_compile_fail/
 k8s/
 *.pem
 *.key
