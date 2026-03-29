@@ -96,8 +96,8 @@ int main() {
     // Warmup
     for _ in 0..WARMUP_ITERATIONS {
         let _ = Command::new("rustbox")
-            .arg("run")
-            .arg("--lang=cpp17")
+            .arg("execute-code")
+            .arg("--language=cpp")
             .arg("--code")
             .arg(code)
             .output();
@@ -107,8 +107,8 @@ int main() {
     for _ in 0..ITERATIONS {
         let start = Instant::now();
         let _ = Command::new("rustbox")
-            .arg("run")
-            .arg("--lang=cpp17")
+            .arg("execute-code")
+            .arg("--language=cpp")
             .arg("--code")
             .arg(code)
             .output();
@@ -147,8 +147,8 @@ fn benchmark_python_hello_world() -> BenchmarkResult {
     // Warmup
     for _ in 0..WARMUP_ITERATIONS {
         let _ = Command::new("rustbox")
-            .arg("run")
-            .arg("--lang=python3.11")
+            .arg("execute-code")
+            .arg("--language=python")
             .arg("--code")
             .arg(code)
             .output();
@@ -158,8 +158,8 @@ fn benchmark_python_hello_world() -> BenchmarkResult {
     for _ in 0..ITERATIONS {
         let start = Instant::now();
         let _ = Command::new("rustbox")
-            .arg("run")
-            .arg("--lang=python3.11")
+            .arg("execute-code")
+            .arg("--language=python")
             .arg("--code")
             .arg(code)
             .output();
@@ -204,8 +204,8 @@ public class Main {
     // Warmup
     for _ in 0..WARMUP_ITERATIONS {
         let _ = Command::new("rustbox")
-            .arg("run")
-            .arg("--lang=java21")
+            .arg("execute-code")
+            .arg("--language=java")
             .arg("--code")
             .arg(code)
             .output();
@@ -215,8 +215,8 @@ public class Main {
     for _ in 0..ITERATIONS {
         let start = Instant::now();
         let _ = Command::new("rustbox")
-            .arg("run")
-            .arg("--lang=java21")
+            .arg("execute-code")
+            .arg("--language=java")
             .arg("--code")
             .arg(code)
             .output();

@@ -58,6 +58,9 @@ COPY tests/config/config-executor.json /etc/rustbox/config-executor.json
 RUN chmod 644 /etc/rustbox/*.json \
     && cp /etc/rustbox/config-judge.json /etc/rustbox/config.json
 
+# Test payloads
+COPY tests/payloads/ /opt/rustbox-tests/payloads/
+
 # Stress script
 COPY docker/stress/run-stress-custom.sh /usr/local/bin/run-stress.sh
 RUN chmod +x /usr/local/bin/run-stress.sh
