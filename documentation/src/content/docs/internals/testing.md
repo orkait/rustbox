@@ -1,57 +1,81 @@
 ---
 title: Testing
-description: CI lanes, test tiers, unsafe audit
+description: How we prove the sandbox works - unit tests, adversarial attacks, and stress benchmarks
 ---
 
-## CI structure
-
-Three lanes, ~2 minutes total:
-
-```
-build-and-core-tests (85s) → strict-compile-fail (30s)
-supply-chain-audit (25s, parallel)
-```
-
-### Build + Core Tests
-
-106 unit tests across the main crate and judge-service. Single-threaded to prevent workspace race conditions. Integration tests (67 total) are ignored in CI because they require root.
-
-### Compile-Fail (Typestate)
-
-8 trybuild compile-fail tests verify that skipping or reordering typestate steps produces compiler errors.
-
-### Supply Chain Audit
-
-- **Dependency audit** (cargo-deny) - CVE checks, license validation, source verification
-
-## Local testing
+## The short version
 
 ```bash
-# All tests (permissive, no root)
-cargo test --all -- --nocapture
-
-# Strict mode (requires root)
-sudo cargo test --test integration_execution -- --test-threads=1 --include-ignored
-
-# Using dev.py helpers
-python3 dev.py test          # fmt + clippy + cargo test
-python3 dev.py stress        # parallel stress (260+ req/s, verifies every result)
-python3 dev.py bench         # throughput benchmark (tiers 1-1000)
-python3 dev.py adversarial   # 22 adversarial + 4 correctness + 11 recovery
-
-# Dependency audit
-cargo deny check
+python3 dev.py test          # does it compile clean?
+python3 dev.py adversarial   # can malicious code escape?
+python3 dev.py stress        # does it hold under load?
 ```
+
+## CI
+
+Two jobs, every push:
+
+| Job | Time | What |
+|---|---|---|
+| `build-and-test` | ~50s | fmt check, clippy, 106 unit tests, 8 compile-fail tests |
+| `supply-chain-audit` | ~25s | cargo-deny (CVE, license, source verification) |
+
+Integration tests (67 total) are `#[ignore]` in CI - they need root for namespace isolation. Run them manually with `sudo cargo test --include-ignored`.
 
 ## Test tiers
 
-| Tier | Count | When | How |
-|------|-------|------|-----|
-| Unit | 106 | Every push | `cargo test --all` |
-| Integration (ignored in CI, need root) | 67 | Manual / pre-release | `sudo ... --include-ignored` |
-| Compile-fail (trybuild) | 8 | Every push | `cargo test --test trybuild` |
-| Adversarial | 22 | Manual | `python3 dev.py adversarial` |
-| Correctness | 4 | Manual | included in integration suite |
-| Recovery | 11 | Manual | included in integration suite |
-| Algorithm suite | 33 | Manual | included in integration suite |
-| Supply chain | - | Every push | `cargo deny check` |
+| What | Count | How | Needs root? |
+|---|---|---|---|
+| Unit tests | 106 | `cargo test --workspace` | No |
+| Compile-fail (typestate) | 8 | `cargo test --test trybuild` | No |
+| Adversarial exploits | 22 | `dev.py adversarial` (Docker) | Yes (Docker) |
+| Correctness | 4 | Included in adversarial suite | Yes (Docker) |
+| Recovery (attack-then-verify) | 11 | Included in adversarial suite | Yes (Docker) |
+| Algorithm suite | 33 | 13 problems x 3 languages | Yes (Docker) |
+| Integration (Rust) | 67 | `sudo cargo test --include-ignored` | Yes (host) |
+| Stress | configurable | `dev.py stress` (Docker) | Yes (Docker) |
+
+## Adversarial tests
+
+22 exploit attempts, run inside Docker with full sandbox isolation. Every one must fail:
+
+- **Process containment** - fork bomb, thread bomb
+- **Memory** - allocate until OOM
+- **Time** - infinite loop, SIGXCPU handler catch attempt
+- **Filesystem** - read /etc/passwd, write to /bin, escape chroot
+- **Proc/sys** - read /proc/cpuinfo, /proc/meminfo, walk /sys
+- **Syscall filtering** - unshare(CLONE_NEWUSER), mount(), ptrace()
+- **Resource exhaustion** - fd exhaustion, file size bomb, inode bomb
+- **Network** - TCP connect, DNS lookup
+- **Privilege escalation** - setuid(0), setgid(0)
+
+The recovery suite interleaves attacks with correctness checks - fork bomb, then verify sieve(500000) still works. Proves the service recovers cleanly between malicious inputs.
+
+## Compile-fail tests
+
+8 trybuild tests verify the typestate chain catches mistakes at compile time:
+
+- Skip namespace setup - compiler error
+- Skip mount hardening - compiler error
+- Skip cgroup attach - compiler error
+- Skip root transition - compiler error
+- Early exec from FreshChild - compiler error
+- Early exec from NamespacesReady - compiler error
+- Early exec from MountsPrivate - compiler error
+- Reuse consumed state - compiler error
+
+If any of these compile successfully, the typestate safety guarantee is broken.
+
+## Stress testing
+
+`dev.py stress` submits requests in parallel using Python's `ThreadPoolExecutor`, verifies every result:
+
+```
+  1x   1/1       25ms    39.5/s  PASS
+  5x   5/5       27ms   182.3/s  PASS
+ 10x  10/10      49ms   203.9/s  PASS
+ 25x  25/25      77ms   324.3/s  PASS
+ 50x  50/50     200ms   249.9/s  PASS
+```
+
+`dev.py bench` extends to 1000x for throughput measurement. Every single response is checked for `verdict=AC` and `stdout=41538`.
