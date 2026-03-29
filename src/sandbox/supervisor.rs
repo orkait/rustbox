@@ -161,15 +161,17 @@ pub fn launch_with_supervisor(
         .join()
         .unwrap_or_else(|_| (Vec::new(), OutputIntegrity::WriteError));
 
-    let mut cgroup_evidence = None;
-    if cgroup_enforced {
-        if let Some(controller) = cgroup {
-            match controller.collect_evidence(&req.instance_id) {
-                Ok(ev) => cgroup_evidence = Some(ev),
-                Err(e) => evidence_collection_errors.push(format!("cgroup_evidence: {e}")),
+    let cgroup_evidence = if let (true, Some(controller)) = (cgroup_enforced, cgroup) {
+        match controller.collect_evidence(&req.instance_id) {
+            Ok(ev) => Some(ev),
+            Err(e) => {
+                evidence_collection_errors.push(format!("cgroup_evidence: {e}"));
+                None
             }
         }
-    }
+    } else {
+        None
+    };
 
     // Phase 8: Build outcome
     let (exit_code, term_signal) = match &exit_status {
@@ -205,18 +207,16 @@ pub fn launch_with_supervisor(
 
     let mut result = proxy_status.to_execution_result();
 
-    if cgroup_enforced {
-        if let Some(controller) = cgroup {
-            if let Ok(cpu_usec) = controller.get_cpu_usage() {
-                result.cpu_time = cpu_usec as f64 / constants::USEC_PER_SEC;
-            }
-            if let Ok(mem_peak) = controller.get_memory_peak() {
-                result.memory_peak = mem_peak;
-            }
-            if let Ok(true) = controller.check_oom() {
-                result.status = ExecutionStatus::MemoryLimit;
-                result.success = false;
-            }
+    if let (true, Some(controller)) = (cgroup_enforced, cgroup) {
+        if let Ok(cpu_usec) = controller.get_cpu_usage() {
+            result.cpu_time = cpu_usec as f64 / constants::USEC_PER_SEC;
+        }
+        if let Ok(mem_peak) = controller.get_memory_peak() {
+            result.memory_peak = mem_peak;
+        }
+        if let Ok(true) = controller.check_oom() {
+            result.status = ExecutionStatus::MemoryLimit;
+            result.success = false;
         }
     }
 
