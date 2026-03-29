@@ -1,7 +1,4 @@
-x-judge-common: &judge-common
-  build:
-    context: .
-    dockerfile: Dockerfile
+x-common: &common
   command: ["/usr/local/bin/judge-service"]
   cap_drop: [ALL]
   cap_add: [SYS_ADMIN, SETUID, SETGID, NET_ADMIN, MKNOD, DAC_OVERRIDE]
@@ -10,6 +7,8 @@ x-judge-common: &judge-common
     - seccomp=unconfined
   cgroupns: host
   stop_grace_period: 45s
+  ports:
+    - "4096:4096"
   healthcheck:
     test: ["CMD", "curl", "-sf", "http://localhost:4096/api/health/ready"]
     interval: 10s
@@ -18,69 +17,37 @@ x-judge-common: &judge-common
     start_period: 5s
   volumes:
     - /sys/fs/cgroup:/sys/fs/cgroup:rw
-  environment: &judge-env
+  environment: &env
     RUSTBOX_WORKERS: "4"
     RUSTBOX_PORT: "4096"
     RUST_LOG: "info"
+    RUSTBOX_DATABASE_URL: "sqlite:///tmp/rustbox.db"
 
 services:
-  # Judge profile: tight limits (256MB, 7s wall) for competitive programming
+  # docker compose up judge
   judge:
-    <<: *judge-common
-    ports:
-      - "4096:4096"
+    <<: *common
+    build: { context: ., dockerfile: Dockerfile }
     environment:
-      <<: *judge-env
-      RUSTBOX_DATABASE_URL: "sqlite:///tmp/rustbox.db"
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ./tests/config/config-judge.json:/etc/rustbox/config.json:ro
+      <<: *env
 
-  # Executor profile: relaxed limits (2GB, 60s wall) for LLM agents
+  # docker compose up executor
   executor:
-    build:
-      context: .
-      dockerfile: Dockerfile.executor
-    command: ["/usr/local/bin/judge-service"]
-    cap_drop: [ALL]
-    cap_add: [SYS_ADMIN, SETUID, SETGID, NET_ADMIN, MKNOD, DAC_OVERRIDE]
-    security_opt:
-      - no-new-privileges:true
-      - seccomp=unconfined
-    cgroupns: host
-    stop_grace_period: 45s
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:4096/api/health/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-    ports:
-      - "4096:4096"
+    <<: *common
+    build: { context: ., dockerfile: Dockerfile.executor }
     environment:
-      <<: *judge-env
-      RUSTBOX_DATABASE_URL: "sqlite:///tmp/rustbox.db"
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-    profiles:
-      - executor
+      <<: *env
 
-  # Judge with Postgres backend
-  judge-postgres:
-    <<: *judge-common
-    ports:
-      - "4096:4096"
+  # docker compose up judge-pg postgres
+  judge-pg:
+    <<: *common
+    build: { context: ., dockerfile: Dockerfile }
     environment:
-      <<: *judge-env
+      <<: *env
       RUSTBOX_DATABASE_URL: "postgresql://rustbox:rustbox@postgres:5432/rustbox"
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - ./tests/config/config-judge.json:/etc/rustbox/config.json:ro
     depends_on:
       postgres:
         condition: service_healthy
-    profiles:
-      - postgres
 
   postgres:
     image: postgres:16-alpine
@@ -95,8 +62,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-    profiles:
-      - postgres
 
 volumes:
   pg-data:
