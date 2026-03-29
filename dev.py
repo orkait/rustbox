@@ -133,8 +133,8 @@ def cmd_curl():
 def cmd_stress():
     log("Building stress test image...")
     run("docker build -t rustbox-stress -f docker/stress/Dockerfile .")
-    log("Running correctness stress test (serial, verifies every result)...")
-    run("docker run --privileged --cpus=4 --memory=4g --rm rustbox-stress")
+    log("Running parallel stress test (verifies every result)...")
+    run("docker run --privileged --cpus=4 --memory=4g --rm --entrypoint /opt/rustbox-tests/runners/run-stress.sh rustbox-stress")
 
 
 def cmd_bench():
