@@ -186,11 +186,8 @@ impl RustBoxConfig {
 }
 
 impl IsolateConfig {
-    pub fn with_language_defaults(language: &str, instance_id: String) -> Result<Self> {
-        let mut config = Self {
-            instance_id,
-            ..Self::default()
-        };
+    pub fn with_language_defaults(language: &str) -> Result<Self> {
+        let mut config = Self::default();
 
         if let Ok(rustbox_config) = RustBoxConfig::load_default() {
             if let Some(lang) = rustbox_config.get_language_config(language) {
@@ -248,7 +245,7 @@ mod tests {
     use super::*;
 
     fn load(lang: &str) -> IsolateConfig {
-        IsolateConfig::with_language_defaults(lang, format!("test-{}", lang)).unwrap()
+        IsolateConfig::with_language_defaults(lang).unwrap()
     }
 
     fn env_keys(config: &IsolateConfig) -> std::collections::HashSet<String> {

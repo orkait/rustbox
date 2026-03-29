@@ -314,5 +314,8 @@ impl Drop for Isolate {
         if let Some(cg) = self.cgroup.take() {
             let _ = cg.remove(&self.config.instance_id);
         }
+        if self.base_path.exists() {
+            let _ = crate::safety::safe_cleanup::remove_tree_secure(&self.base_path);
+        }
     }
 }

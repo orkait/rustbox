@@ -4,11 +4,8 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
 fn test_config() -> rustbox::config::types::IsolateConfig {
-    let mut config = rustbox::config::types::IsolateConfig::with_language_defaults(
-        "python",
-        "rustbox/0".to_string(),
-    )
-    .unwrap();
+    let mut config =
+        rustbox::config::types::IsolateConfig::with_language_defaults("python").unwrap();
     config.strict_mode = false;
     config
 }

@@ -335,7 +335,7 @@ fn execute_in_sandbox(language: &str, code: &str, stdin: &str) -> Result<Executi
         let _ = rustbox::observability::audit::init_security_logger(None);
     });
 
-    let mut config = IsolateConfig::with_language_defaults(language, "rustbox/0".to_string())
+    let mut config = IsolateConfig::with_language_defaults(language)
         .map_err(|e| format!("config error: {e}"))?;
     let is_root = unsafe { libc::geteuid() } == 0;
     if !is_root {

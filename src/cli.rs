@@ -228,10 +228,8 @@ pub fn run(mode: CliMode) -> Result<()> {
             let mode_label = if strict { "STRICT" } else { "ROOT" };
             eprintln!("Executing {} code ({})", language, mode_label);
 
-            let mut config = crate::config::types::IsolateConfig::with_language_defaults(
-                &language,
-                crate::config::constants::DEFAULT_INSTANCE_ID.to_string(),
-            )?;
+            let mut config =
+                crate::config::types::IsolateConfig::with_language_defaults(&language)?;
             config.strict_mode = strict;
             config.no_seccomp = no_seccomp;
             config.seccomp_policy_file = seccomp_policy.map(std::path::PathBuf::from);

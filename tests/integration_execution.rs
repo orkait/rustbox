@@ -22,16 +22,14 @@ fn init_subsystems() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn permissive_config(language: &str, box_id: u32) -> IsolateConfig {
-    let mut config = IsolateConfig::with_language_defaults(language, format!("rustbox/{}", box_id))
-        .unwrap_or_default();
+fn permissive_config(language: &str, _box_id: u32) -> IsolateConfig {
+    let mut config = IsolateConfig::with_language_defaults(language).unwrap_or_default();
     config.strict_mode = false;
     config
 }
 
-fn strict_config(language: &str, box_id: u32) -> IsolateConfig {
-    let mut config = IsolateConfig::with_language_defaults(language, format!("rustbox/{}", box_id))
-        .unwrap_or_default();
+fn strict_config(language: &str, _box_id: u32) -> IsolateConfig {
+    let mut config = IsolateConfig::with_language_defaults(language).unwrap_or_default();
     config.strict_mode = true;
     config
 }

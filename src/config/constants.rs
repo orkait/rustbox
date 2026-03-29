@@ -64,7 +64,6 @@ pub const SANDBOX_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 pub const SANDBOX_LOCALE: &str = "C.UTF-8";
 pub const SANDBOX_HOSTNAME: &str = "rustbox-sandbox";
 pub const SANDBOX_TEXT_ENCODING: &str = "utf-8";
-pub const DEFAULT_INSTANCE_ID: &str = "rustbox/0";
 
 pub const DEFAULT_VIRTUAL_MEMORY_LIMIT: u64 = 1024 * MB;
 pub const DEFAULT_TMPFS_SIZE_BYTES: u64 = 256 * MB;
