@@ -17,7 +17,7 @@ We chose deny-list because:
 
 nsjail uses allowlists for simple, controlled workloads. They use deny-lists for complex runtimes. We only run complex runtimes.
 
-## The 42-syscall deny-list
+## The 52-syscall deny-list
 
 | Family | Syscalls | Action | Why |
 |--------|----------|--------|-----|

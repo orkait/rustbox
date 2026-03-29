@@ -19,7 +19,7 @@ Rust's type system enforces the order at compile time:
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   FreshChild    │ --> │ NamespacesReady │ --> │  MountsPrivate  │ --> │ CgroupAttached  │
 └─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
-     clone(2)               unshare(2)           MS_PRIVATE on /       cgroup+chroot+rlimits
+  Command::pre_exec        unshare(2)           MS_PRIVATE on /       cgroup+chroot+rlimits
                                                                                   │
                                                                                   ▼
                           ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
@@ -61,7 +61,7 @@ We considered runtime state machines (enum with match) and capability-based desi
 
 | State | What happens | Kernel primitive |
 |-------|-------------|-----------------|
-| `FreshChild` | Process just cloned | `clone(2)` |
+| `FreshChild` | Proxy child spawned via `Command::pre_exec(unshare)` | `std::process::Command` + `pre_exec` |
 | `NamespacesReady` | PID/mount/net namespaces created | `unshare(2)` |
 | `MountsPrivate` | Mount propagation hardened | `mount(MS_PRIVATE\|MS_REC)` |
 | `CgroupAttached` | Cgroup joined, chroot/mounts/rlimits set | cgroup writes, `mount(2)`, `chroot(2)` |

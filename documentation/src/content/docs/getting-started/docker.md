@@ -8,11 +8,14 @@ rustbox is designed to run inside Docker containers without `--privileged`. This
 ## Quick start
 
 ```bash
-# SQLite mode (single node, no external deps)
-docker compose -f docker-compose.judge.yml up judge
+# Judge profile - SQLite mode (single node, no external deps)
+docker compose up judge
 
-# PostgreSQL mode (multi-node ready)
-docker compose -f docker-compose.judge.yml --profile postgres up
+# Executor profile
+docker compose up executor
+
+# Judge with PostgreSQL (multi-node ready)
+docker compose up judge-pg
 ```
 
 ## Why not --privileged
@@ -54,18 +57,24 @@ docker run \
 
 ## Docker Compose
 
-The project includes `docker-compose.judge.yml` with two service profiles:
+The project includes `docker-compose.yml` at the repo root with three services. Two Dockerfiles are provided: `Dockerfile` (judge profile) and `Dockerfile.executor` (executor profile).
 
-**SQLite (default)** - single node, zero external dependencies:
+**Judge (SQLite, default)** - single node, zero external dependencies:
 
 ```bash
-docker compose -f docker-compose.judge.yml up judge
+docker compose up judge
 ```
 
-**PostgreSQL** - multi-node ready, LISTEN/NOTIFY job dispatch:
+**Executor** - relaxed limits for trusted workloads:
 
 ```bash
-docker compose -f docker-compose.judge.yml --profile postgres up
+docker compose up executor
+```
+
+**Judge + PostgreSQL** - multi-node ready, LISTEN/NOTIFY job dispatch:
+
+```bash
+docker compose up judge-pg
 ```
 
 All capabilities, security options, health checks, and stop grace periods are preconfigured.
@@ -115,7 +124,7 @@ Returns `200` when enforcement is available (`strict` or `degraded`). Returns `5
 
 ### Docker Compose healthcheck
 
-Already configured in `docker-compose.judge.yml`:
+Already configured in `docker-compose.yml`:
 
 ```yaml
 healthcheck:
@@ -132,13 +141,13 @@ healthcheck:
 livenessProbe:
   httpGet:
     path: /api/health
-    port: 8080
+    port: 4096
   initialDelaySeconds: 5
   periodSeconds: 10
 readinessProbe:
   httpGet:
     path: /api/health/ready
-    port: 8080
+    port: 4096
   initialDelaySeconds: 5
   periodSeconds: 10
 ```
@@ -156,7 +165,7 @@ When Docker sends `SIGTERM` (on `docker stop` or rolling update):
 Set `stop_grace_period` (Compose) or `--stop-timeout` (docker run) to at least 45s to give workers time to finish. The default Docker timeout of 10s will SIGKILL in-flight sandbox executions.
 
 :::note[Design Note]
-The 45s grace period comes from: max wall time (30s default) + SIGTERM-to-SIGKILL escalation (200ms) + cgroup cleanup + evidence collection + DB write buffer. If you increase `RUSTBOX_SYNC_WAIT_TIMEOUT_SECS` beyond 30s, increase the grace period to match.
+The 45s grace period comes from: max wall time (30s default) + in-flight sandbox cleanup + evidence collection + DB write buffer. If you increase wall time limits, increase the grace period to match.
 :::
 
 ## Environment variables
@@ -179,6 +188,6 @@ Full list in [Configuration](/getting-started/configuration/). The most relevant
 
 **Health endpoint shows `enforcement_mode: "none"`** - Neither cgroups nor namespaces are available. Verify all 6 capabilities are granted and seccomp is unconfined.
 
-**Submissions stuck as "running" after restart** - The reaper (runs every 60s by default) will mark them as error after `RUSTBOX_STALE_TIMEOUT_SECS` (default 300s). To speed this up, lower the stale timeout.
+**Submissions stuck as "running" after restart** - The reaper (runs every 5s) checks each job against its wall time limit + 10s grace. Jobs without a wall time limit fall back to 120s. No manual intervention needed.
 
 **Volume-mounted config.json ignored** - Check the container logs for "Loading world-writable config file" warnings. Docker volume mounts sometimes get 0777 permissions. The config is still loaded (with a warning), but if you don't see the warning, verify the mount path matches where rustbox looks for config (`./config.json` relative to the binary, or `/etc/rustbox/config.json`).

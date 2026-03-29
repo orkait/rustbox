@@ -3,7 +3,12 @@ title: Configuration
 description: Tune limits, add languages, customize behavior
 ---
 
-rustbox uses a layered configuration system. Defaults come from `config.json`, CLI flags override them, and the judge-service reads environment variables on top.
+rustbox uses a layered configuration system. Defaults come from config files, CLI flags override them, and the judge-service reads environment variables on top.
+
+There are two config files at the repo root:
+
+- **`config.json`** - Judge profile (tight limits). Used by the judge-service for competitive programming and untrusted code evaluation.
+- **`config-executor.json`** - Executor profile (relaxed limits). Used for trusted workloads that need more resources and fewer restrictions.
 
 ## config.json
 
@@ -106,7 +111,7 @@ We deliberately don't support YAML or TOML config files for the judge-service. E
 
 ## Seccomp configuration
 
-Seccomp filtering is on by default. The built-in deny-list blocks 42 dangerous syscalls across 12 families.
+Seccomp filtering is on by default. The built-in deny-list blocks 52 dangerous syscalls across 12 families.
 
 ```bash
 # Disable seccomp (not recommended)

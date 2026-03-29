@@ -14,7 +14,7 @@ description: The journey of a code submission from arrival to verdict
 
 ## Phase 1: Setup
 
-`Isolate::new(config)` allocates a UID from the atomic bitset pool (60000-60999), creates a cgroup, and captures a baseline snapshot of the workspace.
+`Isolate::new(config)` allocates a UID from the atomic bitset pool (60000-60999), creates a cgroup, and sets up the workspace directory.
 
 ## Phase 2: Execution
 
@@ -30,18 +30,18 @@ C++ compilation runs outside the sandbox. `g++` links against system libraries, 
 
 ## Phase 3: Supervision
 
-The Supervisor `clone()`s into new namespaces. The Proxy `fork()`s the actual payload:
+The Supervisor spawns a proxy child via `std::process::Command` with namespace unsharing in the `pre_exec` hook. The Proxy then `fork()`s the actual payload:
 
 ```
 Supervisor (host)
-  └── Proxy (namespaced)
+  └── Proxy (fork+exec with pre_exec(unshare))
         └── Payload (namespaced + chrooted + cgroup + seccomp)
 ```
 
-If CPU or wall time expires, the Supervisor sends `SIGTERM` to the process group, waits 200ms, then sends `SIGKILL`. Untrusted code doesn't get a graceful shutdown.
+If wall time expires, the Supervisor sends `SIGKILL` to the process group immediately. No SIGTERM, no grace period. CPU time is enforced by the kernel via `cpu.max` throttling, not by the supervisor.
 
 :::note[Design Note]
-The two-process design exists because the Proxy needs to run the typestate chain before exec'ing the payload. `exec()` replaces the process image, so all setup must complete first.
+The two-process design exists because the Proxy needs to run the typestate chain after exec. `pre_exec` unshares namespaces before the process image is replaced, and the typestate chain runs inside the proxy child after exec.
 :::
 
 ## Phase 4: Evidence collection
@@ -50,12 +50,11 @@ After the payload exits, the Supervisor collects wait status, cgroup evidence, t
 
 ## Phase 5: Cleanup
 
-1. Kill remaining processes in the cgroup
-2. Verify the baseline (workspace state matches snapshot)
-3. Remove the cgroup hierarchy
-4. Wipe the workspace (fd-safe, no symlink following)
-5. Release the UID back to the pool
+1. Wipe the workspace (fd-safe, no symlink following)
+2. Remove the cgroup hierarchy
+3. Remove the base path
+4. Release the UID back to the pool (flock + atomic bitmap)
 
 :::note[Design Note]
-Cleanup is hygiene, not safety. The sandbox is already destroyed by this point. But baseline verification catches bugs in the sandbox itself: if the workspace changed unexpectedly, something in our setup is wrong.
+Cleanup is hygiene, not safety. The sandbox is already destroyed by this point. The PID namespace kills all descendants when the proxy exits, and cgroup removal is deterministic via `Isolate::drop`.
 :::
