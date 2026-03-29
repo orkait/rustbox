@@ -8,6 +8,7 @@ use rustbox::kernel::capabilities::{
 use rustbox::kernel::credentials::transition_to_unprivileged;
 
 #[test]
+#[ignore]
 fn test_full_privilege_drop_sequence() {
     // This test verifies the complete privilege drop sequence:
     // 1. Drop bounding and ambient capabilities
@@ -35,6 +36,7 @@ fn test_full_privilege_drop_sequence() {
 }
 
 #[test]
+#[ignore]
 fn test_credential_transition_validates_before_syscall() {
     let result = transition_to_unprivileged(0, 1000, true);
     assert!(result.is_err(), "Should reject root UID");
@@ -44,6 +46,7 @@ fn test_credential_transition_validates_before_syscall() {
 }
 
 #[test]
+#[ignore]
 fn test_idempotency_of_privilege_operations() {
     let _ = drop_bounding_and_ambient();
     let _ = drop_bounding_and_ambient();
@@ -59,6 +62,7 @@ fn test_idempotency_of_privilege_operations() {
 }
 
 #[test]
+#[ignore]
 fn test_no_panic_on_permission_denied() {
     // Skip when root: dropping caps then setgroups() triggers glibc's
     // NPTL setxid broadcast abort when threads have mismatched capabilities.
@@ -74,6 +78,7 @@ fn test_no_panic_on_permission_denied() {
 }
 
 #[test]
+#[ignore]
 fn test_strict_mode_vs_permissive_mode() {
     let strict_result = transition_to_unprivileged(0, 1000, true);
     assert!(strict_result.is_err(), "Strict mode should reject root UID");

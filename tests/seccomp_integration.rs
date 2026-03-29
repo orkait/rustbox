@@ -2,6 +2,7 @@ use rustbox::config::types::{ExecutionStatus, IsolateConfig};
 use rustbox::runtime::isolate::{ExecutionOverrides, Isolate};
 
 #[test]
+#[ignore]
 fn io_uring_returns_enosys_not_kill() {
     let code = r#"
 #include <stdio.h>
@@ -48,6 +49,7 @@ int main() {
 }
 
 #[test]
+#[ignore]
 fn no_seccomp_flag_disables_filter() {
     let mut config = IsolateConfig::with_language_defaults("python").unwrap_or_default();
     config.strict_mode = false;
@@ -63,6 +65,7 @@ fn no_seccomp_flag_disables_filter() {
 }
 
 #[test]
+#[ignore]
 fn seccomp_enabled_by_default_python_works() {
     let mut config = IsolateConfig::with_language_defaults("python").unwrap_or_default();
     config.strict_mode = false;

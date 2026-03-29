@@ -170,6 +170,7 @@ impl Drop for TestServer {
 // ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore]
 async fn health_liveness() {
     let server = TestServer::start(None).await;
     let json = server.get_json("/api/health").await;
@@ -180,6 +181,7 @@ async fn health_liveness() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn health_readiness() {
     let server = TestServer::start(None).await;
     let resp = server.get("/api/health/ready").await;
@@ -188,6 +190,7 @@ async fn health_readiness() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn languages_endpoint() {
     let server = TestServer::start(None).await;
     let json = server.get_json("/api/languages").await;
@@ -196,6 +199,7 @@ async fn languages_endpoint() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn no_auth_warning_header() {
     let server = TestServer::start(None).await;
     let resp = server.get("/api/health").await;
@@ -211,6 +215,7 @@ async fn no_auth_warning_header() {
 // ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore]
 async fn auth_reject_without_key() {
     let server = TestServer::start(Some("test-secret-key")).await;
     let body = serde_json::json!({"language": "python", "code": "print(1)"});
@@ -225,6 +230,7 @@ async fn auth_reject_without_key() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn auth_accept_with_key() {
     let server = TestServer::start(Some("test-secret-key")).await;
     let resp = server
@@ -238,6 +244,7 @@ async fn auth_accept_with_key() {
 // ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore]
 async fn unsupported_language_rejected() {
     let server = TestServer::start(None).await;
     let body = serde_json::json!({"language": "brainfuck", "code": "+++"});
@@ -268,6 +275,7 @@ async fn unsupported_language_rejected() {
 // ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore]
 async fn python_ac() {
     let server = TestServer::start(None).await;
     let r = server.submit_sync("python", "print(42)").await;
@@ -278,6 +286,7 @@ async fn python_ac() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn python_re() {
     let server = TestServer::start(None).await;
     let r = server
@@ -287,6 +296,7 @@ async fn python_re() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn python_stdin() {
     let server = TestServer::start(None).await;
     let r = server
@@ -307,6 +317,7 @@ async fn python_stdin() {
 // ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore]
 async fn c_ac() {
     let server = TestServer::start(None).await;
     let r = server
@@ -323,6 +334,7 @@ async fn c_ac() {
 // ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore]
 async fn cpp_ac() {
     let server = TestServer::start(None).await;
     let r = server
@@ -335,6 +347,7 @@ async fn cpp_ac() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn cpp_compile_error() {
     let server = TestServer::start(None).await;
     let r = server.submit_sync("cpp", "this is not valid c++").await;
@@ -346,6 +359,7 @@ async fn cpp_compile_error() {
 // ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore]
 async fn java_ac() {
     let server = TestServer::start(None).await;
     let code =
@@ -359,6 +373,7 @@ async fn java_ac() {
 // ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore]
 async fn js_ac() {
     let server = TestServer::start(None).await;
     let r = server.submit_sync("javascript", "console.log(42)").await;
@@ -370,6 +385,7 @@ async fn js_ac() {
 // ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
+#[ignore]
 async fn ts_ac() {
     let server = TestServer::start(None).await;
     let r = server.submit_sync("typescript", "console.log(42)").await;

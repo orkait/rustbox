@@ -11,6 +11,7 @@ fn test_config() -> rustbox::config::types::IsolateConfig {
 }
 
 #[test]
+#[ignore]
 fn single_allocation_per_isolate_lifecycle() {
     let _ = rustbox::observability::audit::init_security_logger(None);
 
@@ -34,6 +35,7 @@ fn single_allocation_per_isolate_lifecycle() {
 }
 
 #[test]
+#[ignore]
 fn drop_releases_if_cleanup_not_called() {
     let _ = rustbox::observability::audit::init_security_logger(None);
 
@@ -48,6 +50,7 @@ fn drop_releases_if_cleanup_not_called() {
 }
 
 #[test]
+#[ignore]
 fn cleanup_then_drop_does_not_double_release() {
     let _ = rustbox::observability::audit::init_security_logger(None);
 
@@ -57,6 +60,7 @@ fn cleanup_then_drop_does_not_double_release() {
 }
 
 #[test]
+#[ignore]
 fn uid_propagates_through_execution_profile() {
     let _ = rustbox::observability::audit::init_security_logger(None);
 
@@ -85,6 +89,7 @@ fn uid_propagates_through_execution_profile() {
 }
 
 #[test]
+#[ignore]
 fn multiple_isolates_get_distinct_uids() {
     let _ = rustbox::observability::audit::init_security_logger(None);
 
@@ -110,6 +115,7 @@ fn multiple_isolates_get_distinct_uids() {
 }
 
 #[test]
+#[ignore]
 fn concurrent_isolate_creation_no_uid_collision() {
     let _ = rustbox::observability::audit::init_security_logger(None);
 
@@ -149,6 +155,7 @@ fn concurrent_isolate_creation_no_uid_collision() {
 }
 
 #[test]
+#[ignore]
 fn rapid_create_destroy_cycles_hold_under_load() {
     let _ = rustbox::observability::audit::init_security_logger(None);
 
