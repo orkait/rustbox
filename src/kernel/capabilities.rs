@@ -2,7 +2,6 @@ use crate::config::types::{IsolateError, Result};
 use crate::utils::fork_safe_log::{fs_debug_parts, itoa_i32, raw_write};
 use std::fs;
 
-const PR_CAPBSET_READ: libc::c_int = 23;
 const PR_CAPBSET_DROP: libc::c_int = 24;
 const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
 const PR_GET_NO_NEW_PRIVS: libc::c_int = 39;
@@ -12,37 +11,11 @@ const LINUX_CAPABILITY_VERSION_3: u32 = 0x20080522;
 const CAP_ZERO_HEX: &str = "0000000000000000";
 const REQUIRED_CAP_LINES: [&str; 5] = ["CapInh:", "CapPrm:", "CapEff:", "CapBnd:", "CapAmb:"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CapabilityNumber(u32);
-
-impl CapabilityNumber {
-    pub const MAX_SUPPORTED: u32 = 63;
-
-    pub fn new(cap: u32) -> Option<Self> {
-        if cap <= Self::MAX_SUPPORTED {
-            Some(Self(cap))
-        } else {
-            None
-        }
-    }
-
-    pub const fn value(self) -> u32 {
-        self.0
-    }
-}
-
 fn kernel_last_cap() -> u32 {
     fs::read_to_string("/proc/sys/kernel/cap_last_cap")
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok())
         .unwrap_or(40)
-}
-
-pub fn drop_all_capabilities() -> Result<()> {
-    drop_bounding_capabilities()?;
-    drop_ambient_capabilities()?;
-    drop_process_capabilities()?;
-    Ok(())
 }
 
 pub fn drop_bounding_and_ambient() -> Result<()> {
@@ -53,11 +26,6 @@ pub fn drop_bounding_and_ambient() -> Result<()> {
 
 pub fn drop_process_caps_and_verify(strict_mode: bool) -> Result<()> {
     drop_process_capabilities()?;
-    verify_capabilities_zeroed(strict_mode)
-}
-
-pub fn drop_all_capabilities_strict(strict_mode: bool) -> Result<()> {
-    drop_all_capabilities()?;
     verify_capabilities_zeroed(strict_mode)
 }
 
@@ -231,61 +199,9 @@ pub fn check_no_new_privs() -> Result<bool> {
     Ok(rc == 1)
 }
 
-pub fn get_bounding_set() -> Result<Vec<CapabilityNumber>> {
-    let last_cap = kernel_last_cap();
-    let mut caps = Vec::new();
-    for cap in 0..=last_cap {
-        // SAFETY: PR_CAPBSET_READ is read-only.
-        let rc = unsafe { libc::prctl(PR_CAPBSET_READ, cap, 0, 0, 0) };
-        if rc == 1 {
-            caps.push(CapabilityNumber(cap));
-        }
-    }
-    Ok(caps)
-}
-
-#[must_use = "returns capability status string"]
-pub fn get_capability_status() -> Result<String> {
-    let status = fs::read_to_string("/proc/self/status")
-        .map_err(|e| IsolateError::Privilege(format!("failed to read /proc/self/status: {}", e)))?;
-    let lines: Vec<&str> = status
-        .lines()
-        .filter(|line| line.starts_with("Cap"))
-        .collect();
-    Ok(lines.join("\n"))
-}
-
-#[must_use]
-pub fn get_current_ids() -> String {
-    #[cfg(target_os = "linux")]
-    {
-        use nix::unistd::{getegid, geteuid, getgid, getuid};
-        format!(
-            "UID: real={}, effective={} | GID: real={}, effective={}",
-            getuid().as_raw(),
-            geteuid().as_raw(),
-            getgid().as_raw(),
-            getegid().as_raw()
-        )
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        "UID/GID information unavailable on non-Linux platforms".to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn capability_number_range_is_checked() {
-        assert!(CapabilityNumber::new(0).is_some());
-        assert!(CapabilityNumber::new(41).is_some());
-        assert!(CapabilityNumber::new(63).is_some());
-        assert!(CapabilityNumber::new(64).is_none());
-    }
 
     #[test]
     fn kernel_last_cap_is_sane() {
@@ -294,17 +210,11 @@ mod tests {
             last >= 36,
             "kernel should support at least CAP_MAC_ADMIN(36)"
         );
-        assert!(last <= CapabilityNumber::MAX_SUPPORTED);
+        assert!(last <= 63, "cap_last_cap exceeds max supported (63)");
     }
 
     #[test]
     fn no_new_privs_api_is_callable() {
         let _ = check_no_new_privs();
-    }
-
-    #[test]
-    fn capability_status_contains_cap_lines() {
-        let status = get_capability_status().unwrap();
-        assert!(status.contains("Cap"));
     }
 }
