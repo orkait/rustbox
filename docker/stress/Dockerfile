@@ -36,10 +36,14 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates curl python3.11 iproute2 nftables \
+       ca-certificates curl wget python3.11 iproute2 nftables \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man
+
+# Load testing tool
+RUN wget -q https://hey-release.s3.us-east-2.amazonaws.com/hey_linux_amd64 -O /usr/local/bin/hey \
+    && chmod +x /usr/local/bin/hey
 
 # UID pool range
 RUN for i in $(seq 60000 60999); do \
