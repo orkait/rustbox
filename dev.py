@@ -140,20 +140,8 @@ def cmd_stress():
 def cmd_bench():
     log("Building stress test image...")
     run("docker build -t rustbox-stress -f docker/stress/Dockerfile .")
-    log("Running oha benchmark (50 requests, 4 concurrent, 4 CPU / 4 GB)...")
-    run("""docker run --privileged --cpus=4 --memory=4g --rm --entrypoint bash rustbox-stress -c '
-mkdir -p /sys/fs/cgroup/init
-for pid in $(cat /sys/fs/cgroup/cgroup.procs 2>/dev/null); do echo "$pid" > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true; done
-echo "+memory +pids +cpu" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
-mkdir -p /sys/fs/cgroup/rustbox
-echo "+memory +pids +cpu" > /sys/fs/cgroup/rustbox/cgroup.subtree_control 2>/dev/null || true
-RUSTBOX_PORT=4096 RUSTBOX_WORKERS=4 RUSTBOX_DATABASE_URL="sqlite:///tmp/b.db" RUST_LOG=error judge-service >/dev/null 2>&1 &
-for i in $(seq 1 30); do curl -sf http://127.0.0.1:4096/api/health/ready >/dev/null 2>&1 && break; sleep 0.5; done
-for i in 1 2 3; do curl -sf --max-time 30 -X POST "http://127.0.0.1:4096/api/submit?wait=true" -H "Content-Type: application/json" -d "{\\\"language\\\":\\\"python\\\",\\\"code\\\":\\\"print(1)\\\"}" >/dev/null; done
-echo "=== oha: 50 requests, 4 concurrent (4 CPU / 4 GB) ==="
-oha -n 50 -c 4 -m POST -H "Content-Type: application/json" -d "{\\\"language\\\":\\\"python\\\",\\\"code\\\":\\\"print(1)\\\"}" --no-tui "http://127.0.0.1:4096/api/submit?wait=true"
-kill %1 2>/dev/null; wait 2>/dev/null
-'""")
+    log("Running benchmark (tiers 1-1000, 12 concurrent, verifies all)...")
+    run("docker run --privileged --cpus=4 --memory=4g --rm --entrypoint /opt/rustbox-tests/runners/run-bench.sh rustbox-stress")
 
 
 def cmd_adversarial():

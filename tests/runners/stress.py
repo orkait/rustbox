@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Parallel stress test with correctness verification.
+"""Parallel stress test with correctness verification + latency benchmarking.
 
-Submits N requests concurrently, verifies every result.
-Uses stdlib only (urllib + ThreadPoolExecutor).
+Submits N requests concurrently, verifies every result, reports throughput
+and latency percentiles. Uses stdlib only (urllib + ThreadPoolExecutor).
 """
 
 import json
@@ -18,6 +18,7 @@ SUBMIT = f"{HOST}/api/submit?wait=true"
 TIERS = [int(x) for x in os.environ.get("TIERS", "1 5 10 25 50").split()]
 CONCURRENCY = int(os.environ.get("CONCURRENCY", "12"))
 EXPECTED_STDOUT = "41538"
+BENCH_MODE = os.environ.get("BENCH", "0") == "1"
 
 PAYLOAD_FILE = os.environ.get(
     "PAYLOAD_FILE",
@@ -26,6 +27,7 @@ PAYLOAD_FILE = os.environ.get(
 
 RED = "\033[1;31m"
 GREEN = "\033[1;32m"
+DIM = "\033[2m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
@@ -42,11 +44,20 @@ def submit_one(payload_bytes, idx):
         data=payload_bytes,
         headers={"Content-Type": "application/json"},
     )
+    t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            return idx, json.loads(r.read())
+            resp = json.loads(r.read())
+            latency_ms = (time.time() - t0) * 1000
+            return idx, resp, latency_ms
     except Exception as e:
-        return idx, {"error": str(e), "verdict": None}
+        latency_ms = (time.time() - t0) * 1000
+        return idx, {"error": str(e), "verdict": None}, latency_ms
+
+
+def percentile(sorted_vals, p):
+    idx = int(len(sorted_vals) * p / 100)
+    return sorted_vals[min(idx, len(sorted_vals) - 1)]
 
 
 def run_tier(n, payload_bytes):
@@ -65,8 +76,10 @@ def run_tier(n, payload_bytes):
     re = 0
     tle = 0
     ie = 0
+    latencies = []
 
-    for idx, resp in results:
+    for idx, resp, lat_ms in results:
+        latencies.append(lat_ms)
         verdict = resp.get("verdict", "")
         stdout = (resp.get("stdout") or "").strip()
 
@@ -83,11 +96,17 @@ def run_tier(n, payload_bytes):
         else:
             ie += 1
 
+    latencies.sort()
+    p50 = percentile(latencies, 50)
+    p95 = percentile(latencies, 95)
+    p99 = percentile(latencies, 99)
+
     failures = n - ok
     status = f"{GREEN}PASS{RESET}" if failures == 0 else f"{RED}FAIL{RESET}"
 
     print(
-        f"  {n:>5}x  {ok}/{n:<6}  {elapsed*1000:>8.0f}ms  {tps:>6.1f}/s  {status}",
+        f"  {n:>5}x  {ok}/{n:<6}  {elapsed*1000:>8.0f}ms  {tps:>6.1f}/s"
+        f"  p50={p50:>5.0f}ms  p95={p95:>5.0f}ms  {status}",
         end="",
     )
     if failures > 0:
@@ -98,15 +117,16 @@ def run_tier(n, payload_bytes):
 
 
 def main():
+    mode = "Benchmark" if BENCH_MODE else "Stress Test"
     print()
-    print(f"{BOLD}=== Rustbox Parallel Stress Test ==={RESET}")
+    print(f"{BOLD}=== Rustbox Parallel {mode} ==={RESET}")
     print(f"  Payload:     {PAYLOAD_FILE}")
     print(f"  Expected:    stdout={EXPECTED_STDOUT}")
     print(f"  Concurrency: {CONCURRENCY}")
     print(f"  Tiers:       {TIERS}")
     print()
-    print(f"  {'TIER':>5}   {'PASS':<7}  {'ELAPSED':>9}  {'TPS':>7}  RESULT")
-    print(f"  {'-----':>5}   {'-------':<7}  {'---------':>9}  {'-------':>7}  ------")
+    print(f"  {'TIER':>5}   {'PASS':<7}  {'ELAPSED':>9}  {'TPS':>7}  {'p50':>8}  {'p95':>8}  RESULT")
+    print(f"  {'-----':>5}   {'-------':<7}  {'---------':>9}  {'-------':>7}  {'--------':>8}  {'--------':>8}  ------")
 
     payload = load_payload()
     total_failures = 0
