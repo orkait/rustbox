@@ -22,16 +22,6 @@ fn main() -> anyhow::Result<()> {
             return rustbox::sandbox::proxy::run_proxy_role(0, 1)
                 .map_err(|e| anyhow::anyhow!("proxy role failed: {e}"));
         }
-        if role == "pool-slot" {
-            let socket_path = args
-                .iter()
-                .find(|a| a.starts_with("--pool-socket="))
-                .and_then(|a| a.split('=').nth(1))
-                .ok_or_else(|| anyhow::anyhow!("--pool-socket required for pool-slot role"))?
-                .to_string();
-            return rustbox::sandbox::pool::run_pool_slot_role(&socket_path)
-                .map_err(|e| anyhow::anyhow!("pool-slot role failed: {e}"));
-        }
     }
 
     tokio::runtime::Builder::new_multi_thread()
@@ -56,11 +46,6 @@ async fn async_main() -> anyhow::Result<()> {
     let db: Arc<dyn Database> =
         Arc::from(judge_service::database::connect(&cfg.database_url).await?);
     info!("database ready");
-
-    // Initialize the pre-warmed proxy pool.
-    let pool_size = rustbox::sandbox::pool::ProxyPool::default_size();
-    let proxy_pool = rustbox::sandbox::pool::ProxyPool::new(pool_size);
-    info!(pool_size, "proxy pool started");
 
     let is_postgres = cfg.database_url.starts_with("postgres://")
         || cfg.database_url.starts_with("postgresql://");
@@ -91,7 +76,6 @@ async fn async_main() -> anyhow::Result<()> {
             queue.clone(),
             cfg.node_id.clone(),
             cfg.webhook_timeout_secs,
-            Some(proxy_pool.clone()),
         );
         info!(count = cfg.workers, mode = "channel", "worker pool started");
         (queue, handles)

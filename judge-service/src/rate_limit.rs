@@ -115,9 +115,7 @@ mod tests {
             let mut buckets = limiter.buckets.lock().unwrap();
             let bucket = buckets.get_mut(&addr).unwrap();
             bucket.last_refill = Instant::now()
-                - std::time::std::time::Duration::from_secs(
-                    crate::constants::RATE_LIMIT_WINDOW_SECS + 1,
-                );
+                - std::time::Duration::from_secs(crate::constants::RATE_LIMIT_WINDOW_SECS + 1);
         }
 
         assert!(limiter.check(addr));
@@ -135,7 +133,7 @@ mod tests {
             let mut buckets = limiter.buckets.lock().unwrap();
             let bucket = buckets.get_mut(&a).unwrap();
             bucket.last_refill = Instant::now()
-                - std::time::std::time::Duration::from_secs(
+                - std::time::Duration::from_secs(
                     crate::constants::RATE_LIMIT_BUCKET_RETENTION_SECS + 1,
                 );
         }
