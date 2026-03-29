@@ -62,9 +62,10 @@ COPY docker/stress/config-executor.json /etc/rustbox/config-executor.json
 RUN chmod 644 /etc/rustbox/*.json \
     && cp /etc/rustbox/config-judge.json /etc/rustbox/config.json
 
-# Stress script
+# Stress scripts
 COPY docker/stress/run-stress.sh /usr/local/bin/run-stress.sh
-RUN chmod +x /usr/local/bin/run-stress.sh
+COPY docker/stress/run-adversarial.sh /usr/local/bin/run-adversarial.sh
+RUN chmod +x /usr/local/bin/run-stress.sh /usr/local/bin/run-adversarial.sh
 
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/run-stress.sh"]
