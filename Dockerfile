@@ -2,10 +2,10 @@
 # Language build args - set to "false" to exclude from image
 # ============================================================================
 ARG LANG_PYTHON=true
-ARG LANG_C_CPP=true
-ARG LANG_JAVA=true
-ARG LANG_JAVASCRIPT=true
-ARG LANG_TYPESCRIPT=true
+ARG LANG_C_CPP=false
+ARG LANG_JAVA=false
+ARG LANG_JAVASCRIPT=false
+ARG LANG_TYPESCRIPT=false
 ARG LANG_GO=false
 ARG LANG_RUST=false
 
