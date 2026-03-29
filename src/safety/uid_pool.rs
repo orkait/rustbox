@@ -73,10 +73,15 @@ fn pool_config() -> &'static PoolConfig {
 // flock is per-process so it cannot distinguish threads.
 const MAX_POOL_WORDS: usize = 64;
 
-static POOL: [AtomicU64; MAX_POOL_WORDS] = {
-    const ZERO: AtomicU64 = AtomicU64::new(0);
-    [ZERO; MAX_POOL_WORDS]
-};
+macro_rules! atomic_array {
+    ($val:expr; $n:expr) => {{
+        const INIT: AtomicU64 = AtomicU64::new($val);
+        [INIT; $n]
+    }};
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+static POOL: [AtomicU64; MAX_POOL_WORDS] = atomic_array!(0; MAX_POOL_WORDS);
 
 fn bitmap_try_claim(slot: u32) -> bool {
     let word_idx = (slot / constants::BITS_PER_WORD as u32) as usize;
@@ -162,7 +167,7 @@ pub fn is_pool_uid(uid: u32) -> bool {
     (cfg.base_uid..cfg.base_uid + cfg.pool_size).contains(&uid)
 }
 
-pub fn allocate() -> Result<(u32, OwnedFd)> {
+fn allocate() -> Result<(u32, OwnedFd)> {
     let cfg = pool_config();
     ensure_pool_dir(cfg)?;
 
@@ -194,19 +199,14 @@ pub fn allocate() -> Result<(u32, OwnedFd)> {
     )))
 }
 
-pub fn release(_uid: u32) {
-    // Closing the OwnedFd releases the flock automatically.
-    // Bitmap is cleared by UidGuard::drop.
-}
-
 #[must_use]
 pub fn active_count() -> u32 {
     let cfg = pool_config();
 
     // In-process count from bitmap (fast, always available)
     let mut local_count = 0u32;
-    for word_idx in 0..cfg.words {
-        local_count += POOL[word_idx].load(Ordering::Relaxed).count_ones();
+    for word in POOL.iter().take(cfg.words) {
+        local_count += word.load(Ordering::Relaxed).count_ones();
     }
 
     // Cross-process count from flock probing (includes other processes)
@@ -326,18 +326,9 @@ mod tests {
     #[test]
     fn pool_exhaustion_returns_error() {
         let mut guards = Vec::new();
-        loop {
-            match UidGuard::allocate() {
-                Ok(g) => guards.push(g),
-                Err(_) => break,
-            }
+        while let Ok(g) = UidGuard::allocate() {
+            guards.push(g);
         }
         assert!(UidGuard::allocate().is_err());
-    }
-
-    #[test]
-    fn release_ignores_non_pool_uids() {
-        release(0);
-        release(constants::NOBODY_UID);
     }
 }

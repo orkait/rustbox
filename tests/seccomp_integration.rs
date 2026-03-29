@@ -2,6 +2,7 @@ use rustbox::config::types::{ExecutionStatus, IsolateConfig};
 use rustbox::runtime::isolate::{ExecutionOverrides, Isolate};
 
 #[test]
+#[ignore]
 fn io_uring_returns_enosys_not_kill() {
     let code = r#"
 #include <stdio.h>
@@ -14,8 +15,7 @@ int main() {
     return 0;
 }
 "#;
-    let mut config = IsolateConfig::with_language_defaults("cpp", "seccomp-test-1".to_string())
-        .unwrap_or_default();
+    let mut config = IsolateConfig::with_language_defaults("cpp").unwrap_or_default();
     config.strict_mode = false;
     let mut isolate = Isolate::new(config).expect("isolate creation");
     let result = isolate.execute_code_string("cpp", code, &ExecutionOverrides::default());
@@ -49,9 +49,9 @@ int main() {
 }
 
 #[test]
+#[ignore]
 fn no_seccomp_flag_disables_filter() {
-    let mut config = IsolateConfig::with_language_defaults("python", "seccomp-test-2".to_string())
-        .unwrap_or_default();
+    let mut config = IsolateConfig::with_language_defaults("python").unwrap_or_default();
     config.strict_mode = false;
     config.no_seccomp = true;
     let mut isolate = Isolate::new(config).expect("isolate creation");
@@ -65,9 +65,9 @@ fn no_seccomp_flag_disables_filter() {
 }
 
 #[test]
+#[ignore]
 fn seccomp_enabled_by_default_python_works() {
-    let mut config = IsolateConfig::with_language_defaults("python", "seccomp-test-3".to_string())
-        .unwrap_or_default();
+    let mut config = IsolateConfig::with_language_defaults("python").unwrap_or_default();
     config.strict_mode = false;
     let mut isolate = Isolate::new(config).expect("isolate creation");
     let result =

@@ -13,8 +13,26 @@ use judge_service::database::Database;
 use judge_service::job_queue::JobQueue;
 use judge_service::AppState;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let role_prefix = format!("{}=", rustbox::config::constants::INTERNAL_ROLE_ARG);
+    if let Some(role_arg) = args.iter().find(|a| a.starts_with(&role_prefix)) {
+        let role = role_arg.split('=').nth(1).unwrap_or("");
+        if role == rustbox::config::constants::INTERNAL_ROLE_PROXY {
+            let _ = rustbox::observability::audit::init_security_logger(None);
+            return rustbox::sandbox::proxy::run_proxy_role()
+                .map_err(|e| anyhow::anyhow!("proxy role failed: {e}"));
+        }
+    }
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let cfg = judge_service::config::ServiceConfig::from_env();

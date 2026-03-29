@@ -1,4 +1,3 @@
-use crate::config::constants;
 use crate::config::types::{IsolateError, Result};
 use crate::kernel::capabilities::{self, check_no_new_privs, set_no_new_privs};
 use crate::kernel::credentials::transition_to_unprivileged;
@@ -407,7 +406,8 @@ impl Sandbox<RootTransitioned> {
     ) -> Result<Sandbox<HygieneApplied>> {
         #[cfg(unix)]
         {
-            let rlimits: &[(&str, libc::__rlimit_resource_t, Option<(u64, u64)>)] = &[
+            type RlimitEntry<'a> = (&'a str, libc::__rlimit_resource_t, Option<(u64, u64)>);
+            let rlimits: &[RlimitEntry<'_>] = &[
                 (
                     "RLIMIT_AS",
                     libc::RLIMIT_AS,
@@ -639,14 +639,14 @@ mod typestate_tests {
                     std::process::exit(0);
                 }
                 Ok(ForkResult::Parent { child }) => match waitpid(child, None) {
-                    Ok(WaitStatus::Exited(_, 0)) => return,
+                    Ok(WaitStatus::Exited(_, 0)) => {}
                     Ok(WaitStatus::Exited(_, code)) => {
                         panic!("typestate happy path child exited with code {}", code)
                     }
                     Ok(status) => panic!("typestate happy path child: {:?}", status),
                     Err(e) => panic!("waitpid failed: {}", e),
                 },
-                Err(_) => return,
+                Err(_) => {}
             }
         } else {
             run_typestate_chain_happy_path();
@@ -788,14 +788,14 @@ mod typestate_tests {
                     std::process::exit(0);
                 }
                 Ok(ForkResult::Parent { child }) => match waitpid(child, None) {
-                    Ok(WaitStatus::Exited(_, 0)) => return,
+                    Ok(WaitStatus::Exited(_, 0)) => {}
                     Ok(WaitStatus::Exited(_, code)) => {
                         panic!("credential drop test child exited with code {}", code)
                     }
                     Ok(status) => panic!("credential drop test child: {:?}", status),
                     Err(e) => panic!("waitpid failed: {}", e),
                 },
-                Err(_) => return,
+                Err(_) => {}
             }
         } else {
             run_credential_drop_test();

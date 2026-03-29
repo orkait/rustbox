@@ -17,24 +17,9 @@ pub(crate) struct LaunchEvidenceParams<'a> {
 }
 
 fn detect_pidfd_mode() -> PidfdMode {
-    #[cfg(target_os = "linux")]
-    {
-        const SYS_PIDFD_OPEN: libc::c_long = 434;
-        let self_pid = std::process::id() as i32;
-        let pidfd = unsafe { libc::syscall(SYS_PIDFD_OPEN, self_pid, 0) as i32 };
-
-        if pidfd >= 0 {
-            unsafe {
-                libc::close(pidfd);
-            }
-            PidfdMode::Native
-        } else {
-            PidfdMode::Fallback
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
+    if crate::kernel::pidfd::pidfd_available() {
+        PidfdMode::Native
+    } else {
         PidfdMode::Fallback
     }
 }

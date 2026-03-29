@@ -82,28 +82,6 @@ impl JudgeResultV1 {
         serde_json::to_string_pretty(self)
             .map_err(|e| IsolateError::Config(format!("Failed to serialize result to JSON: {}", e)))
     }
-
-    pub fn to_json_bytes(&self) -> Result<Vec<u8>> {
-        serde_json::to_vec_pretty(self).map_err(|e| {
-            IsolateError::Config(format!("Failed to serialize result to JSON bytes: {}", e))
-        })
-    }
-
-    pub fn from_json(json: &str) -> Result<Self> {
-        serde_json::from_str(json).map_err(|e| {
-            IsolateError::Config(format!("Failed to deserialize result from JSON: {}", e))
-        })
-    }
-
-    pub fn validate_schema_version(&self) -> Result<()> {
-        if self.schema_version != "1.0" {
-            return Err(IsolateError::Config(format!(
-                "Unsupported schema version: {}",
-                self.schema_version
-            )));
-        }
-        Ok(())
-    }
 }
 
 impl JudgeResultV1 {
@@ -282,23 +260,6 @@ mod tests {
         assert!(json.contains("\"1.0\""));
         assert!(json.contains("\"status\""));
         assert!(json.contains("\"OK\""));
-    }
-
-    #[test]
-    fn test_json_deserialization() {
-        let result = create_test_result();
-        let json = result.to_json().unwrap();
-
-        let deserialized = JudgeResultV1::from_json(&json).unwrap();
-        assert_eq!(deserialized.schema_version, "1.0");
-        assert_eq!(deserialized.status, ExecutionStatus::Ok);
-        assert_eq!(deserialized.cpu_time, 0.5);
-    }
-
-    #[test]
-    fn test_schema_version_validation() {
-        let result = create_test_result();
-        assert!(result.validate_schema_version().is_ok());
     }
 
     #[test]

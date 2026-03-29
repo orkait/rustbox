@@ -187,11 +187,16 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_tim
     };
     info!(%job_id, %language, code_hash, code_bytes = code.len(), "executing submission");
 
-    let result =
-        tokio::task::spawn_blocking(move || execute_in_sandbox(&language, &code, &stdin)).await;
+    let span = tracing::Span::current();
+    let result = tokio::task::spawn_blocking(move || {
+        let _guard = span.enter();
+        execute_in_sandbox(&language, &code, &stdin)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("worker task panicked: {e}")));
 
     match result {
-        Ok(Ok(output)) => {
+        Ok(output) => {
             if let Err(e) = db.mark_completed(job_id, &output).await {
                 error!(%job_id, error = %e, "failed to store result, marking error");
                 let _ = db
@@ -201,13 +206,9 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_tim
                 info!(%job_id, verdict = output.verdict, "submission completed");
             }
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             error!(%job_id, error = %e, "execution failed");
             let _ = db.mark_error(job_id, &sanitize_error(&e)).await;
-        }
-        Err(e) => {
-            error!(%job_id, error = %e, "worker task panicked");
-            let _ = db.mark_error(job_id, "internal execution error").await;
         }
     }
 
@@ -334,7 +335,7 @@ fn execute_in_sandbox(language: &str, code: &str, stdin: &str) -> Result<Executi
         let _ = rustbox::observability::audit::init_security_logger(None);
     });
 
-    let mut config = IsolateConfig::with_language_defaults(language, "rustbox/0".to_string())
+    let mut config = IsolateConfig::with_language_defaults(language)
         .map_err(|e| format!("config error: {e}"))?;
     let is_root = unsafe { libc::geteuid() } == 0;
     if !is_root {

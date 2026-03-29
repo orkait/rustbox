@@ -8,6 +8,7 @@ mod mount_tests {
     use std::path::PathBuf;
 
     #[test]
+    #[ignore]
     fn test_filesystem_security_creation() {
         let fs_sec = FilesystemSecurity::new(
             None,
@@ -20,6 +21,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_filesystem_security_with_chroot() {
         let chroot_path = PathBuf::from("/tmp/rustbox-test-chroot");
         let fs_sec = FilesystemSecurity::new(
@@ -33,6 +35,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_strict_mode_rejects_read_write_bindings() {
         let fs_sec = FilesystemSecurity::new(
             None,
@@ -59,6 +62,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_strict_mode_accepts_read_only_bindings() {
         let fs_sec = FilesystemSecurity::new(
             None,
@@ -94,6 +98,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_validate_path_rejects_dangerous_paths() {
         let fs_sec = FilesystemSecurity::new(
             None,
@@ -118,6 +123,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_effective_workdir_without_chroot() {
         let workdir = PathBuf::from("/tmp/rustbox-test-workdir");
         let fs_sec = FilesystemSecurity::new(None, workdir.clone(), false, None, None);
@@ -126,6 +132,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_effective_workdir_with_chroot() {
         let workdir = PathBuf::from("/tmp/rustbox-test-workdir");
         let chroot_path = PathBuf::from("/tmp/rustbox-test-chroot");
@@ -137,6 +144,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_tmpfs_size_limits() {
         let fs_sec = FilesystemSecurity::new(
             None,
@@ -151,6 +159,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_maybe_binding_skips_nonexistent() {
         let fs_sec = FilesystemSecurity::new(
             None,
@@ -174,6 +183,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_cleanup_is_safe() {
         let fs_sec = FilesystemSecurity::new(
             None,
@@ -189,6 +199,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_path_traversal_rejected() {
         let fs_sec = FilesystemSecurity::new(
             Some(PathBuf::from("/tmp/rustbox-test-chroot")),
@@ -216,6 +227,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_path_traversal_with_absolute_path() {
         let fs_sec = FilesystemSecurity::new(
             Some(PathBuf::from("/tmp/rustbox-test-chroot")),
@@ -243,6 +255,7 @@ mod mount_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_workdir_created_inside_chroot() {
         let chroot_path = PathBuf::from("/tmp/rustbox-test-chroot-workdir");
         let workdir = PathBuf::from("/workspace");

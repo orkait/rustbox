@@ -1,50 +1,18 @@
 use crate::config::constants;
-use crate::config::types::{ExecutionStatus, IsolateError, Result};
+use crate::config::types::{ExecutionStatus, IsolateError, OutputIntegrity, Result};
 use crate::kernel::cgroup::CgroupBackend;
 use crate::sandbox::evidence::{build_launch_evidence, LaunchEvidenceParams};
-use crate::sandbox::proxy::{
-    read_proxy_status_from_fd, run_proxy_main_from_fds, write_request_to_fd,
-};
 use crate::sandbox::types::{KillReport, ProxyStatus, SandboxLaunchOutcome, SandboxLaunchRequest};
-use nix::sched::{clone, CloneFlags};
-use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{close, pipe, Pid};
+use std::io::{Read, Write};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
-
-fn send_signal_with_fallback(pid: Pid, sig: i32, report: &mut KillReport, label: &str) {
-    // SAFETY: kill(2) with negative pid sends signal to the process group. Falls back to
-    // individual pid if group signal fails (e.g., process not a group leader).
-    let rc = unsafe { libc::kill(-pid.as_raw(), sig) };
-    if rc != 0 {
-        let _ = unsafe { libc::kill(pid.as_raw(), sig) };
-        report.notes.push(format!(
-            "group {} fallback used: {}",
-            label,
-            std::io::Error::last_os_error()
-        ));
-    }
-}
-
-fn terminate_proxy_group(proxy_pid: Pid) -> KillReport {
-    let mut report = KillReport::default();
-    let start = Instant::now();
-
-    send_signal_with_fallback(proxy_pid, libc::SIGTERM, &mut report, "SIGTERM");
-    report.term_sent = true;
-
-    std::thread::sleep(constants::runtime_tuning().sigterm_grace);
-
-    send_signal_with_fallback(proxy_pid, libc::SIGKILL, &mut report, "SIGKILL");
-    report.kill_sent = true;
-
-    report.waited_ms = start.elapsed().as_millis() as u64;
-    report
-}
 
 pub fn launch_with_supervisor(
     req: SandboxLaunchRequest,
     cgroup: Option<&dyn CgroupBackend>,
 ) -> Result<SandboxLaunchOutcome> {
+    // Phase 1: Validate
     if req.profile.command.is_empty() {
         return Err(IsolateError::Config("empty command".to_string()));
     }
@@ -58,315 +26,304 @@ pub fn launch_with_supervisor(
         ));
     }
 
-    let mut evidence_collection_errors = Vec::new();
-    let cgroup_backend_selected = cgroup.map(|controller| controller.backend_name().to_string());
-    let mut cgroup_enforced = false;
-
-    let (launch_read, launch_write) =
-        pipe().map_err(|e| IsolateError::process("pipe(launch)", e))?;
-    let (status_read, status_write) =
-        pipe().map_err(|e| IsolateError::process("pipe(status)", e))?;
-
-    let pipe_buf = req
-        .profile
-        .pipe_buffer_size
-        .unwrap_or(constants::DEFAULT_PIPE_BUFFER_SIZE)
-        .min(libc::c_int::MAX as u64) as libc::c_int;
-    for fd in [launch_write, status_write] {
-        unsafe {
-            libc::fcntl(fd, libc::F_SETPIPE_SZ, pipe_buf);
-        }
-    }
-
-    let mut clone_flags = CloneFlags::empty();
+    // Phase 2: Spawn proxy
+    let mut clone_flags: libc::c_int = libc::CLONE_NEWIPC | libc::CLONE_NEWUTS;
     if req.profile.enable_pid_namespace {
-        clone_flags |= CloneFlags::CLONE_NEWPID;
+        clone_flags |= libc::CLONE_NEWPID;
     }
-    clone_flags |= CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
     if req.profile.enable_mount_namespace {
-        clone_flags |= CloneFlags::CLONE_NEWNS;
+        clone_flags |= libc::CLONE_NEWNS;
     }
     if req.profile.enable_network_namespace {
-        clone_flags |= CloneFlags::CLONE_NEWNET;
+        clone_flags |= libc::CLONE_NEWNET;
     }
     if req.profile.enable_user_namespace {
-        clone_flags |= CloneFlags::CLONE_NEWUSER;
+        clone_flags |= libc::CLONE_NEWUSER;
     }
 
-    let mut child_stack = vec![0u8; constants::CLONE_STACK_SIZE];
-    let child_cb: Box<dyn FnMut() -> isize> = Box::new(move || {
-        let _ = close(launch_write);
-        let _ = close(status_read);
-        run_proxy_main_from_fds(launch_read, status_write)
-    });
+    let exe =
+        std::env::current_exe().map_err(|e| IsolateError::Process(format!("current_exe: {e}")))?;
 
-    // SAFETY: clone(2) with namespace flags creates a child process in new namespaces.
-    // - child_cb is a boxed closure moved into the child's COW address space (no CLONE_VM).
-    // - child_stack is a 2MB heap buffer whose top is passed as the child's initial stack pointer.
-    // - SIGCHLD ensures the parent receives notification when the child exits.
-    // - The parent retains no references into child_cb or child_stack after clone returns;
-    //   the child operates on its own COW copy.
-    let clone_result =
-        unsafe { clone(child_cb, &mut child_stack, clone_flags, Some(libc::SIGCHLD)) };
-
-    let close_all_pipes = |lr, lw, sr, sw| {
-        let _ = close(lr);
-        let _ = close(lw);
-        let _ = close(sr);
-        let _ = close(sw);
+    let mut child = unsafe {
+        Command::new(&exe)
+            .arg(format!(
+                "{}={}",
+                constants::INTERNAL_ROLE_ARG,
+                constants::INTERNAL_ROLE_PROXY
+            ))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .pre_exec(move || {
+                if libc::unshare(clone_flags) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            })
+            .spawn()
+            .map_err(|e| IsolateError::Process(format!("spawn proxy: {e}")))?
     };
 
-    let proxy_pid = match clone_result {
-        Ok(pid) => pid,
-        Err(e) => {
-            close_all_pipes(launch_read, launch_write, status_read, status_write);
-            return Err(IsolateError::Privilege(format!(
-                "Root privileges required for namespace isolation: {}",
-                e
-            )));
-        }
-    };
+    let proxy_pid = child.id() as i32;
 
-    let _ = close(launch_read);
-    let _ = close(status_write);
-
-    let abort_proxy = |status_rd| {
-        let _ = terminate_proxy_group(proxy_pid);
-        let _ = waitpid(proxy_pid, None);
-        let _ = close(status_rd);
-    };
+    // Phase 3: Cgroup
+    let cgroup_backend_selected = cgroup.map(|c| c.backend_name().to_string());
+    let mut cgroup_enforced = false;
+    let mut evidence_collection_errors = Vec::new();
 
     if let Some(controller) = cgroup {
-        if let Err(e) = controller.attach_process(&req.instance_id, proxy_pid.as_raw() as u32) {
-            evidence_collection_errors.push(format!("cgroup_attach: {}", e));
-            if req.profile.strict_mode {
-                let _ = close(launch_write);
-                abort_proxy(status_read);
-                return Err(e);
-            }
-        } else {
-            cgroup_enforced = true;
+        match controller.attach_process(&req.instance_id, proxy_pid as u32) {
+            Ok(()) => cgroup_enforced = true,
+            Err(e) => try_cgroup_op(
+                Err(e),
+                req.profile.strict_mode,
+                &mut child,
+                &mut evidence_collection_errors,
+                "cgroup_attach",
+            )?,
         }
-    } else if req.profile.strict_mode
-        && (req.profile.memory_limit.is_some() || req.profile.process_limit.is_some())
+
+        if let Some(limit) = req.profile.memory_limit {
+            try_cgroup_op(
+                controller.set_memory_limit(&req.instance_id, limit),
+                req.profile.strict_mode,
+                &mut child,
+                &mut evidence_collection_errors,
+                "cgroup_memory",
+            )?;
+        }
+        if let Some(limit) = req.profile.process_limit {
+            try_cgroup_op(
+                controller.set_process_limit(&req.instance_id, limit),
+                req.profile.strict_mode,
+                &mut child,
+                &mut evidence_collection_errors,
+                "cgroup_pids",
+            )?;
+        }
+        if let Some(limit_ms) = req.profile.cpu_time_limit_ms {
+            let usec = limit_ms * constants::USEC_PER_MS;
+            try_cgroup_op(
+                controller.set_cpu_limit(&req.instance_id, usec),
+                req.profile.strict_mode,
+                &mut child,
+                &mut evidence_collection_errors,
+                "cgroup_cpu",
+            )?;
+        }
+    }
+
+    // Phase 4: Send request
+    let json_req = serde_json::to_vec(&req)
+        .map_err(|e| IsolateError::Process(format!("encode request: {e}")))?;
+
     {
-        let _ = close(launch_write);
-        abort_proxy(status_read);
-        return Err(IsolateError::Cgroup(
-            "strict mode requires cgroup limits for configured memory/process controls".to_string(),
-        ));
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| IsolateError::Process("child stdin not available".to_string()))?;
+        if let Err(e) = stdin.write_all(&json_req) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(IsolateError::Process(format!("write proxy stdin: {e}")));
+        }
     }
 
-    if !crate::kernel::signal::should_continue() {
-        let _ = close(launch_write);
-        abort_proxy(status_read);
-        return Err(IsolateError::Process(
-            "interrupted by signal before launch".to_string(),
-        ));
-    }
+    // Phase 5: Capture output (2 reader threads)
+    let output_limit = req
+        .profile
+        .output_limit
+        .unwrap_or(constants::DEFAULT_OUTPUT_COMBINED_LIMIT as u64) as usize;
 
-    if let Err(err) = write_request_to_fd(launch_write, &req) {
-        abort_proxy(status_read);
-        return Err(err);
-    }
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
 
-    if !crate::kernel::signal::should_continue() {
-        abort_proxy(status_read);
-        return Err(IsolateError::Process(
-            "interrupted by signal before wait loop".to_string(),
-        ));
-    }
+    let stdout_thread = std::thread::spawn(move || read_stream(stdout_pipe, output_limit));
+    let stderr_thread = std::thread::spawn(move || read_stream(stderr_pipe, output_limit));
 
-    // The supervisor's kill timeout includes a setup budget on top of the wall limit.
-    // Proxy setup (namespaces, mounts, chroot, creds, caps, seccomp) takes time that
-    // should NOT count against the user's wall time. The proxy reports its own wall
-    // time starting from after fork(), so the reported time is accurate regardless.
+    // Phase 6: Wait with wall timeout
+    let start = Instant::now();
     let wall_limit = req
         .profile
         .wall_time_limit_ms
         .map(Duration::from_millis)
         .unwrap_or(constants::DEFAULT_SUPERVISOR_WALL_FALLBACK);
-    let kill_timeout = wall_limit + constants::SUPERVISOR_SETUP_BUDGET;
-    let started = Instant::now();
 
-    let mut timed_out = false;
-    let mut cpu_timed_out = false;
-    let mut interrupted_by_signal = false;
-    let mut interrupt_signal = None;
-    let mut kill_report: Option<KillReport> = None;
-    let mut proxy_exit_code = None;
-    let mut proxy_signal = None;
+    let (exit_status, timed_out) = wait_with_wall_timeout(&mut child, proxy_pid, wall_limit);
 
-    let cpu_limit_usec: Option<u64> = req
-        .profile
-        .cpu_time_limit_ms
-        .map(|ms| ms * constants::USEC_PER_MS);
+    let wall_time_ms = start.elapsed().as_millis() as u64;
 
-    let status_reader = std::thread::spawn(move || read_proxy_status_from_fd(status_read));
+    // Phase 7: Collect (post-mortem)
+    let (stdout_bytes, stdout_integrity) = stdout_thread
+        .join()
+        .unwrap_or_else(|_| (Vec::new(), OutputIntegrity::WriteError));
+    let (stderr_bytes, stderr_integrity) = stderr_thread
+        .join()
+        .unwrap_or_else(|_| (Vec::new(), OutputIntegrity::WriteError));
 
-    loop {
-        match waitpid(proxy_pid, Some(WaitPidFlag::WNOHANG)) {
-            Ok(WaitStatus::StillAlive) => {
-                if !crate::kernel::signal::should_continue() {
-                    interrupted_by_signal = true;
-                    interrupt_signal = Some(crate::kernel::signal::received_signal());
-                    kill_report = Some(terminate_proxy_group(proxy_pid));
-                } else if started.elapsed() > kill_timeout {
-                    timed_out = true;
-                    kill_report = Some(terminate_proxy_group(proxy_pid));
-                } else if let (Some(limit_usec), Some(controller)) = (cpu_limit_usec, cgroup) {
-                    if let Ok(usage_usec) = controller.get_cpu_usage() {
-                        if usage_usec >= limit_usec {
-                            cpu_timed_out = true;
-                            timed_out = true;
-                            kill_report = Some(terminate_proxy_group(proxy_pid));
-                            log::info!(
-                                "CPU time limit exceeded: {}us >= {}us limit",
-                                usage_usec,
-                                limit_usec
-                            );
-                        }
-                    }
-                    if !timed_out && !interrupted_by_signal {
-                        std::thread::sleep(constants::SUPERVISOR_POLL_INTERVAL);
-                    }
-                } else if !interrupted_by_signal {
-                    std::thread::sleep(constants::SUPERVISOR_POLL_INTERVAL);
-                }
-
-                if interrupted_by_signal {
-                    break;
-                }
-            }
-            Ok(WaitStatus::Exited(_, code)) => {
-                proxy_exit_code = Some(code);
-                break;
-            }
-            Ok(WaitStatus::Signaled(_, sig, _)) => {
-                proxy_signal = Some(sig as i32);
-                break;
-            }
-            Ok(_) => continue,
-            Err(nix::errno::Errno::EINTR) => continue,
+    let cgroup_evidence = if let (true, Some(controller)) = (cgroup_enforced, cgroup) {
+        match controller.collect_evidence(&req.instance_id) {
+            Ok(ev) => Some(ev),
             Err(e) => {
-                return Err(IsolateError::process("waitpid(proxy)", e));
+                evidence_collection_errors.push(format!("cgroup_evidence: {e}"));
+                None
             }
         }
-    }
+    } else {
+        None
+    };
 
-    if interrupted_by_signal && proxy_exit_code.is_none() && proxy_signal.is_none() {
-        match waitpid(proxy_pid, None) {
-            Ok(WaitStatus::Exited(_, code)) => proxy_exit_code = Some(code),
-            Ok(WaitStatus::Signaled(_, sig, _)) => proxy_signal = Some(sig as i32),
-            Ok(_) => {}
-            Err(nix::errno::Errno::ECHILD) => {}
-            Err(nix::errno::Errno::EINTR) => {}
-            Err(e) => {
-                return Err(IsolateError::process("waitpid(proxy-interrupt)", e));
-            }
-        }
-    }
+    // Phase 8: Build outcome
+    let (exit_code, term_signal) = match &exit_status {
+        Some(s) => (s.code(), s.signal()),
+        None => (None, None),
+    };
 
-    let status_result = status_reader.join().unwrap_or_else(|_| {
-        Err(IsolateError::Process(
-            "status reader thread panicked".into(),
-        ))
-    });
-    let mut status = status_result.unwrap_or_else(|e| ProxyStatus {
-        exit_code: proxy_exit_code,
-        term_signal: proxy_signal,
-        timed_out: false,
-        wall_time_ms: started.elapsed().as_millis() as u64,
-        stdout: String::new(),
-        stderr: String::new(),
-        output_integrity: crate::config::types::OutputIntegrity::WriteError,
-        internal_error: Some(e.to_string()),
+    let output_integrity = OutputIntegrity::resolve_combined(&stdout_integrity, &stderr_integrity);
+
+    let kill_report = if timed_out {
+        Some(KillReport {
+            term_sent: false,
+            kill_sent: true,
+            waited_ms: wall_time_ms,
+            notes: vec!["wall_time_limit_exceeded".to_string()],
+        })
+    } else {
+        None
+    };
+
+    let proxy_status = ProxyStatus {
         payload_pid: None,
+        exit_code,
+        term_signal,
+        timed_out,
+        wall_time_ms,
+        stdout: vec_to_string_lossy(stdout_bytes),
+        stderr: vec_to_string_lossy(stderr_bytes),
+        output_integrity,
+        internal_error: None,
         reaped_descendants: 0,
-    });
-    let sig_code = interrupt_signal.unwrap_or(0) as i32;
-    // Proxy has its own wall timer (starts after fork, kills payload on timeout).
-    // If proxy reports timed_out=true, it's a real TLE.
-    // If supervisor's kill_timeout fires but proxy didn't report timeout,
-    // sandbox setup hung - report as InternalError, not TLE.
-    let proxy_reported_timeout = status.timed_out;
-    let supervisor_safety_timeout = timed_out && !proxy_reported_timeout && !cpu_timed_out;
+    };
 
-    if supervisor_safety_timeout {
-        status.timed_out = false;
-        status.internal_error =
-            Some("sandbox setup exceeded safety timeout (proxy did not respond)".to_string());
-    }
-    if interrupted_by_signal {
-        status.timed_out = false;
-        status.term_signal = Some(sig_code);
-        status.internal_error = Some(format!("interrupted_by_signal:{sig_code}"));
+    let mut result = proxy_status.to_execution_result();
+
+    if let (true, Some(controller)) = (cgroup_enforced, cgroup) {
+        if let Ok(cpu_usec) = controller.get_cpu_usage() {
+            result.cpu_time = cpu_usec as f64 / constants::USEC_PER_SEC;
+        }
+        if let Ok(mem_peak) = controller.get_memory_peak() {
+            result.memory_peak = mem_peak;
+        }
+        if let Ok(true) = controller.check_oom() {
+            result.status = ExecutionStatus::MemoryLimit;
+            result.success = false;
+        }
     }
 
-    let mut result = status.to_execution_result();
-    if proxy_reported_timeout || cpu_timed_out {
+    if timed_out {
         result.status = ExecutionStatus::TimeLimit;
         result.success = false;
-    } else if supervisor_safety_timeout {
-        result.status = ExecutionStatus::InternalError;
-        result.success = false;
     }
 
-    if cpu_timed_out {
-        evidence_collection_errors.push(
-            "cpu_time_limit_exceeded: judge watchdog killed process after cgroup CPU usage exceeded limit".to_string(),
-        );
-    }
-    if interrupted_by_signal {
-        evidence_collection_errors.push(format!("interrupted_by_signal:{sig_code}"));
-    }
-
-    let mut cgroup_evidence = None;
-    if cgroup_enforced {
-        if let Some(controller) = cgroup {
-            if let Ok(cpu_usec) = controller.get_cpu_usage() {
-                result.cpu_time = cpu_usec as f64 / constants::USEC_PER_SEC;
-            }
-            if let Ok(mem_peak) = controller.get_memory_peak() {
-                result.memory_peak = mem_peak;
-            }
-            match controller.collect_evidence(&req.instance_id) {
-                Ok(evidence) => cgroup_evidence = Some(evidence),
-                Err(err) => evidence_collection_errors.push(format!("cgroup_evidence: {}", err)),
-            }
-        }
-    } else if (req.profile.memory_limit.is_some() || req.profile.process_limit.is_some())
-        && cgroup_backend_selected.is_some()
-    {
-        evidence_collection_errors.push(
-            "cgroup_limits_unenforced: process was not attached to selected backend".to_string(),
-        );
-    }
-
-    let running_as_root = unsafe { libc::geteuid() } == 0;
     let evidence = build_launch_evidence(
         &req,
         LaunchEvidenceParams {
-            running_as_root,
+            running_as_root: unsafe { libc::geteuid() } == 0,
             cgroup_backend_selected,
             cgroup_enforced,
             timed_out,
             kill_report: kill_report.as_ref(),
-            proxy_status: &status,
+            proxy_status: &proxy_status,
             cgroup_evidence,
             evidence_collection_errors,
             cleanup_verified: true,
         },
     );
 
-    Ok(SandboxLaunchOutcome {
-        proxy_host_pid: proxy_pid.as_raw(),
-        payload_host_pid: status.payload_pid,
-        result,
-        evidence,
-        kill_report,
-        proxy_status: status,
-    })
+    Ok(SandboxLaunchOutcome { result, evidence })
+}
+
+fn try_cgroup_op(
+    result: Result<()>,
+    strict: bool,
+    child: &mut Child,
+    errors: &mut Vec<String>,
+    label: &str,
+) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) if strict => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(e)
+        }
+        Err(e) => {
+            errors.push(format!("{label}: {e}"));
+            Ok(())
+        }
+    }
+}
+
+fn wait_with_wall_timeout(
+    child: &mut Child,
+    proxy_pid: i32,
+    wall_limit: Duration,
+) -> (Option<ExitStatus>, bool) {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return (Some(status), false),
+            Ok(None) => {
+                if start.elapsed() >= wall_limit {
+                    unsafe { libc::kill(-proxy_pid, libc::SIGKILL) };
+                    let _ = child.kill();
+                    let status = child.wait().ok();
+                    return (status, true);
+                }
+                std::thread::sleep(constants::SUPERVISOR_POLL_INTERVAL);
+            }
+            Err(_) => return (None, false),
+        }
+    }
+}
+
+fn read_stream(pipe: Option<impl Read>, limit: usize) -> (Vec<u8>, OutputIntegrity) {
+    let Some(mut reader) = pipe else {
+        return (Vec::new(), OutputIntegrity::WriteError);
+    };
+    let mut buf = Vec::with_capacity(constants::DEFAULT_IO_BUFFER_SIZE);
+    let mut tmp = [0u8; constants::READ_BUFFER_SIZE];
+    let mut integrity = OutputIntegrity::Complete;
+
+    loop {
+        match reader.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => {
+                if buf.len() + n > limit {
+                    let remaining = limit.saturating_sub(buf.len());
+                    if remaining > 0 {
+                        buf.extend_from_slice(&tmp[..remaining]);
+                    }
+                    integrity = OutputIntegrity::TruncatedByJudgeLimit;
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            Err(e) => {
+                integrity = if e.kind() == std::io::ErrorKind::BrokenPipe {
+                    OutputIntegrity::TruncatedByProgramClose
+                } else {
+                    OutputIntegrity::WriteError
+                };
+                break;
+            }
+        }
+    }
+    (buf, integrity)
+}
+
+fn vec_to_string_lossy(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 #[cfg(test)]
@@ -375,7 +332,7 @@ mod tests {
     use crate::sandbox::types::ProxyStatus;
 
     #[test]
-    fn proxy_reported_timeout_produces_tle() {
+    fn proxy_timeout_produces_tle() {
         let status = ProxyStatus {
             timed_out: true,
             exit_code: None,
@@ -389,41 +346,6 @@ mod tests {
     }
 
     #[test]
-    fn supervisor_safety_timeout_without_proxy_timeout_is_not_tle() {
-        let status = ProxyStatus {
-            timed_out: false,
-            exit_code: None,
-            term_signal: None,
-            wall_time_ms: 13000,
-            internal_error: Some(
-                "sandbox setup exceeded safety timeout (proxy did not respond)".to_string(),
-            ),
-            ..ProxyStatus::default()
-        };
-        let result = status.to_execution_result();
-        assert_eq!(
-            result.status,
-            ExecutionStatus::InternalError,
-            "safety timeout without proxy-reported timeout must be IE, not TLE"
-        );
-    }
-
-    #[test]
-    fn signal_interrupt_produces_signaled_status() {
-        let status = ProxyStatus {
-            timed_out: false,
-            exit_code: None,
-            term_signal: Some(15),
-            wall_time_ms: 500,
-            internal_error: Some("interrupted_by_signal:15".to_string()),
-            ..ProxyStatus::default()
-        };
-        let result = status.to_execution_result();
-        assert_eq!(result.status, ExecutionStatus::Signaled);
-        assert_eq!(result.signal, Some(15));
-    }
-
-    #[test]
     fn clean_exit_zero_is_ok() {
         let status = ProxyStatus {
             exit_code: Some(0),
@@ -434,5 +356,97 @@ mod tests {
         let result = status.to_execution_result();
         assert_eq!(result.status, ExecutionStatus::Ok);
         assert!(result.success);
+    }
+
+    #[test]
+    fn signal_produces_signaled_status() {
+        let status = ProxyStatus {
+            exit_code: None,
+            term_signal: Some(11),
+            wall_time_ms: 50,
+            ..ProxyStatus::default()
+        };
+        let result = status.to_execution_result();
+        assert_eq!(result.status, ExecutionStatus::Signaled);
+        assert_eq!(result.signal, Some(11));
+    }
+
+    #[test]
+    fn read_stream_captures_small_output() {
+        let data = b"hello world";
+        let cursor = std::io::Cursor::new(data.to_vec());
+        let (bytes, integrity) = super::read_stream(Some(cursor), 1024);
+        assert_eq!(bytes, b"hello world");
+        assert_eq!(integrity, OutputIntegrity::Complete);
+    }
+
+    #[test]
+    fn read_stream_truncates_at_limit() {
+        let data = b"abcdefghij";
+        let cursor = std::io::Cursor::new(data.to_vec());
+        let (bytes, integrity) = super::read_stream(Some(cursor), 5);
+        assert_eq!(bytes.len(), 5);
+        assert_eq!(integrity, OutputIntegrity::TruncatedByJudgeLimit);
+    }
+
+    #[test]
+    fn read_stream_none_pipe_returns_error() {
+        let (bytes, integrity) = super::read_stream(None::<std::io::Cursor<Vec<u8>>>, 1024);
+        assert!(bytes.is_empty());
+        assert_eq!(integrity, OutputIntegrity::WriteError);
+    }
+
+    #[test]
+    fn read_stream_empty_input() {
+        let cursor = std::io::Cursor::new(Vec::<u8>::new());
+        let (bytes, integrity) = super::read_stream(Some(cursor), 1024);
+        assert!(bytes.is_empty());
+        assert_eq!(integrity, OutputIntegrity::Complete);
+    }
+
+    #[test]
+    fn read_stream_exact_limit() {
+        let data = vec![0x41u8; 100];
+        let cursor = std::io::Cursor::new(data.clone());
+        let (bytes, integrity) = super::read_stream(Some(cursor), 100);
+        assert_eq!(bytes.len(), 100);
+        assert_eq!(integrity, OutputIntegrity::Complete);
+    }
+
+    #[test]
+    fn vec_to_string_lossy_valid_utf8() {
+        let s = super::vec_to_string_lossy(b"hello".to_vec());
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn vec_to_string_lossy_invalid_utf8() {
+        let s = super::vec_to_string_lossy(vec![0xFF, 0xFE, 0x41]);
+        assert!(s.contains('\u{FFFD}'));
+        assert!(s.contains('A'));
+    }
+
+    #[test]
+    fn try_cgroup_op_ok_is_noop() {
+        use std::process::Command;
+        let mut child = Command::new("/bin/true").spawn().unwrap();
+        let _ = child.wait();
+        let mut errors = Vec::new();
+        let result = super::try_cgroup_op(Ok(()), true, &mut child, &mut errors, "test");
+        assert!(result.is_ok());
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn try_cgroup_op_err_permissive_pushes_warning() {
+        use std::process::Command;
+        let mut child = Command::new("/bin/true").spawn().unwrap();
+        let _ = child.wait();
+        let mut errors = Vec::new();
+        let err = crate::config::types::IsolateError::Cgroup("test fail".into());
+        let result = super::try_cgroup_op(Err(err), false, &mut child, &mut errors, "cg_test");
+        assert!(result.is_ok());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("cg_test"));
     }
 }

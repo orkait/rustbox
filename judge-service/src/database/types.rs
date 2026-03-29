@@ -36,6 +36,7 @@ pub struct Submission {
     pub cpu_time: Option<f64>,
     pub wall_time: Option<f64>,
     pub memory_peak: Option<i64>,
+    pub wall_time_limit_secs: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,

@@ -17,11 +17,12 @@ tmp/
 docker-compose.yml
 docker-compose.judge.yml
 docs/
-docs-site/
+documentation/
 isolate-read-only/
 fuzz/
 benches/
-tests/
+tests/*.rs
+tests/typestate_compile_fail/
 k8s/
 *.pem
 *.key

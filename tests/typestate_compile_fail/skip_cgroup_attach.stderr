@@ -5,4 +5,4 @@ error[E0599]: no method named `drop_credentials` found for struct `Sandbox<Mount
    |             ^^^^^^^^^^^^^^^^ method not found in `Sandbox<MountsPrivate>`
    |
    = note: the method was found for
-           - `Sandbox<RootTransitioned>`
+           - `Sandbox<HygieneApplied>`

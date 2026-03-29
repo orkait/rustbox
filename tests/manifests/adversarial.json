@@ -1,0 +1,182 @@
+{
+  "name": "Adversarial Regression",
+  "description": "Verify sandbox contains malicious code",
+  "tests": [
+    {
+      "name": "fork_bomb",
+      "file": "adversarial/fork_bomb.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict_any": ["RE", "TLE", "MLE", "SIG"] },
+      "description": "pids.max must prevent fork()"
+    },
+    {
+      "name": "thread_bomb",
+      "file": "adversarial/thread_bomb.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict_any": ["RE", "TLE", "MLE", "SIG"] },
+      "description": "pids.max must prevent thread creation"
+    },
+    {
+      "name": "memory_bomb",
+      "file": "adversarial/memory_bomb.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict_any": ["MLE", "TLE"] },
+      "description": "memory.max must OOM kill or wall timer kills"
+    },
+    {
+      "name": "cpu_spin",
+      "file": "adversarial/cpu_spin.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict": "TLE" },
+      "description": "wall timer must kill infinite loop"
+    },
+    {
+      "name": "sigxcpu_catch",
+      "file": "adversarial/sigxcpu_catch.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict": "TLE" },
+      "description": "catching SIGXCPU must not bypass wall timer"
+    },
+    {
+      "name": "read_etc_passwd",
+      "file": "adversarial/read_etc_passwd.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "chroot must hide /etc/passwd"
+    },
+    {
+      "name": "read_etc_shadow",
+      "file": "adversarial/read_etc_shadow.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "chroot must hide /etc/shadow"
+    },
+    {
+      "name": "write_to_bin",
+      "file": "adversarial/write_to_bin.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "filesystem must be read-only"
+    },
+    {
+      "name": "escape_chroot",
+      "file": "adversarial/escape_chroot.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "chdir('..') must not escape chroot"
+    },
+    {
+      "name": "read_proc_cpuinfo",
+      "file": "adversarial/read_proc_cpuinfo.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "/proc/cpuinfo must not be visible (subset=pid)"
+    },
+    {
+      "name": "read_proc_meminfo",
+      "file": "adversarial/read_proc_meminfo.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "/proc/meminfo must not be visible"
+    },
+    {
+      "name": "read_sys_hardware",
+      "file": "adversarial/read_sys_hardware.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "/sys must be empty tmpfs"
+    },
+    {
+      "name": "clone_newuser",
+      "file": "adversarial/clone_newuser.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "seccomp must block CLONE_NEWUSER (SIGSYS)"
+    },
+    {
+      "name": "mount_attempt",
+      "file": "adversarial/mount_attempt.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "seccomp must block mount() (SIGSYS)"
+    },
+    {
+      "name": "ptrace_attempt",
+      "file": "adversarial/ptrace_attempt.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "seccomp must block ptrace() (SIGSYS)"
+    },
+    {
+      "name": "fd_exhaustion",
+      "file": "adversarial/fd_exhaustion.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "RLIMIT_NOFILE must cap open files"
+    },
+    {
+      "name": "file_size_bomb",
+      "file": "adversarial/file_size_bomb.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict_any": ["RE", "SIG"] },
+      "description": "RLIMIT_FSIZE must cap file writes (SIGXFSZ or OSError)"
+    },
+    {
+      "name": "inode_bomb",
+      "file": "adversarial/inode_bomb.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "tmpfs inode limit must cap file creation"
+    },
+    {
+      "name": "tcp_connect",
+      "file": "adversarial/tcp_connect.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "network namespace must block TCP"
+    },
+    {
+      "name": "dns_lookup",
+      "file": "adversarial/dns_lookup.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "network namespace must block DNS"
+    },
+    {
+      "name": "setuid_root",
+      "file": "adversarial/setuid_root.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "setuid(0) must fail after credential drop"
+    },
+    {
+      "name": "setgid_root",
+      "file": "adversarial/setgid_root.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "setgid(0) must fail after credential drop"
+    }
+  ]
+}

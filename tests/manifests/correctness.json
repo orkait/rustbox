@@ -1,0 +1,34 @@
+{
+  "name": "Correctness Validation",
+  "description": "Verify sandbox executes code correctly",
+  "tests": [
+    {
+      "name": "hello_world",
+      "file": "correctness/hello.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "AC", "stdout_contains": "hello world" }
+    },
+    {
+      "name": "sieve_500k",
+      "file": "correctness/sieve_500k.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict": "AC", "stdout_contains": "41538" }
+    },
+    {
+      "name": "exit_nonzero",
+      "file": "correctness/exit_nonzero.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE", "exit_code": 42 }
+    },
+    {
+      "name": "syntax_error",
+      "file": "correctness/syntax_error.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" }
+    }
+  ]
+}

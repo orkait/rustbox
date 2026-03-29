@@ -3,7 +3,6 @@ use crate::config::validator::validate_config;
 use crate::kernel::cgroup::{self, CgroupBackend};
 use crate::observability::audit::events;
 use crate::runtime::security::command_validation;
-use crate::safety::cleanup::BaselineChecker;
 use crate::safety::uid_pool;
 use crate::sandbox::types::{LaunchEvidence, SandboxLaunchRequest};
 use std::fs;
@@ -51,7 +50,6 @@ pub struct Isolate {
     config: IsolateConfig,
     base_path: PathBuf,
     cgroup: Option<Box<dyn CgroupBackend>>,
-    baseline: Option<BaselineChecker>,
     last_launch_evidence: Option<LaunchEvidence>,
     _uid_guard: Option<uid_pool::UidGuard>,
 }
@@ -128,8 +126,6 @@ impl Isolate {
             Err(_) => None,
         };
 
-        let baseline = BaselineChecker::capture_baseline().ok();
-
         let workdir = base_path.join("workdir");
         fs::create_dir_all(&workdir)?;
         #[cfg(unix)]
@@ -153,7 +149,6 @@ impl Isolate {
             config,
             base_path,
             cgroup,
-            baseline,
             last_launch_evidence: None,
             _uid_guard: Some(uid_guard),
         })
@@ -253,18 +248,6 @@ impl Isolate {
 
     /// Deallocate everything. Only place that frees resources.
     pub fn cleanup(mut self) -> Result<()> {
-        let mut evidence = self.last_launch_evidence.take();
-
-        if let Some(checker) = self.baseline.take() {
-            if let Some(ref mut ev) = evidence {
-                if checker.verify_baseline().is_err() {
-                    ev.cleanup_verified = false;
-                    ev.process_lifecycle.descendant_containment =
-                        "baseline_verification_failed".to_string();
-                }
-            }
-        }
-
         if let Some(cg) = self.cgroup.take() {
             let _ = cg.remove(&self.config.instance_id);
         }
@@ -295,34 +278,6 @@ impl Isolate {
     pub fn take_last_launch_evidence(&mut self) -> Option<LaunchEvidence> {
         self.last_launch_evidence.take()
     }
-
-    pub fn add_directory_bindings(
-        &mut self,
-        bindings: Vec<crate::config::types::DirectoryBinding>,
-    ) -> Result<()> {
-        for binding in &bindings {
-            if !binding.maybe && !binding.source.exists() {
-                return Err(IsolateError::Config(format!(
-                    "Source directory does not exist: {}",
-                    binding.source.display()
-                )));
-            }
-            if binding.source.exists() && !binding.source.is_dir() {
-                return Err(IsolateError::Config(format!(
-                    "Not a directory: {}",
-                    binding.source.display()
-                )));
-            }
-            if !binding.target.is_absolute() {
-                return Err(IsolateError::Config(format!(
-                    "Target must be absolute: {}",
-                    binding.target.display()
-                )));
-            }
-        }
-        self.config.directory_bindings.extend(bindings);
-        Ok(())
-    }
 }
 
 impl Drop for Isolate {
@@ -330,6 +285,9 @@ impl Drop for Isolate {
         self.wipe_workdir();
         if let Some(cg) = self.cgroup.take() {
             let _ = cg.remove(&self.config.instance_id);
+        }
+        if self.base_path.exists() {
+            let _ = crate::safety::safe_cleanup::remove_tree_secure(&self.base_path);
         }
     }
 }

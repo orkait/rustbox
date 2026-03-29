@@ -1,0 +1,133 @@
+---
+title: rustbox
+description: Kernel-enforced sandboxing for untrusted code execution
+---
+
+Run untrusted code from strangers on the internet. Python, C++, Java - 8 languages, kernel-isolated, 260+ executions per second. One binary, no Docker daemon, no Redis.
+
+Built for online judges, LLM agent runtimes, code playgrounds, and interview platforms. If you need to run code you don't trust, this is the engine.
+
+```bash
+curl -s -X POST "http://localhost:4096/api/submit?wait=true" \
+  -H "Content-Type: application/json" \
+  -d '{"language": "python", "code": "print(42)"}' | jq
+```
+
+```json
+{
+  "verdict": "AC",
+  "stdout": "42\n",
+  "cpu_time": 0.012,
+  "wall_time": 0.025,
+  "memory_peak": 3145728
+}
+```
+
+25ms. Full namespace isolation, cgroup enforcement, seccomp filtering, capability drop. Not a container - direct kernel primitives composed in a fixed order enforced by the Rust compiler.
+
+---
+
+## Why not Judge0?
+
+| | rustbox | Judge0 |
+|---|---|---|
+| Deploy | `docker compose up judge` | Docker + Rails + PostgreSQL + Redis |
+| Throughput | 260 req/s (measured, every result verified) | ~30 req/s |
+| Cold start | 25ms | 500ms+ |
+| Isolation | 8 kernel layers, compile-time enforced | Docker container defaults |
+| Syscall filter | 52-rule seccomp deny-list | Docker's 300-rule default |
+| Verdicts | Kernel evidence (OOM events, cgroup stats) | Exit code guessing |
+| Binary size | 3 MB | 4 containers |
+
+## Two profiles, one binary
+
+**Judge** - competitive programming. 256 MB memory, 7 second wall time, no network. The code runs for a few seconds in a bare sandbox with just the language runtime. This is what Codeforces needs.
+
+**Executor** - LLM agents. 2 GB memory, 60 second wall time, filtered network. numpy, pandas, the works. This is what Claude Code and GPT tool-use need.
+
+Same Docker image. Profile selected by config file.
+
+```bash
+docker compose up judge       # tight limits
+docker compose up executor    # relaxed limits
+docker compose up judge-pg    # judge + Postgres (multi-node)
+```
+
+## 8 layers of isolation
+
+Every layer stops a different class of attack. No single layer is enough. Together, they make sandbox escape require defeating all eight simultaneously.
+
+| # | What | Stops |
+|---|---|---|
+| 1 | PID + IPC + UTS namespaces | Seeing host processes, IPC channels |
+| 2 | Mount namespace + chroot | Accessing host filesystem |
+| 3 | Network namespace | Sockets, DNS, cloud metadata |
+| 4 | Cgroups v2 | Memory bombs, fork bombs, CPU abuse |
+| 5 | Seccomp-BPF (52 rules) | ptrace, mount, bpf, io_uring, kexec |
+| 6 | All 5 capability sets zeroed | Privilege escalation |
+| 7 | Credential drop to UID 60000+ | Running as root |
+| 8 | NO_NEW_PRIVS | Regaining privileges via setuid |
+
+The order is enforced by the Rust type system. You can't call `exec_payload()` without completing all 8 steps. Skip one and the compiler rejects your code. Not a convention - a type error.
+
+22 adversarial tests run on every build. Fork bombs, memory bombs, chroot escapes, seccomp bypasses, privilege escalation attempts. 0 escapes across 22 attack vectors.
+
+## Get started
+
+```bash
+# Build
+cargo build --release -p rustbox -p judge-service
+
+# Run (needs root for kernel isolation)
+sudo target/release/rustbox execute-code \
+  --language python --code 'print(2 ** 10)'
+
+# Or use Docker
+docker build -t rustbox .
+docker run --privileged -p 4096:4096 rustbox
+```
+
+8 languages out of the box: **Python, C, C++, Java, JavaScript, TypeScript, Go, Rust**
+
+## API in 30 seconds
+
+```bash
+# Async (returns job ID immediately)
+curl -X POST http://localhost:4096/api/submit \
+  -H "Content-Type: application/json" \
+  -d '{"language": "python", "code": "print(42)"}'
+
+# Sync (waits for result)
+curl -X POST "http://localhost:4096/api/submit?wait=true" \
+  -H "Content-Type: application/json" \
+  -d '{"language": "python", "code": "print(42)"}'
+
+# Webhooks (HMAC-SHA256 signed, Standard Webhooks spec)
+curl -X POST http://localhost:4096/api/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "python",
+    "code": "print(42)",
+    "webhook_url": "https://myapp.com/callback",
+    "webhook_secret": "your-secret"
+  }'
+```
+
+## Development
+
+```bash
+python dev.py test          # fmt + clippy + cargo test
+python dev.py stress        # 260+ req/s, verifies every result
+python dev.py adversarial   # 22 adversarial + 4 correctness + 11 recovery
+python dev.py bench         # throughput benchmark (tiers 1-1000)
+```
+
+---
+
+[Architecture](/architecture/) - how the sandbox works internally
+
+[API Reference](/api/) - full endpoint documentation
+
+[Docker Deployment](/getting-started/docker/) - production setup with minimal capabilities
+
+[Security Internals](/architecture/isolation/) - the 8-layer isolation model in detail

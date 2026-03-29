@@ -128,5 +128,8 @@ judge-service/*.db-wal
 .wrangler/
 
 ## Astro build artifacts
-docs-site/.astro/
+documentation/.astro/
 .claude/
+
+## Superpowers plans/specs (local only)
+docs/superpowers/

@@ -186,11 +186,8 @@ impl RustBoxConfig {
 }
 
 impl IsolateConfig {
-    pub fn with_language_defaults(language: &str, instance_id: String) -> Result<Self> {
-        let mut config = Self {
-            instance_id,
-            ..Self::default()
-        };
+    pub fn with_language_defaults(language: &str) -> Result<Self> {
+        let mut config = Self::default();
 
         if let Ok(rustbox_config) = RustBoxConfig::load_default() {
             if let Some(lang) = rustbox_config.get_language_config(language) {
@@ -221,19 +218,22 @@ impl IsolateConfig {
                     config.environment.push((key.clone(), value.clone()));
                 }
 
-                eprintln!("Loaded config.json defaults for {}:", language);
-                eprintln!("  Memory: {} MB", l.memory_mb);
-                eprintln!("  CPU time: {} sec", l.cpu_time_sec);
-                eprintln!("  Wall time: {} sec", l.wall_time_sec);
-                eprintln!("  Max processes: {}", l.max_processes);
+                log::debug!(
+                    "config.json: {} mem={}MB cpu={}s wall={}s procs={}",
+                    language,
+                    l.memory_mb,
+                    l.cpu_time_sec,
+                    l.wall_time_sec,
+                    l.max_processes
+                );
             } else {
-                eprintln!(
-                    "Warning: Language '{}' not found in config.json, using defaults",
+                log::warn!(
+                    "language '{}' not found in config.json, using defaults",
                     language
                 );
             }
         } else {
-            eprintln!("Warning: Could not load config.json, using hardcoded defaults");
+            log::warn!("could not load config.json, using hardcoded defaults");
         }
 
         Ok(config)
@@ -245,7 +245,7 @@ mod tests {
     use super::*;
 
     fn load(lang: &str) -> IsolateConfig {
-        IsolateConfig::with_language_defaults(lang, format!("test-{}", lang)).unwrap()
+        IsolateConfig::with_language_defaults(lang).unwrap()
     }
 
     fn env_keys(config: &IsolateConfig) -> std::collections::HashSet<String> {

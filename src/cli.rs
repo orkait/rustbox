@@ -45,10 +45,6 @@ impl CliMode {
 struct Cli {
     #[arg(long, hide = true)]
     internal_role: Option<String>,
-    #[arg(long, hide = true)]
-    launch_fd: Option<i32>,
-    #[arg(long, hide = true)]
-    status_fd: Option<i32>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -168,14 +164,8 @@ pub fn run(mode: CliMode) -> Result<()> {
 
     let cli = Cli::parse();
     if let Some(role) = cli.internal_role.as_deref() {
-        if role == "proxy" {
-            let launch_fd = cli.launch_fd.ok_or_else(|| {
-                anyhow::anyhow!("--launch-fd is required for --internal-role=proxy")
-            })?;
-            let status_fd = cli.status_fd.ok_or_else(|| {
-                anyhow::anyhow!("--status-fd is required for --internal-role=proxy")
-            })?;
-            return crate::sandbox::proxy::run_proxy_role(launch_fd, status_fd).map_err(Into::into);
+        if role == crate::config::constants::INTERNAL_ROLE_PROXY {
+            return crate::sandbox::proxy::run_proxy_role().map_err(Into::into);
         }
         return Err(anyhow::anyhow!("unsupported internal role: {}", role));
     }
@@ -238,10 +228,8 @@ pub fn run(mode: CliMode) -> Result<()> {
             let mode_label = if strict { "STRICT" } else { "ROOT" };
             eprintln!("Executing {} code ({})", language, mode_label);
 
-            let mut config = crate::config::types::IsolateConfig::with_language_defaults(
-                &language,
-                crate::config::constants::DEFAULT_INSTANCE_ID.to_string(),
-            )?;
+            let mut config =
+                crate::config::types::IsolateConfig::with_language_defaults(&language)?;
             config.strict_mode = strict;
             config.no_seccomp = no_seccomp;
             config.seccomp_policy_file = seccomp_policy.map(std::path::PathBuf::from);
@@ -278,7 +266,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             let json_result = serde_json::json!({
                 "status": "OK",
                 "pool_active": crate::safety::uid_pool::active_count(),
-                "pool_capacity": 1000,
+                "pool_capacity": crate::config::constants::DEFAULT_UID_POOL_SIZE,
             });
             println!("{}", serde_json::to_string_pretty(&json_result)?);
             Ok(())

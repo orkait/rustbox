@@ -33,6 +33,7 @@ struct PgSubmissionRow {
     cpu_time: Option<f64>,
     wall_time: Option<f64>,
     memory_peak: Option<i64>,
+    wall_time_limit_secs: Option<i64>,
     created_at: chrono::DateTime<Utc>,
     started_at: Option<chrono::DateTime<Utc>>,
     completed_at: Option<chrono::DateTime<Utc>>,
@@ -61,6 +62,7 @@ impl From<PgSubmissionRow> for Submission {
             cpu_time: r.cpu_time,
             wall_time: r.wall_time,
             memory_peak: r.memory_peak,
+            wall_time_limit_secs: r.wall_time_limit_secs,
             created_at: r.created_at,
             started_at: r.started_at,
             completed_at: r.completed_at,
@@ -117,6 +119,7 @@ impl PgDatabase {
                 cpu_time      DOUBLE PRECISION,
                 wall_time     DOUBLE PRECISION,
                 memory_peak   BIGINT,
+                wall_time_limit_secs BIGINT,
                 created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
                 started_at    TIMESTAMPTZ,
                 completed_at  TIMESTAMPTZ
@@ -185,12 +188,12 @@ impl Database for PgDatabase {
                 (id, user_id, ip_address, language, code, stdin, webhook_url, webhook_secret,
                  status, node_id, sandbox_id, verdict, exit_code, stdout, stderr, signal,
                  error_message, cpu_time, wall_time, memory_peak,
-                 created_at, started_at, completed_at)
+                 wall_time_limit_secs, created_at, started_at, completed_at)
             VALUES
                 ($1, $2, $3, $4, $5, $6, $7, $8,
                  $9, $10, $11, $12, $13, $14, $15, $16,
                  $17, $18, $19, $20,
-                 $21, $22, $23)
+                 $21, $22, $23, $24)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
@@ -214,6 +217,7 @@ impl Database for PgDatabase {
         .bind(sub.cpu_time)
         .bind(sub.wall_time)
         .bind(sub.memory_peak)
+        .bind(sub.wall_time_limit_secs)
         .bind(sub.created_at)
         .bind(sub.started_at)
         .bind(sub.completed_at)
@@ -330,20 +334,29 @@ impl Database for PgDatabase {
         Ok(row.map(Submission::from))
     }
 
-    async fn reap_stale(&self, timeout: Duration) -> anyhow::Result<u64> {
-        let timeout_secs = timeout.as_secs_f64();
+    async fn reap_stale(&self, _timeout: Duration) -> anyhow::Result<u64> {
+        let fallback = crate::constants::DEFAULT_REAPER_FALLBACK_SECS as f64;
+        let grace = crate::constants::REAPER_GRACE_SECS;
         let result = sqlx::query(
             r#"
             UPDATE submissions
                SET status        = 'error',
                    verdict       = 'IE',
-                   error_message = 'node crashed or execution timed out',
+                   error_message = 'reaped: execution timed out',
                    completed_at  = NOW()
              WHERE status = 'running'
-               AND started_at < NOW() - ($1 || ' seconds')::INTERVAL
+               AND started_at IS NOT NULL
+               AND (
+                   (wall_time_limit_secs IS NOT NULL
+                    AND started_at < NOW() - ((wall_time_limit_secs + $2) || ' seconds')::INTERVAL)
+                   OR
+                   (wall_time_limit_secs IS NULL
+                    AND started_at < NOW() - ($1 || ' seconds')::INTERVAL)
+               )
             "#,
         )
-        .bind(timeout_secs)
+        .bind(fallback)
+        .bind(grace)
         .execute(&self.pool)
         .await?;
 

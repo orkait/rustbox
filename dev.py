@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Rustbox development environment launcher.
+"""Rustbox development helper.
 
 Usage:
-    python dev.py              # Start everything (infra + backend + frontend)
-    python dev.py up           # Same as above
-    python dev.py infra        # Start only Postgres + Redis
-    python dev.py backend      # Start only judge-service (assumes infra running)
-    python dev.py frontend     # Start only web dev server
-    python dev.py build        # Build everything (cargo + npm)
-    python dev.py down         # Stop all Docker containers
-    python dev.py status       # Show status of all components
-    python dev.py test         # Run all tests
+    python dev.py build        # Build rustbox + judge-service
+    python dev.py backend      # Start judge-service (needs sudo)
+    python dev.py test         # Run all tests (cargo test + clippy + fmt)
     python dev.py curl         # Quick smoke test via curl
+    python dev.py stress       # Correctness under load (verify every result)
+    python dev.py bench        # Throughput benchmark via oha (req/s + latency)
+    python dev.py adversarial  # Adversarial + correctness + recovery tests
+    python dev.py status       # Show backend health
 """
 
 import subprocess
@@ -24,18 +22,9 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
-WEB_DIR = ROOT / "web"
 
-# Dev-only defaults (never used in production — docker-compose requires env vars)
-DEV_DEFAULTS = {
-    "POSTGRES_DB": "rustbox",
-    "POSTGRES_USER": "rustbox",
-    "POSTGRES_PASSWORD": "rustbox_dev",
-    "REDIS_PASSWORD": "rustbox_dev",
-    "RUSTBOX_API_KEY": "",
-}
+RUSTBOX_PORT = 4096
 
-# Colors
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RED = "\033[91m"
@@ -49,33 +38,7 @@ def log(msg, color=GREEN):
 def err(msg):
     print(f"{RED}{BOLD}!!! {msg}{RESET}")
 
-def dev_env():
-    """Return env dict with dev defaults applied (only if not already set)."""
-    env = {**os.environ}
-    for key, default in DEV_DEFAULTS.items():
-        if key not in env:
-            env[key] = default
-    return env
-
-def backend_env():
-    """Return env dict for running judge-service locally."""
-    env = dev_env()
-    db_user = env["POSTGRES_USER"]
-    db_pass = env["POSTGRES_PASSWORD"]
-    db_name = env["POSTGRES_DB"]
-    redis_pass = env["REDIS_PASSWORD"]
-    return {
-        "RUSTBOX_DATABASE_URL": f"postgres://{db_user}:{db_pass}@localhost:5433/{db_name}",
-        "RUSTBOX_REDIS_URL": f"redis://:{redis_pass}@127.0.0.1:6379",
-        "RUSTBOX_PORT": "8080",
-        "RUSTBOX_WORKERS": env.get("RUSTBOX_WORKERS", "2"),
-        "RUST_LOG": env.get("RUST_LOG", "info"),
-        "RUSTBOX_API_KEY": env.get("RUSTBOX_API_KEY", ""),
-        "RUSTBOX_STORE_META": env.get("RUSTBOX_STORE_META", "true"),
-    }
-
 def run(cmd, cwd=None, check=True, capture=False, env=None):
-    """Run a command, printing it first."""
     cwd = cwd or ROOT
     merged_env = {**os.environ, **(env or {})}
     if not capture:
@@ -87,326 +50,133 @@ def run(cmd, cwd=None, check=True, capture=False, env=None):
 
 def check_tool(name):
     if not shutil.which(name):
-        err(f"'{name}' not found in PATH. Please install it.")
+        err(f"'{name}' not found in PATH.")
         sys.exit(1)
-
-# ---------------------------------------------------------------------------
-# Commands
-# ---------------------------------------------------------------------------
-
-def cmd_infra():
-    """Start Postgres + Redis via docker compose."""
-    log("Starting Postgres + Redis...")
-    env = dev_env()
-    run("docker compose up -d postgres redis", env=env)
-    log("Waiting for services to be healthy...")
-    for _ in range(30):
-        result = run(
-            "docker compose ps --format json",
-            capture=True, check=False, env=env,
-        )
-        if result.returncode != 0:
-            time.sleep(1)
-            continue
-        lines = result.stdout.strip().split("\n")
-        all_healthy = True
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                svc = json.loads(line)
-                name = svc.get("Service", svc.get("Name", ""))
-                status = svc.get("Health", svc.get("Status", ""))
-                if name in ("postgres", "redis") and "healthy" not in status.lower():
-                    all_healthy = False
-            except json.JSONDecodeError:
-                all_healthy = False
-        if all_healthy and lines:
-            break
-        time.sleep(1)
-    else:
-        err("Timed out waiting for infra. Check: docker compose ps")
-        return False
-    log("Postgres + Redis ready.")
-    return True
 
 
 def cmd_build():
-    """Build backend + frontend."""
-    log("Building judge-service...")
-    run("cargo build -p judge-service")
-    log("Building rustbox...")
-    run("cargo build -p rustbox")
-    if (WEB_DIR / "package.json").exists():
-        log("Installing web dependencies...")
-        run("npm install --legacy-peer-deps", cwd=WEB_DIR)
-        log("Building web frontend...")
-        run("npx vite build", cwd=WEB_DIR)
-    log("Build complete.", GREEN)
+    log("Building rustbox + judge-service...")
+    run("cargo build -p rustbox -p judge-service")
+    log("Build complete.")
 
 
 def cmd_backend():
-    """Start judge-service (needs sudo for sandbox)."""
     binary = ROOT / "target" / "debug" / "judge-service"
     if not binary.exists():
-        log("judge-service not built, building...", YELLOW)
+        log("Not built, building...", YELLOW)
         run("cargo build -p judge-service")
 
-    log("Starting judge-service on :8080 ...")
-    log("  (Ctrl+C to stop)", YELLOW)
+    be_env = {
+        "RUSTBOX_DATABASE_URL": f"sqlite:///tmp/rustbox-dev.db",
+        "RUSTBOX_PORT": str(RUSTBOX_PORT),
+        "RUSTBOX_WORKERS": os.environ.get("RUSTBOX_WORKERS", "4"),
+        "RUST_LOG": os.environ.get("RUST_LOG", "info"),
+    }
 
-    be_env = backend_env()
+    log(f"Starting judge-service on :{RUSTBOX_PORT} ...")
+    log("  (Ctrl+C to stop)", YELLOW)
 
     euid = os.geteuid() if hasattr(os, "geteuid") else 1
     if euid != 0:
-        log("Not root — running with sudo (sandbox needs root)", YELLOW)
+        log("Not root - running with sudo (sandbox needs root)", YELLOW)
         env_args = " ".join(f"{k}={v}" for k, v in be_env.items())
         cmd = f"sudo {env_args} {binary}"
-        try:
-            run(cmd)
-        except KeyboardInterrupt:
-            log("judge-service stopped.")
     else:
-        try:
-            run(str(binary), env={**os.environ, **be_env})
-        except KeyboardInterrupt:
-            log("judge-service stopped.")
+        cmd = str(binary)
 
-
-def cmd_frontend():
-    """Start Vite dev server."""
-    if not (WEB_DIR / "node_modules").exists():
-        log("Installing web dependencies...", YELLOW)
-        run("npm install --legacy-peer-deps", cwd=WEB_DIR)
-
-    log("Starting web dev server on :3000 ...")
-    log("  (Ctrl+C to stop)", YELLOW)
     try:
-        run("npx vite", cwd=WEB_DIR)
+        run(cmd, env={**os.environ, **be_env})
     except KeyboardInterrupt:
-        log("Web server stopped.")
-
-
-def cmd_up():
-    """Start everything: infra, then backend + frontend in parallel."""
-    if not cmd_infra():
-        return
-
-    binary = ROOT / "target" / "debug" / "judge-service"
-    if not binary.exists():
-        log("Building judge-service...", YELLOW)
-        run("cargo build -p judge-service")
-
-    be_env = backend_env()
-    euid = os.geteuid() if hasattr(os, "geteuid") else 1
-
-    # If not root, validate sudo access upfront (prompts for password in foreground)
-    if euid != 0:
-        log("Backend needs root — validating sudo...", YELLOW)
-        result = subprocess.run(["sudo", "-v"], check=False)
-        if result.returncode != 0:
-            err("sudo authentication failed. Run with: sudo python dev.py")
-            return
-
-    log("Starting backend + frontend...")
-    log("  Backend:  http://localhost:8080/api/health")
-    log("  Frontend: http://localhost:3000")
-    log("  (Ctrl+C to stop all)", YELLOW)
-
-    procs = []
-    try:
-        # Backend
-        if euid != 0:
-            env_args = " ".join(f"{k}={v}" for k, v in be_env.items())
-            backend_cmd = f"sudo {env_args} {binary}"
-            backend_proc = subprocess.Popen(
-                backend_cmd, shell=True, cwd=str(ROOT),
-            )
-        else:
-            backend_proc = subprocess.Popen(
-                [str(binary)], cwd=str(ROOT), env={**os.environ, **be_env},
-            )
-        procs.append(("backend", backend_proc))
-
-        # Wait for backend to start listening before launching frontend
-        log("Waiting for backend to start...")
-        for i in range(30):
-            if backend_proc.poll() is not None:
-                err(f"Backend exited with code {backend_proc.returncode}")
-                return
-            try:
-                import socket
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.5)
-                s.connect(("127.0.0.1", 8080))
-                s.close()
-                break
-            except (ConnectionRefusedError, OSError):
-                time.sleep(0.5)
-        else:
-            err("Backend failed to start within 15s. Check logs above.")
-            backend_proc.kill()
-            return
-
-        log("Backend ready.", GREEN)
-
-        # Frontend
-        if not (WEB_DIR / "node_modules").exists():
-            run("npm install --legacy-peer-deps", cwd=WEB_DIR)
-
-        frontend_proc = subprocess.Popen(
-            "npx vite", shell=True, cwd=str(WEB_DIR), env=os.environ,
-        )
-        procs.append(("frontend", frontend_proc))
-
-        # Wait for any to exit
-        while True:
-            for name, proc in procs:
-                ret = proc.poll()
-                if ret is not None:
-                    log(f"{name} exited with code {ret}", RED if ret else GREEN)
-                    raise KeyboardInterrupt
-            time.sleep(0.5)
-
-    except KeyboardInterrupt:
-        log("Shutting down...")
-        for name, proc in procs:
-            if proc.poll() is None:
-                if name == "backend" and euid != 0:
-                    # sudo process needs sudo kill
-                    subprocess.run(["sudo", "kill", str(proc.pid)], check=False)
-                else:
-                    proc.send_signal(signal.SIGTERM)
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                log(f"  {name} stopped")
-
-
-def cmd_down():
-    """Stop all Docker containers."""
-    log("Stopping Docker containers...")
-    run("docker compose down", env=dev_env())
-    log("Done.")
-
-
-def cmd_status():
-    """Show status of all components."""
-    log("Docker containers:")
-    run("docker compose ps", check=False, env=dev_env())
-    print()
-
-    api_key = os.environ.get("RUSTBOX_API_KEY", DEV_DEFAULTS["RUSTBOX_API_KEY"])
-    key_header = f"-H 'x-api-key: {api_key}'" if api_key else ""
-
-    # Check backend
-    result = run(
-        "curl -s http://localhost:8080/api/health 2>/dev/null",
-        capture=True, check=False,
-    )
-    if result.returncode == 0 and result.stdout:
-        try:
-            health = json.loads(result.stdout)
-            log(f"Backend:  UP (workers={health.get('workers')}, queue={health.get('queue_depth')})")
-        except json.JSONDecodeError:
-            log("Backend:  UP (response not JSON)", YELLOW)
-    else:
-        log("Backend:  DOWN", RED)
-
-    # Check frontend
-    result = run(
-        "curl -s -o /dev/null -w '%{http_code}' http://localhost:3000 2>/dev/null",
-        capture=True, check=False,
-    )
-    if result.returncode == 0 and result.stdout.strip() == "200":
-        log("Frontend: UP (http://localhost:3000)")
-    else:
-        log("Frontend: DOWN", RED)
+        log("judge-service stopped.")
 
 
 def cmd_test():
-    """Run all tests."""
-    log("Running rustbox unit + integration tests...")
-    run("cargo test -p rustbox --all")
-    log("Running judge-service check...")
-    run("cargo check -p judge-service")
-    if (WEB_DIR / "package.json").exists():
-        log("Type-checking frontend...")
-        run("npx tsc --noEmit", cwd=WEB_DIR)
+    log("Format check...")
+    run("cargo fmt --all -- --check")
+    log("Clippy...")
+    run("cargo clippy --workspace -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity")
+    log("Unit tests...")
+    run("cargo test --workspace")
     log("All tests passed!", GREEN)
 
 
 def cmd_curl():
-    """Quick smoke test via curl."""
-    api_key = os.environ.get("RUSTBOX_API_KEY", DEV_DEFAULTS["RUSTBOX_API_KEY"])
+    api_key = os.environ.get("RUSTBOX_API_KEY", "")
     key_header = f"-H 'x-api-key: {api_key}'" if api_key else ""
+    base = f"http://localhost:{RUSTBOX_PORT}"
 
     log("Submitting Python hello world...")
     result = run(
-        f"""curl -s -X POST http://localhost:8080/api/submit \
+        f"""curl -s -X POST {base}/api/submit?wait=true \
            -H 'Content-Type: application/json' \
            {key_header} \
            -d '{{"language":"python","code":"print(42)","stdin":""}}'""",
         capture=True, check=False,
     )
     if result.returncode != 0 or not result.stdout:
-        err(f"Submit failed. Is the backend running? ({result.stderr})")
+        err(f"Failed. Is the backend running on :{RUSTBOX_PORT}?")
         return
 
-    print(f"  Response: {result.stdout}")
     try:
-        resp = json.loads(result.stdout)
-        job_id = resp["id"]
-    except (json.JSONDecodeError, KeyError):
-        err("Unexpected response format")
-        return
+        r = json.loads(result.stdout)
+        verdict = r.get("verdict", "?")
+        stdout = (r.get("stdout") or "").strip()
+        print(f"  {json.dumps(r, indent=2)}")
+        if verdict == "AC" and stdout == "42":
+            log("Smoke test PASSED!")
+        else:
+            log(f"Smoke test: verdict={verdict}, stdout='{stdout}'", YELLOW)
+    except json.JSONDecodeError:
+        err(f"Bad response: {result.stdout}")
 
-    log(f"Polling result for {job_id}...")
-    for i in range(30):
-        time.sleep(0.5)
-        result = run(
-            f"curl -s {key_header} http://localhost:8080/api/result/{job_id}",
-            capture=True, check=False,
-        )
-        if result.returncode != 0:
-            continue
+
+def cmd_stress():
+    log("Building stress test image...")
+    run("docker build -t rustbox-stress -f tests/Dockerfile .")
+    log("Running parallel stress test (verifies every result)...")
+    run("docker run --privileged --cpus=4 --memory=4g --rm rustbox-stress")
+
+
+def cmd_bench():
+    log("Building stress test image...")
+    run("docker build -t rustbox-stress -f tests/Dockerfile .")
+    log("Running benchmark (tiers 1-1000, 12 concurrent, verifies all)...")
+    run("docker run --privileged --cpus=4 --memory=4g --rm --entrypoint /opt/rustbox-tests/runners/run-bench.sh rustbox-stress")
+
+
+def cmd_adversarial():
+    log("Building stress test image...")
+    run("docker build -t rustbox-stress -f tests/Dockerfile .")
+    log("Running adversarial + correctness + recovery tests...")
+    run("docker run --privileged --cpus=4 --memory=4g --rm --entrypoint /opt/rustbox-tests/runners/run-all.sh rustbox-stress")
+
+
+def cmd_status():
+    base = f"http://localhost:{RUSTBOX_PORT}"
+    result = run(f"curl -s {base}/api/health 2>/dev/null", capture=True, check=False)
+    if result.returncode == 0 and result.stdout:
         try:
-            r = json.loads(result.stdout)
-            status = r.get("status", "")
-            if status in ("completed", "error"):
-                print(f"  {json.dumps(r, indent=2)}")
-                verdict = r.get("verdict", "?")
-                stdout = (r.get("stdout") or "").strip()
-                if verdict == "Ok" and stdout == "42":
-                    log("Smoke test PASSED!", GREEN)
-                else:
-                    log(f"Smoke test: verdict={verdict}, stdout='{stdout}'", YELLOW)
-                return
+            h = json.loads(result.stdout)
+            log(f"Backend: UP  workers={h.get('workers')} queue={h.get('queue_depth')} mode={h.get('enforcement_mode')}")
         except json.JSONDecodeError:
-            pass
+            log("Backend: UP (non-JSON response)", YELLOW)
+    else:
+        log("Backend: DOWN", RED)
 
-    err("Timed out waiting for result")
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 COMMANDS = {
-    "up": cmd_up,
-    "infra": cmd_infra,
-    "backend": cmd_backend,
-    "frontend": cmd_frontend,
     "build": cmd_build,
-    "down": cmd_down,
-    "status": cmd_status,
+    "backend": cmd_backend,
     "test": cmd_test,
     "curl": cmd_curl,
+    "stress": cmd_stress,
+    "bench": cmd_bench,
+    "adversarial": cmd_adversarial,
+    "status": cmd_status,
 }
 
 def main():
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "up"
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "build"
 
     if cmd in ("-h", "--help", "help"):
         print(__doc__)
@@ -417,12 +187,9 @@ def main():
         print(f"Available: {', '.join(COMMANDS.keys())}")
         sys.exit(1)
 
-    # Check prerequisites
-    check_tool("docker")
-    if cmd in ("backend", "up"):
-        check_tool("cargo")
-    if cmd in ("frontend", "up", "build"):
-        check_tool("npm")
+    check_tool("cargo")
+    if cmd in ("stress", "bench", "adversarial"):
+        check_tool("docker")
 
     try:
         COMMANDS[cmd]()

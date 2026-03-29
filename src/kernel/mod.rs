@@ -5,6 +5,7 @@ pub mod contract;
 pub mod credentials;
 pub mod mount;
 pub mod namespace;
+pub mod pidfd;
 pub mod pipeline;
 pub mod seccomp;
 pub mod signal;

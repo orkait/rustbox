@@ -13,10 +13,6 @@ pub struct NamespaceIsolation {
 }
 
 impl NamespaceIsolation {
-    pub fn builder() -> NamespaceIsolationBuilder {
-        NamespaceIsolationBuilder::default()
-    }
-
     pub fn new(
         enable_pid: bool,
         enable_mount: bool,
@@ -33,10 +29,6 @@ impl NamespaceIsolation {
             enable_ipc_namespace: enable_ipc,
             enable_uts_namespace: enable_uts,
         }
-    }
-
-    pub fn new_default() -> Self {
-        Self::new(true, true, true, false, true, true)
     }
 
     pub fn is_supported() -> bool {
@@ -205,66 +197,4 @@ pub fn harden_mount_propagation() -> Result<()> {
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct NamespaceIsolationBuilder {
-    enable_pid: bool,
-    enable_mount: bool,
-    enable_network: bool,
-    enable_user: bool,
-    enable_ipc: bool,
-    enable_uts: bool,
-}
-
-impl NamespaceIsolationBuilder {
-    pub fn with_pid(mut self) -> Self {
-        self.enable_pid = true;
-        self
-    }
-
-    pub fn with_mount(mut self) -> Self {
-        self.enable_mount = true;
-        self
-    }
-
-    pub fn with_network(mut self) -> Self {
-        self.enable_network = true;
-        self
-    }
-
-    pub fn with_user(mut self) -> Self {
-        self.enable_user = true;
-        self
-    }
-
-    pub fn with_ipc(mut self) -> Self {
-        self.enable_ipc = true;
-        self
-    }
-
-    pub fn with_uts(mut self) -> Self {
-        self.enable_uts = true;
-        self
-    }
-
-    pub fn with_all_except_user(mut self) -> Self {
-        self.enable_pid = true;
-        self.enable_mount = true;
-        self.enable_network = true;
-        self.enable_ipc = true;
-        self.enable_uts = true;
-        self
-    }
-
-    pub fn build(self) -> NamespaceIsolation {
-        NamespaceIsolation::new(
-            self.enable_pid,
-            self.enable_mount,
-            self.enable_network,
-            self.enable_user,
-            self.enable_ipc,
-            self.enable_uts,
-        )
-    }
 }

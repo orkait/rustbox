@@ -78,13 +78,6 @@ impl ExecutionProfile {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RunWorkspace {
-    pub root: PathBuf,
-    pub workdir: PathBuf,
-    pub temp_dir: PathBuf,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SandboxLaunchRequest {
     pub instance_id: String,
     pub profile: ExecutionProfile,
@@ -135,7 +128,7 @@ pub struct LaunchEvidence {
 }
 
 impl LaunchEvidence {
-    pub fn resolve_mode(&self) -> SecurityMode {
+    fn resolve_mode(&self) -> SecurityMode {
         if self.strict_requested && self.missing_controls.is_empty() {
             return SecurityMode::Strict;
         }
@@ -216,12 +209,8 @@ impl ProxyStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SandboxLaunchOutcome {
-    pub proxy_host_pid: i32,
-    pub payload_host_pid: Option<i32>,
     pub result: ExecutionResult,
     pub evidence: LaunchEvidence,
-    pub kill_report: Option<KillReport>,
-    pub proxy_status: ProxyStatus,
 }
 
 #[cfg(test)]

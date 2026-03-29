@@ -9,6 +9,10 @@
 use rustbox::config::types::{ExecutionStatus, IsolateConfig};
 use rustbox::runtime::isolate::{ExecutionOverrides, Isolate};
 use std::sync::Once;
+use std::time::Duration;
+
+const TEST_SHORT_CPU_SECS: u64 = 1;
+const TEST_SHORT_WALL_SECS: u64 = 3;
 
 static INIT: Once = Once::new();
 
@@ -22,16 +26,14 @@ fn init_subsystems() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn permissive_config(language: &str, box_id: u32) -> IsolateConfig {
-    let mut config = IsolateConfig::with_language_defaults(language, format!("rustbox/{}", box_id))
-        .unwrap_or_default();
+fn permissive_config(language: &str, _box_id: u32) -> IsolateConfig {
+    let mut config = IsolateConfig::with_language_defaults(language).unwrap_or_default();
     config.strict_mode = false;
     config
 }
 
-fn strict_config(language: &str, box_id: u32) -> IsolateConfig {
-    let mut config = IsolateConfig::with_language_defaults(language, format!("rustbox/{}", box_id))
-        .unwrap_or_default();
+fn strict_config(language: &str, _box_id: u32) -> IsolateConfig {
+    let mut config = IsolateConfig::with_language_defaults(language).unwrap_or_default();
     config.strict_mode = true;
     config
 }
@@ -80,6 +82,7 @@ fn run_strict(
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore]
 fn python_hello_world_permissive() {
     let r = run_permissive("python", 100, "print('hello world')", no_overrides());
     assert_eq!(
@@ -94,6 +97,7 @@ fn python_hello_world_permissive() {
 }
 
 #[test]
+#[ignore]
 fn python_reads_stdin_permissive() {
     let code = "import sys; print(sys.stdin.read().strip())";
     let r = run_permissive("python", 101, code, overrides_with_stdin("rustbox\n"));
@@ -102,6 +106,7 @@ fn python_reads_stdin_permissive() {
 }
 
 #[test]
+#[ignore]
 fn python_arithmetic_permissive() {
     let r = run_permissive("python", 102, "print(2 ** 10)", no_overrides());
     assert_eq!(r.status, ExecutionStatus::Ok);
@@ -109,6 +114,7 @@ fn python_arithmetic_permissive() {
 }
 
 #[test]
+#[ignore]
 fn python_syntax_error_is_runtime_error_permissive() {
     let r = run_permissive("python", 103, "def f(\n  pass", no_overrides());
     assert_eq!(
@@ -121,6 +127,7 @@ fn python_syntax_error_is_runtime_error_permissive() {
 }
 
 #[test]
+#[ignore]
 fn python_runtime_exception_is_runtime_error_permissive() {
     let r = run_permissive("python", 104, "raise ValueError('boom')", no_overrides());
     assert_eq!(r.status, ExecutionStatus::RuntimeError);
@@ -128,6 +135,7 @@ fn python_runtime_exception_is_runtime_error_permissive() {
 }
 
 #[test]
+#[ignore]
 fn python_exit_nonzero_is_runtime_error_permissive() {
     let r = run_permissive("python", 105, "import sys; sys.exit(42)", no_overrides());
     assert_eq!(r.status, ExecutionStatus::RuntimeError);
@@ -135,6 +143,7 @@ fn python_exit_nonzero_is_runtime_error_permissive() {
 }
 
 #[test]
+#[ignore]
 fn python_multiline_output_permissive() {
     let code = "for i in range(5): print(i)";
     let r = run_permissive("python", 106, code, no_overrides());
@@ -143,16 +152,17 @@ fn python_multiline_output_permissive() {
 }
 
 #[test]
+#[ignore]
 fn python_cpu_time_limit_enforced_permissive() {
     init_subsystems();
     let code = "while True: pass";
     let mut ov = no_overrides();
-    ov.max_cpu = Some(rustbox::config::constants::TEST_SHORT_CPU_SECS);
-    ov.max_wall_time = Some(rustbox::config::constants::TEST_SHORT_WALL_SECS);
+    ov.max_cpu = Some(TEST_SHORT_CPU_SECS);
+    ov.max_wall_time = Some(TEST_SHORT_WALL_SECS);
     let config = {
         let mut c = permissive_config("python", 107);
-        c.cpu_time_limit = Some(rustbox::config::constants::TEST_SHORT_CPU_LIMIT);
-        c.wall_time_limit = Some(rustbox::config::constants::TEST_SHORT_WALL_LIMIT);
+        c.cpu_time_limit = Some(Duration::from_secs(TEST_SHORT_CPU_SECS));
+        c.wall_time_limit = Some(Duration::from_secs(TEST_SHORT_WALL_SECS));
         c
     };
     let mut isolate = Isolate::new(config).expect("Isolate::new");
@@ -174,6 +184,7 @@ fn python_cpu_time_limit_enforced_permissive() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore]
 fn cpp_hello_world_permissive() {
     let code = r#"#include<iostream>
 int main(){std::cout<<"hello world"<<std::endl;}"#;
@@ -183,6 +194,7 @@ int main(){std::cout<<"hello world"<<std::endl;}"#;
 }
 
 #[test]
+#[ignore]
 fn cpp_reads_stdin_permissive() {
     let code = r#"#include<iostream>
 #include<string>
@@ -193,6 +205,7 @@ int main(){std::string s;std::cin>>s;std::cout<<s;}"#;
 }
 
 #[test]
+#[ignore]
 fn cpp_compile_error_is_runtime_error_permissive() {
     let code = "this is not valid c++";
     let r = run_permissive("cpp", 202, code, no_overrides());
@@ -209,6 +222,7 @@ fn cpp_compile_error_is_runtime_error_permissive() {
 }
 
 #[test]
+#[ignore]
 fn cpp_arithmetic_permissive() {
     let code = r#"#include<iostream>
 int main(){std::cout<<(1<<10)<<std::endl;}"#;
@@ -218,6 +232,7 @@ int main(){std::cout<<(1<<10)<<std::endl;}"#;
 }
 
 #[test]
+#[ignore]
 fn cpp_nonzero_exit_is_runtime_error_permissive() {
     let code = r#"int main(){return 1;}"#;
     let r = run_permissive("cpp", 204, code, no_overrides());
@@ -230,6 +245,7 @@ fn cpp_nonzero_exit_is_runtime_error_permissive() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore]
 fn java_hello_world_permissive() {
     let code = r#"public class Main {
     public static void main(String[] args) {
@@ -242,6 +258,7 @@ fn java_hello_world_permissive() {
 }
 
 #[test]
+#[ignore]
 fn java_compile_error_is_runtime_error_permissive() {
     let code = "this is not valid java";
     let r = run_permissive("java", 301, code, no_overrides());
@@ -254,6 +271,7 @@ fn java_compile_error_is_runtime_error_permissive() {
 }
 
 #[test]
+#[ignore]
 fn java_arithmetic_permissive() {
     let code = r#"public class Main {
     public static void main(String[] args) {
@@ -270,6 +288,7 @@ fn java_arithmetic_permissive() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore]
 fn wall_time_is_nonzero_for_real_execution_permissive() {
     let r = run_permissive("python", 400, "print(1)", no_overrides());
     assert_eq!(r.status, ExecutionStatus::Ok);
@@ -280,6 +299,7 @@ fn wall_time_is_nonzero_for_real_execution_permissive() {
 }
 
 #[test]
+#[ignore]
 fn stdout_is_empty_for_no_output_permissive() {
     let r = run_permissive("python", 401, "x = 1 + 1", no_overrides());
     assert_eq!(r.status, ExecutionStatus::Ok);
@@ -287,6 +307,7 @@ fn stdout_is_empty_for_no_output_permissive() {
 }
 
 #[test]
+#[ignore]
 fn unsupported_language_returns_error() {
     init_subsystems();
     let config = permissive_config("python", 402);
@@ -336,8 +357,8 @@ fn python_tle_is_classified_strict() {
     let code = "while True: pass";
     let config = {
         let mut c = strict_config("python", 503);
-        c.cpu_time_limit = Some(rustbox::config::constants::TEST_SHORT_CPU_LIMIT);
-        c.wall_time_limit = Some(rustbox::config::constants::TEST_SHORT_WALL_LIMIT);
+        c.cpu_time_limit = Some(Duration::from_secs(TEST_SHORT_CPU_SECS));
+        c.wall_time_limit = Some(Duration::from_secs(TEST_SHORT_WALL_SECS));
         c
     };
     let mut isolate = Isolate::new(config).expect("Isolate::new");

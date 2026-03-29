@@ -1,5 +1,14 @@
 # ============================================================================
-# Language build args - set to "false" to exclude from image
+# Rustbox Judge Profile (default)
+#
+# Competitive programming mode. Tight limits, all languages enabled.
+#   Memory: 256 MB | Wall: 7s | CPU: 4s | Processes: 10
+#
+# Build:
+#   docker build -t rustbox .
+#
+# Run:
+#   docker run --privileged --cpus=4 --memory=4g -p 4096:4096 rustbox
 # ============================================================================
 ARG LANG_PYTHON=true
 ARG LANG_C_CPP=true
@@ -26,10 +35,10 @@ ENV PATH=/root/.cargo/bin:$PATH
 
 WORKDIR /build
 COPY . .
-RUN cargo build --release -p rustbox && cargo build --release -p judge-service
+RUN cargo build --release -p rustbox -p judge-service
 
 # ============================================================================
-# Stage 2: Runtime (single layer for all languages)
+# Stage 2: Runtime
 # ============================================================================
 FROM ubuntu:22.04
 
@@ -48,11 +57,8 @@ ARG LANG_TYPESCRIPT
 ARG LANG_GO
 ARG LANG_RUST
 
-# All installs in ONE RUN = one layer = no wasted space from conditional copies
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
-    #
-    # C / C++
     && if [ "$LANG_C_CPP" = "true" ]; then \
          apt-get install -y --no-install-recommends g++ \
          && g++ -std=c++17 -O2 -x c++-header \
@@ -61,8 +67,6 @@ RUN apt-get update \
        elif [ "$LANG_RUST" = "true" ]; then \
          apt-get install -y --no-install-recommends gcc libc6-dev; \
        fi \
-    #
-    # Python
     && if [ "$LANG_PYTHON" = "true" ]; then \
          apt-get install -y --no-install-recommends python3.11 \
          && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
@@ -70,8 +74,6 @@ RUN apt-get update \
          && find /usr/lib/python3.11 -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true \
          && rm -rf /usr/lib/python3.11/test /usr/lib/python3.11/unittest; \
        fi \
-    #
-    # Java (install full JDK, jlink to minimal, delete full JDK)
     && if [ "$LANG_JAVA" = "true" ]; then \
          apt-get install -y --no-install-recommends openjdk-21-jdk-headless \
          && jlink --no-header-files --no-man-pages --compress=zip-6 \
@@ -84,23 +86,17 @@ RUN apt-get update \
          && ln -sf /usr/lib/jvm/java-21-openjdk-amd64/bin/java   /usr/bin/java \
          && ln -sf /usr/lib/jvm/java-21-openjdk-amd64/bin/javac  /usr/bin/javac; \
        fi \
-    #
-    # JavaScript / TypeScript (both use Bun)
     && if [ "$LANG_JAVASCRIPT" = "true" ] || [ "$LANG_TYPESCRIPT" = "true" ]; then \
          apt-get install -y --no-install-recommends unzip \
          && curl -fsSL https://bun.sh/install | bash \
          && apt-get purge -y --auto-remove unzip; \
        fi \
-    #
-    # Go (download official tarball)
     && if [ "$LANG_GO" = "true" ]; then \
          curl -fsSL "https://go.dev/dl/go1.22.10.linux-amd64.tar.gz" \
          | tar -xz -C /usr/local \
          && mkdir -p /usr/local/go-cache \
          && GOCACHE=/usr/local/go-cache CGO_ENABLED=0 /usr/local/go/bin/go build -a std 2>/dev/null || true; \
        fi \
-    #
-    # Rust (install rustup, extract sysroot, delete rustup)
     && if [ "$LANG_RUST" = "true" ]; then \
          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
          | sh -s -- -y --default-toolchain stable --profile minimal \
@@ -112,28 +108,24 @@ RUN apt-get update \
          && ln -sf /usr/local/rust/bin/rustc /usr/local/bin/rustc \
          && rm -rf /root/.cargo /root/.rustup; \
        fi \
-    #
-    # Cleanup
     && rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/locale \
     && rm -rf /var/lib/apt/lists/*
 
-# Sandbox user (fallback for non-pool mode)
+# Sandbox users
 RUN groupadd -r -g 65534 sandbox 2>/dev/null || true \
     && useradd -r -u 65534 -g 65534 -s /sbin/nologin sandbox 2>/dev/null || true
 
-# UID pool range (60000-60999) - one user per concurrent sandbox
-RUN for i in $(seq 60000 60099); do \
+# UID pool (60000-60999)
+RUN for i in $(seq 60000 60999); do \
         groupadd -r -g $i "sandbox-$i" 2>/dev/null || true; \
         useradd -r -u $i -g $i -s /sbin/nologin -d /nonexistent "sandbox-$i" 2>/dev/null || true; \
     done
 
-# Rustbox binaries
-COPY --from=builder /build/target/release/judge         /usr/local/bin/judge
-COPY --from=builder /build/target/release/isolate        /usr/local/bin/isolate
-COPY --from=builder /build/target/release/rustbox        /usr/local/bin/rustbox
+# Binaries
+COPY --from=builder /build/target/release/rustbox       /usr/local/bin/rustbox
 COPY --from=builder /build/target/release/judge-service  /usr/local/bin/judge-service
 
-# Config and state dirs
+# Config: judge profile
 RUN mkdir -p /etc/rustbox /var/run/rustbox /tmp/rustbox
 COPY config.json /etc/rustbox/config.json
 RUN chmod 644 /etc/rustbox/config.json
@@ -141,7 +133,7 @@ RUN chmod 644 /etc/rustbox/config.json
 EXPOSE 4096
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 --start-period=5s \
-  CMD curl -f http://localhost:4096/api/health/ready || exit 1
+    CMD curl -sf http://localhost:4096/api/health/ready || exit 1
 
 WORKDIR /workspace
 ENTRYPOINT ["judge-service"]

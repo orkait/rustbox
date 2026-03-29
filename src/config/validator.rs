@@ -223,20 +223,6 @@ fn validate_credentials(config: &IsolateConfig, result: &mut ValidationResult) {
     }
 }
 
-pub fn check_system_capabilities() -> Result<Vec<String>> {
-    let mut missing = Vec::new();
-    if !Path::new("/sys/fs/cgroup").exists() {
-        missing.push("cgroups not available".into());
-    }
-    #[cfg(target_os = "linux")]
-    if !Path::new("/proc/self/ns").exists() {
-        missing.push("namespaces not available".into());
-    }
-    #[cfg(not(target_os = "linux"))]
-    missing.push("Linux-only features not available on this platform".into());
-    Ok(missing)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,13 +310,5 @@ mod tests {
             ))
         });
         assert!(r.warnings.iter().any(|w| w.contains("600 seconds")));
-    }
-
-    #[test]
-    fn check_system_capabilities_runs() {
-        let missing = check_system_capabilities().unwrap();
-        if Path::new("/sys/fs/cgroup").exists() {
-            assert!(!missing.iter().any(|m| m.contains("cgroups")));
-        }
     }
 }

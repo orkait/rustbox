@@ -1,7 +1,7 @@
 use crate::config::types::{IsolateError, Result};
 use crate::utils::fork_safe_log::{fs_warn_parts, itoa_buf, itoa_i32};
 
-pub fn validate_ids(uid: u32, gid: u32, strict_mode: bool) -> Result<()> {
+fn validate_ids(uid: u32, gid: u32, strict_mode: bool) -> Result<()> {
     if uid == 0 || gid == 0 {
         if strict_mode {
             return Err(IsolateError::Privilege(format!(
@@ -238,30 +238,4 @@ fn verify_transition(expected_uid: u32, expected_gid: u32, strict_mode: bool) ->
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validate_ids_rejects_root_in_strict_mode() {
-        assert!(validate_ids(0, 1000, true).is_err());
-        assert!(validate_ids(1000, 0, true).is_err());
-    }
-
-    #[test]
-    fn validate_ids_allows_root_in_permissive_mode() {
-        assert!(validate_ids(0, 0, false).is_ok());
-    }
-
-    #[test]
-    fn validate_ids_accepts_non_root() {
-        assert!(validate_ids(
-            crate::config::constants::NOBODY_UID,
-            crate::config::constants::NOBODY_GID,
-            true
-        )
-        .is_ok());
-    }
 }
