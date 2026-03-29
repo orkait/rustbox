@@ -15,6 +15,8 @@ Two profiles, one binary. Judge mode for competitive programming, executor mode 
 ![Languages](https://img.shields.io/badge/sandbox-8%20languages-green)
 ![Throughput](https://img.shields.io/badge/throughput-260%2B%20req%2Fs-orange)
 
+[Documentation](https://rustbox.orkait.com) - [API Reference](https://rustbox.orkait.com/api) - [Architecture](https://rustbox.orkait.com/architecture)
+
 </div>
 
 ---
