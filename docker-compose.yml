@@ -1,24 +1,17 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-rustbox}
-      POSTGRES_USER: ${POSTGRES_USER:-rustbox}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-    ports:
-      - "5433:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rustbox"]
-      interval: 2s
-      timeout: 5s
-      retries: 5
-
-  judge-service:
+  judge:
     build:
       context: .
-      dockerfile: docker/service/Dockerfile
+      dockerfile: Dockerfile
+    command: judge-service
+    ports:
+      - "4096:4096"
+    environment:
+      RUSTBOX_DATABASE_URL: "sqlite:rustbox.db"
+      RUSTBOX_WORKERS: "2"
+      RUSTBOX_PORT: "4096"
+    cap_drop:
+      - ALL
     cap_add:
       - SYS_ADMIN
       - SETUID
@@ -26,49 +19,78 @@ services:
       - NET_ADMIN
       - MKNOD
       - DAC_OVERRIDE
-    cap_drop:
-      - ALL
     security_opt:
       - no-new-privileges:true
+      - seccomp=unconfined
+    cgroupns: host
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4096/api/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - judge-data:/data
+      - judge-config:/etc/rustbox
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+
+  judge-postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: judge-service
     ports:
-      - "8080:8080"
+      - "4096:4096"
+    environment:
+      RUSTBOX_DATABASE_URL: "postgresql://rustbox:rustbox@postgres:5432/rustbox"
+      RUSTBOX_WORKERS: "4"
+      RUSTBOX_PORT: "4096"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_ADMIN
+      - SETUID
+      - SETGID
+      - NET_ADMIN
+      - MKNOD
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=unconfined
+    cgroupns: host
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4096/api/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
     depends_on:
       postgres:
         condition: service_healthy
-    environment:
-      RUSTBOX_WORKERS: 2
-      RUSTBOX_DATABASE_URL: postgres://${POSTGRES_USER:-rustbox}:${POSTGRES_PASSWORD:?}@postgres/${POSTGRES_DB:-rustbox}
-      RUSTBOX_NODE_ID: ${HOSTNAME:-node-1}
-      RUSTBOX_PORT: 8080
-      RUST_LOG: info
-    deploy:
-      resources:
-        limits:
-          memory: 2g
-          cpus: '2.0'
-          pids: 256
-    volumes:
-      - ./config.json:/etc/rustbox/config.json:ro
+    profiles:
+      - postgres
 
-  web:
-    build:
-      context: ./web
-    ports:
-      - "3000:3000"
-    depends_on:
-      - judge-service
+  postgres:
+    image: postgres:16-alpine
     environment:
-      VITE_API_URL: http://localhost:8080
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-          cpus: '0.5'
-          pids: 64
+      POSTGRES_USER: rustbox
+      POSTGRES_PASSWORD: rustbox
+      POSTGRES_DB: rustbox
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rustbox"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles:
+      - postgres
 
 volumes:
-  pgdata:
+  judge-data:
+  judge-config:
+  pg-data:
