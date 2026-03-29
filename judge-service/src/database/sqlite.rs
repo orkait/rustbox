@@ -17,20 +17,17 @@ pub struct SqliteDatabase {
 
 impl SqliteDatabase {
     pub fn open(path: &str) -> anyhow::Result<Self> {
-        let manager = SqliteConnectionManager::file(path);
+        let manager = SqliteConnectionManager::file(path)
+            .with_init(|conn| {
+                conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+                conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
+                conn.busy_timeout(crate::constants::DB_BUSY_TIMEOUT)?;
+                Ok(())
+            });
         let pool = Pool::builder()
             .max_size(16)
             .build(manager)
             .with_context(|| format!("Failed to create SQLite pool for {}", path))?;
-
-        // Configure the first connection (pragmas apply per-connection in SQLite,
-        // but WAL journal mode is database-wide and persists).
-        {
-            let conn = pool.get()?;
-            conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-            conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
-            conn.busy_timeout(crate::constants::DB_BUSY_TIMEOUT)?;
-        }
 
         Ok(Self { pool })
     }

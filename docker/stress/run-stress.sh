@@ -80,23 +80,14 @@ run_tier() {
 
     t0=$(date +%s%N)
 
-    # Submit all N jobs (parallel via background curls)
-    local tmpdir=$(mktemp -d)
-    for i in $(seq 1 "$n"); do
-        curl -sf --max-time 10 -X POST "${SUBMIT}" \
-            -H 'Content-Type: application/json' \
-            -d "$PAYLOAD" -o "$tmpdir/$i.json" 2>/dev/null &
-    done
-    wait
-
+    # Submit all N jobs
     for i in $(seq 1 "$n"); do
         local id
-        id=$(python3 -c "import json; print(json.load(open('$tmpdir/$i.json'))['id'])" 2>/dev/null) || true
+        id=$(submit_one) || true
         if [ -n "$id" ]; then
             ids+=("$id")
         fi
     done
-    rm -rf "$tmpdir"
 
     local submitted=${#ids[@]}
     local submit_elapsed=$(( ($(date +%s%N) - t0) / 1000000 ))
