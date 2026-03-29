@@ -38,7 +38,7 @@ services:
     environment:
       <<: *env
 
-  # docker compose up judge-pg postgres
+  # docker compose up judge-pg
   judge-pg:
     <<: *common
     build: { context: ., dockerfile: Dockerfile }
@@ -50,6 +50,7 @@ services:
         condition: service_healthy
 
   postgres:
+    # started automatically by judge-pg via depends_on
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: rustbox
