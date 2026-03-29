@@ -240,14 +240,7 @@ pub fn launch_with_supervisor(
         },
     );
 
-    Ok(SandboxLaunchOutcome {
-        proxy_host_pid: proxy_pid,
-        payload_host_pid: proxy_status.payload_pid,
-        result,
-        evidence,
-        kill_report,
-        proxy_status,
-    })
+    Ok(SandboxLaunchOutcome { result, evidence })
 }
 
 fn try_cgroup_op(

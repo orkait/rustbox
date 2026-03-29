@@ -73,81 +73,15 @@ fn pool_config() -> &'static PoolConfig {
 // flock is per-process so it cannot distinguish threads.
 const MAX_POOL_WORDS: usize = 64;
 
-static POOL: [AtomicU64; MAX_POOL_WORDS] = {
-    // AtomicU64::new(0) is const but clippy flags it as interior-mutable const.
-    // Using a macro avoids the named constant while keeping array init clean.
-    macro_rules! zero {
-        () => {
-            AtomicU64::new(0)
-        };
-    }
-    [
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-        zero!(),
-    ]
-};
+macro_rules! atomic_array {
+    ($val:expr; $n:expr) => {{
+        const INIT: AtomicU64 = AtomicU64::new($val);
+        [INIT; $n]
+    }};
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+static POOL: [AtomicU64; MAX_POOL_WORDS] = atomic_array!(0; MAX_POOL_WORDS);
 
 fn bitmap_try_claim(slot: u32) -> bool {
     let word_idx = (slot / constants::BITS_PER_WORD as u32) as usize;
