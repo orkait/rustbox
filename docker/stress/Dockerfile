@@ -53,8 +53,8 @@ COPY --from=builder /build/target/release/rustbox       /usr/local/bin/rustbox
 
 # Config
 RUN mkdir -p /etc/rustbox /var/run/rustbox /tmp/rustbox
-COPY config-judge.json    /etc/rustbox/config-judge.json
-COPY config-executor.json /etc/rustbox/config-executor.json
+COPY docker/stress/config-judge.json    /etc/rustbox/config-judge.json
+COPY docker/stress/config-executor.json /etc/rustbox/config-executor.json
 RUN chmod 644 /etc/rustbox/*.json
 
 # Stress script
