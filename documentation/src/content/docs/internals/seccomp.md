@@ -47,7 +47,7 @@ Two BPF programs are stacked because seccompiler only supports one match-action 
 ## Custom policies
 
 ```bash
-judge execute-code --seccomp-policy /path/to/policy.json --language python --code '...'
+rustbox execute-code --seccomp-policy /path/to/policy.json --language python --code '...'
 ```
 
 Policy format:

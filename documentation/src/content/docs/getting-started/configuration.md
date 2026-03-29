@@ -5,10 +5,14 @@ description: Tune limits, add languages, customize behavior
 
 rustbox uses a layered configuration system. Defaults come from config files, CLI flags override them, and the judge-service reads environment variables on top.
 
-There are two config files at the repo root:
+Two config files at the repo root control resource limits per language:
 
-- **`config.json`** - Judge profile (tight limits). Used by the judge-service for competitive programming and untrusted code evaluation.
-- **`config-executor.json`** - Executor profile (relaxed limits). Used for trusted workloads that need more resources and fewer restrictions.
+| File | Profile | Memory | Wall time | CPU time | Processes |
+|---|---|---|---|---|---|
+| `config.json` | Judge | 256 MB | 7s | 4s | 10 |
+| `config-executor.json` | Executor | 2 GB | 60s | 30s | 64 |
+
+The judge profile is for competitive programming - tight limits, no network. The executor profile is for LLM agents - relaxed limits, filtered network. Same Docker image, different config file mounted at `/etc/rustbox/config.json`.
 
 ## config.json
 
@@ -73,7 +77,7 @@ Limits are per-language, not global. A Python solution with 256MB is generous. A
 CLI flags take precedence over `config.json`:
 
 ```bash
-judge execute-code --permissive \
+rustbox execute-code --permissive \
   --language python \
   --code 'while True: pass' \
   --cpu 1 \
@@ -104,9 +108,13 @@ The HTTP service reads these at startup. All have sensible defaults.
 | `RUSTBOX_DRAIN_TIMEOUT_SECS` | `35` | Graceful shutdown drain timeout |
 | `RUSTBOX_CORS_ORIGIN` | `http://localhost:3000` | Allowed CORS origin |
 
-:::note[Design Note]
-We deliberately don't support YAML or TOML config files for the judge-service. Environment variables are the standard for containerized deployments, and they're the only thing that works consistently across Docker, Kubernetes, systemd, and bare metal. One fewer config file to manage.
-:::
+## Rate limiting
+
+Set `RUSTBOX_RATE_LIMIT=60` to allow 60 requests per minute per IP. Token bucket with automatic cleanup of stale buckets. Disabled by default (`0`).
+
+Behind a reverse proxy, set `RUSTBOX_TRUST_PROXY_HEADERS=true` to use `X-Forwarded-For` for the client IP instead of the direct connection IP.
+
+Returns `429 Too Many Requests` when the limit is hit.
 
 ## Seccomp configuration
 
@@ -114,10 +122,10 @@ Seccomp filtering is on by default. The built-in deny-list blocks 52 dangerous s
 
 ```bash
 # Disable seccomp (not recommended)
-judge execute-code --no-seccomp --language python --code '...'
+rustbox execute-code --no-seccomp --language python --code '...'
 
 # Use a custom policy file
-judge execute-code --seccomp-policy /path/to/policy.json --language python --code '...'
+rustbox execute-code --seccomp-policy /path/to/policy.json --language python --code '...'
 ```
 
 See [Seccomp internals](/internals/seccomp) for the full deny-list and custom policy format.
