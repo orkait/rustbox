@@ -128,7 +128,7 @@ pub struct LaunchEvidence {
 }
 
 impl LaunchEvidence {
-    pub fn resolve_mode(&self) -> SecurityMode {
+    fn resolve_mode(&self) -> SecurityMode {
         if self.strict_requested && self.missing_controls.is_empty() {
             return SecurityMode::Strict;
         }

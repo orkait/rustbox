@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::config::types::{CapabilityReport, ExecutionResult, ExecutionStatus, IsolateConfig};
 use crate::sandbox::types::LaunchEvidence;
 
-pub fn build_envelope_id(
+fn build_envelope_id(
     config: &IsolateConfig,
     capability_report: &CapabilityReport,
     language_runtime_envelope: Option<&str>,

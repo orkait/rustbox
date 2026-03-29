@@ -278,34 +278,6 @@ impl Isolate {
     pub fn take_last_launch_evidence(&mut self) -> Option<LaunchEvidence> {
         self.last_launch_evidence.take()
     }
-
-    pub fn add_directory_bindings(
-        &mut self,
-        bindings: Vec<crate::config::types::DirectoryBinding>,
-    ) -> Result<()> {
-        for binding in &bindings {
-            if !binding.maybe && !binding.source.exists() {
-                return Err(IsolateError::Config(format!(
-                    "Source directory does not exist: {}",
-                    binding.source.display()
-                )));
-            }
-            if binding.source.exists() && !binding.source.is_dir() {
-                return Err(IsolateError::Config(format!(
-                    "Not a directory: {}",
-                    binding.source.display()
-                )));
-            }
-            if !binding.target.is_absolute() {
-                return Err(IsolateError::Config(format!(
-                    "Target must be absolute: {}",
-                    binding.target.display()
-                )));
-            }
-        }
-        self.config.directory_bindings.extend(bindings);
-        Ok(())
-    }
 }
 
 impl Drop for Isolate {

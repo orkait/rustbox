@@ -98,7 +98,7 @@ impl CgroupV2 {
         candidates
     }
 
-    pub fn with_base_path(base_path: &str, instance_id: &str, strict_mode: bool) -> Result<Self> {
+    fn with_base_path(base_path: &str, instance_id: &str, strict_mode: bool) -> Result<Self> {
         if instance_id.is_empty() || instance_id.len() > constants::MAX_CGROUP_INSTANCE_ID_LEN {
             return Err(IsolateError::Cgroup(
                 "invalid cgroup v2 instance id length".to_string(),

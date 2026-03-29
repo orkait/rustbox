@@ -1,11 +1,8 @@
 use crate::config::constants;
 use crate::config::types::{IsolateError, Result};
-use crate::utils::fork_safe_log::{fs_info_parts, fs_warn_parts, itoa_i32};
+use crate::utils::fork_safe_log::{fs_info_parts, fs_warn_parts};
 use std::collections::HashMap;
 use std::env;
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 
 pub const DANGEROUS_ENV_VARS: &[&str] = &[
     "LD_PRELOAD",
@@ -209,73 +206,6 @@ impl EnvHygiene {
 
         Ok(())
     }
-
-    pub fn set_directory_permissions(&self, path: &Path, is_temp: bool) -> Result<()> {
-        if !path.exists() {
-            if self.perm_policy.strict_mode {
-                return Err(IsolateError::Filesystem(format!(
-                    "Directory does not exist: {}",
-                    path.display()
-                )));
-            } else {
-                fs_warn_parts(&[
-                    "Directory does not exist (permissive mode): ",
-                    path.to_str().unwrap_or("<?>"),
-                ]);
-                return Ok(());
-            }
-        }
-
-        let perms = if is_temp {
-            self.perm_policy.temp_dir_perms
-        } else {
-            self.perm_policy.work_dir_perms
-        };
-
-        let permissions = fs::Permissions::from_mode(perms);
-
-        fs::set_permissions(path, permissions).map_err(|e| {
-            if self.perm_policy.strict_mode {
-                IsolateError::Filesystem(format!(
-                    "Failed to set permissions on {}: {}",
-                    path.display(),
-                    e
-                ))
-            } else {
-                let mut ebuf = [0u8; 20];
-                let eno = itoa_i32(e.raw_os_error().unwrap_or(-1), &mut ebuf);
-                fs_warn_parts(&["Failed to set permissions (permissive mode): errno ", eno]);
-                IsolateError::Filesystem(format!(
-                    "Failed to set permissions on {}: {}",
-                    path.display(),
-                    e
-                ))
-            }
-        })?;
-
-        let mut obuf = [0u8; 12];
-        let ostr = octal_buf(perms, &mut obuf);
-        fs_info_parts(&[
-            "Set permissions ",
-            ostr,
-            " on ",
-            path.to_str().unwrap_or("<?>"),
-        ]);
-
-        Ok(())
-    }
-
-    pub fn get_exec_env(&self) -> Result<Vec<String>> {
-        let env_map = self.sanitize_environment()?;
-
-        let mut env_vec: Vec<String> = env_map
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect();
-
-        env_vec.sort();
-        Ok(env_vec)
-    }
 }
 
 #[cfg(test)]
@@ -338,22 +268,6 @@ mod tests {
 
         assert!(!env_map.contains_key("LD_PRELOAD"));
         assert!(!env_map.contains_key("LD_LIBRARY_PATH"));
-    }
-
-    #[test]
-    fn test_get_exec_env() {
-        let env_policy = EnvPolicy::default();
-        let perm_policy = PermissionPolicy::default();
-        let hygiene = EnvHygiene::new(env_policy, perm_policy);
-
-        let exec_env = hygiene.get_exec_env().expect("Failed to get exec env");
-
-        let mut sorted = exec_env.clone();
-        sorted.sort();
-        assert_eq!(exec_env, sorted);
-
-        assert!(exec_env.iter().any(|s| s.starts_with("PATH=")));
-        assert!(exec_env.iter().any(|s| s.starts_with("HOME=")));
     }
 
     #[test]

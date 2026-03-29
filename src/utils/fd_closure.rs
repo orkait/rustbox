@@ -97,41 +97,9 @@ fn close_fds_via_proc(strict_mode: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn get_open_fds() -> Result<Vec<i32>> {
-    let fd_dir = "/proc/self/fd";
-
-    let entries = fs::read_dir(fd_dir)
-        .map_err(|e| IsolateError::Filesystem(format!("Failed to read {}: {}", fd_dir, e)))?;
-
-    let mut fds = Vec::new();
-
-    for entry in entries.flatten() {
-        if let Ok(file_name) = entry.file_name().into_string() {
-            if let Ok(fd) = file_name.parse::<i32>() {
-                fds.push(fd);
-            }
-        }
-    }
-
-    fds.sort();
-    Ok(fds)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_get_open_fds() {
-        let fds = get_open_fds();
-        assert!(fds.is_ok());
-
-        let fds = fds.unwrap();
-        assert!(fds.len() >= 3);
-        assert!(fds.contains(&0));
-        assert!(fds.contains(&1));
-        assert!(fds.contains(&2));
-    }
 
     #[test]
     fn test_close_inherited_fds_permissive() {

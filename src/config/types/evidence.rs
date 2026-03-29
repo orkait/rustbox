@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
-use super::error::{IsolateError, Result};
-use super::execution::{ExecutionStatus, OutputIntegrity};
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum VerdictActor {
     #[serde(rename = "judge")]
@@ -177,46 +174,4 @@ pub struct LimitSnapshot {
     pub memory_limit_bytes: Option<u64>,
     pub process_limit: Option<u32>,
     pub output_limit_bytes: Option<u64>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct JudgeExecutionResult {
-    pub status: ExecutionStatus,
-    pub exit_code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-    pub output_integrity: OutputIntegrity,
-    pub cpu_time: f64,
-    pub wall_time: f64,
-    pub memory_peak: u64,
-    pub verdict_provenance: Option<VerdictProvenance>,
-    pub capability_report: CapabilityReport,
-    pub execution_envelope_id: String,
-    pub evidence_bundle: EvidenceBundle,
-    pub language_runtime_envelope: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ExecutionEnvelopeInputs {
-    pub kernel_release: String,
-    pub capability_flags: Vec<String>,
-    pub namespaces_applied: Vec<String>,
-    pub cgroup_backend: String,
-    pub effective_limits: LimitSnapshot,
-    pub mount_topology_fingerprint: String,
-    pub uid_gid_identity: String,
-    pub rustbox_version: String,
-    pub language_runtime_envelope_id: Option<String>,
-}
-
-impl ExecutionEnvelopeInputs {
-    pub fn compute_envelope_id(&self) -> Result<String> {
-        use sha2::{Digest, Sha256};
-        let canonical = serde_json::to_string(self).map_err(|e| {
-            IsolateError::Config(format!("Failed to serialize envelope inputs: {}", e))
-        })?;
-        let mut hasher = Sha256::new();
-        hasher.update(canonical.as_bytes());
-        Ok(format!("{:x}", hasher.finalize()))
-    }
 }

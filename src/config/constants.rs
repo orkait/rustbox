@@ -32,7 +32,6 @@ pub const DEFAULT_WALL_TIME_LIMIT: Duration = Duration::from_secs(20);
 // --- Tier 1: Supervisor / process management constants ---
 
 pub const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(10);
-pub const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 // --- Tier 1: Cgroup retry constants ---
 
@@ -47,7 +46,6 @@ pub const DEFAULT_PIPE_BUFFER_SIZE: u64 = MB;
 pub const KB: u64 = 1024;
 pub const MB: u64 = 1024 * KB;
 
-pub const MS_PER_SEC: u64 = 1000;
 pub const MS_PER_SEC_F64: f64 = 1000.0;
 pub const USEC_PER_MS: u64 = 1000;
 pub const USEC_PER_SEC: f64 = 1_000_000.0;
