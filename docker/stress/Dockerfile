@@ -41,9 +41,9 @@ RUN apt-get update \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man
 
-# Load testing tool
-RUN wget -q https://hey-release.s3.us-east-2.amazonaws.com/hey_linux_amd64 -O /usr/local/bin/hey \
-    && chmod +x /usr/local/bin/hey
+# Load testing tool (oha - Rust-native HTTP load generator)
+RUN wget -q https://github.com/hatoo/oha/releases/download/v1.8.0/oha-linux-amd64 -O /usr/local/bin/oha \
+    && chmod +x /usr/local/bin/oha
 
 # UID pool range
 RUN for i in $(seq 60000 60999); do \

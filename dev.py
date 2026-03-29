@@ -6,7 +6,8 @@ Usage:
     python dev.py backend      # Start judge-service (needs sudo)
     python dev.py test         # Run all tests (cargo test + clippy + fmt)
     python dev.py curl         # Quick smoke test via curl
-    python dev.py stress       # Throughput benchmark via hey (50 req, 12 concurrent)
+    python dev.py stress       # Correctness under load (verify every result)
+    python dev.py bench        # Throughput benchmark via oha (req/s + latency)
     python dev.py adversarial  # Adversarial + correctness + recovery tests
     python dev.py status       # Show backend health
 """
@@ -132,7 +133,14 @@ def cmd_curl():
 def cmd_stress():
     log("Building stress test image...")
     run("docker build -t rustbox-stress -f docker/stress/Dockerfile .")
-    log("Running hey load test (50 requests, 12 concurrent, full roundtrip)...")
+    log("Running correctness stress test (serial, verifies every result)...")
+    run("docker run --privileged --cpus=4 --memory=4g --rm rustbox-stress")
+
+
+def cmd_bench():
+    log("Building stress test image...")
+    run("docker build -t rustbox-stress -f docker/stress/Dockerfile .")
+    log("Running oha benchmark (50 requests, 4 concurrent, 4 CPU / 4 GB)...")
     run("""docker run --privileged --cpus=4 --memory=4g --rm --entrypoint bash rustbox-stress -c '
 mkdir -p /sys/fs/cgroup/init
 for pid in $(cat /sys/fs/cgroup/cgroup.procs 2>/dev/null); do echo "$pid" > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true; done
@@ -142,8 +150,8 @@ echo "+memory +pids +cpu" > /sys/fs/cgroup/rustbox/cgroup.subtree_control 2>/dev
 RUSTBOX_PORT=4096 RUSTBOX_WORKERS=4 RUSTBOX_DATABASE_URL="sqlite:///tmp/b.db" RUST_LOG=error judge-service >/dev/null 2>&1 &
 for i in $(seq 1 30); do curl -sf http://127.0.0.1:4096/api/health/ready >/dev/null 2>&1 && break; sleep 0.5; done
 for i in 1 2 3; do curl -sf --max-time 30 -X POST "http://127.0.0.1:4096/api/submit?wait=true" -H "Content-Type: application/json" -d "{\\\"language\\\":\\\"python\\\",\\\"code\\\":\\\"print(1)\\\"}" >/dev/null; done
-echo "=== hey: 50 requests, 4 concurrent (4 CPU / 4 GB) ==="
-hey -n 50 -c 4 -m POST -H "Content-Type: application/json" -d "{\\\"language\\\":\\\"python\\\",\\\"code\\\":\\\"print(1)\\\"}" "http://127.0.0.1:4096/api/submit?wait=true"
+echo "=== oha: 50 requests, 4 concurrent (4 CPU / 4 GB) ==="
+oha -n 50 -c 4 -m POST -H "Content-Type: application/json" -d "{\\\"language\\\":\\\"python\\\",\\\"code\\\":\\\"print(1)\\\"}" --no-tui "http://127.0.0.1:4096/api/submit?wait=true"
 kill %1 2>/dev/null; wait 2>/dev/null
 '""")
 
@@ -174,6 +182,7 @@ COMMANDS = {
     "test": cmd_test,
     "curl": cmd_curl,
     "stress": cmd_stress,
+    "bench": cmd_bench,
     "adversarial": cmd_adversarial,
     "status": cmd_status,
 }
@@ -191,7 +200,7 @@ def main():
         sys.exit(1)
 
     check_tool("cargo")
-    if cmd in ("stress", "adversarial"):
+    if cmd in ("stress", "bench", "adversarial"):
         check_tool("docker")
 
     try:
