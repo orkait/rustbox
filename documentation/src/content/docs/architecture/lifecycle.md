@@ -30,45 +30,20 @@ C++ compilation runs outside the sandbox. `g++` links against system libraries, 
 
 ## Phase 3: Supervision
 
-The Supervisor (`launch_with_supervisor`) is one sync function, 250 lines, 8 sequential phases:
+The Supervisor is one sync function, 250 lines. Here's what happens step by step:
 
-```
-Supervisor (main thread)              Proxy child
-│                                     │
-│  Command::new(rustbox --proxy)      │
-│    .pre_exec(unshare(IPC|UTS|PID|   │
-│     MNT|NET))                       │
-│    .stdin(piped)                    │
-│    .stdout(piped)                   │
-│    .stderr(piped)                   │
-│    .spawn() ──────────────────────► │ born in new namespaces
-│                                     │
-│  cgroup.attach(child_pid)           │ reads request JSON from stdin
-│  cgroup.set_memory_limit()          │ setpgid(0,0) + parent death signal
-│  cgroup.set_process_limit()         │ fork() payload child
-│  cgroup.set_cpu_limit()             │   └── typestate chain (9 stages)
-│                                     │       └── execvp(user code)
-│  stdin.write(request_json)          │
-│  drop(stdin)                        │ waitpid(payload)
-│                                     │ reap descendants
-│  thread A: read stdout (capped)     │ exit(code)
-│  thread B: read stderr (capped)     │
-│                                     │
-│  loop {                             │
-│    child.try_wait()                 │
-│    if exited → break                │
-│    if elapsed >= wall_limit →       │
-│      kill(-pgid, SIGKILL)           │
-│      break                          │
-│    sleep(10ms)                      │
-│  }                                  │
-│                                     │
-│  join readers                       │
-│  collect cgroup evidence            │
-│  build verdict                      │
-```
+1. **Spawn proxy** - `Command::new(rustbox --proxy)` with `pre_exec(unshare)` creates a child in new namespaces
+2. **Attach cgroup** - memory, process, and CPU limits set on the child's PID
+3. **Send request** - write JSON to child's stdin, close the pipe
+4. **Read output** - two threads read stdout and stderr (capped at output limit)
+5. **Wait** - poll `try_wait()` every 10ms until child exits or wall time expires
+6. **Kill if needed** - `SIGKILL` to process group on timeout, no grace period
+7. **Collect evidence** - read cgroup counters (cpu_time, memory_peak, OOM)
+8. **Build verdict** - pure function over the evidence
 
-3 threads per execution: main (wait loop + wall enforcement), reader A (stdout), reader B (stderr). No watchdog, no timer thread, no async.
+Meanwhile inside the proxy child: read the request from stdin, fork a payload child, run the 9-stage typestate chain, execvp the user code, waitpid, exit.
+
+3 threads total per execution. No watchdog, no timer thread, no async.
 
 :::note[Design Note]
 The two-process design exists because `pre_exec` runs between fork and exec - it can only do async-signal-safe operations like `unshare()`. The full typestate chain (mounts, chroot, rlimits, seccomp) needs to run in a clean process after exec. So the proxy is born via fork+exec with namespaces pre-applied, then it does the rest.
