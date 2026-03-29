@@ -132,21 +132,21 @@ def cmd_curl():
 
 def cmd_stress():
     log("Building stress test image...")
-    run("docker build -t rustbox-stress -f docker/stress/Dockerfile .")
+    run("docker build -t rustbox-stress -f tests/Dockerfile .")
     log("Running parallel stress test (verifies every result)...")
-    run("docker run --privileged --cpus=4 --memory=4g --rm --entrypoint /opt/rustbox-tests/runners/run-stress.sh rustbox-stress")
+    run("docker run --privileged --cpus=4 --memory=4g --rm rustbox-stress")
 
 
 def cmd_bench():
     log("Building stress test image...")
-    run("docker build -t rustbox-stress -f docker/stress/Dockerfile .")
+    run("docker build -t rustbox-stress -f tests/Dockerfile .")
     log("Running benchmark (tiers 1-1000, 12 concurrent, verifies all)...")
     run("docker run --privileged --cpus=4 --memory=4g --rm --entrypoint /opt/rustbox-tests/runners/run-bench.sh rustbox-stress")
 
 
 def cmd_adversarial():
     log("Building stress test image...")
-    run("docker build -t rustbox-stress -f docker/stress/Dockerfile .")
+    run("docker build -t rustbox-stress -f tests/Dockerfile .")
     log("Running adversarial + correctness + recovery tests...")
     run("docker run --privileged --cpus=4 --memory=4g --rm --entrypoint /opt/rustbox-tests/runners/run-all.sh rustbox-stress")
 

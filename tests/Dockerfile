@@ -1,7 +1,7 @@
 # Stress-test image: judge-service + Python only, no extras.
 #
 # Build:
-#   docker build -t rustbox-stress -f docker/stress/Dockerfile .
+#   docker build -t rustbox-stress -f tests/Dockerfile .
 #
 # Run (privileged, 4 CPUs, 4 GB):
 #   docker run --privileged --cpus=4 --memory=4g --rm rustbox-stress
@@ -60,8 +60,7 @@ RUN chmod 644 /etc/rustbox/*.json \
 
 # Test infrastructure
 COPY tests/ /opt/rustbox-tests/
-COPY docker/stress/run-stress.sh /usr/local/bin/run-stress.sh
-RUN chmod +x /usr/local/bin/run-stress.sh /opt/rustbox-tests/runners/*.sh
+RUN chmod +x /opt/rustbox-tests/runners/*.sh
 
 WORKDIR /workspace
-ENTRYPOINT ["/usr/local/bin/run-stress.sh"]
+ENTRYPOINT ["/opt/rustbox-tests/runners/run-stress.sh"]
