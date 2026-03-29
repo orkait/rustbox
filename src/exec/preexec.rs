@@ -1,4 +1,3 @@
-use crate::config::constants;
 use crate::config::types::{IsolateError, Result};
 use crate::kernel::capabilities::{self, check_no_new_privs, set_no_new_privs};
 use crate::kernel::credentials::transition_to_unprivileged;

@@ -49,6 +49,8 @@ struct Cli {
     launch_fd: Option<i32>,
     #[arg(long, hide = true)]
     status_fd: Option<i32>,
+    #[arg(long, hide = true)]
+    pool_socket: Option<String>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -177,6 +179,12 @@ pub fn run(mode: CliMode) -> Result<()> {
             })?;
             return crate::sandbox::proxy::run_proxy_role(launch_fd, status_fd).map_err(Into::into);
         }
+        if role == "pool-slot" {
+            let socket_path = cli.pool_socket.ok_or_else(|| {
+                anyhow::anyhow!("--pool-socket is required for --internal-role=pool-slot")
+            })?;
+            return crate::sandbox::pool::run_pool_slot_role(&socket_path).map_err(Into::into);
+        }
         return Err(anyhow::anyhow!("unsupported internal role: {}", role));
     }
 
@@ -258,7 +266,9 @@ pub fn run(mode: CliMode) -> Result<()> {
                 process_limit: processes,
             };
             let execution_outcome: anyhow::Result<crate::config::types::ExecutionStatus> =
-                match isolate.execute_code_string(&language, &code, &overrides) {
+                match tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+                        .block_on(isolate.execute_code_string(&language, &code, &overrides))
+                {
                     Ok(result) => {
                         emit_execution_result(&mut isolate, &result, Some(&language), &overrides)
                     }

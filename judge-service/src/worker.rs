@@ -5,6 +5,8 @@ use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use rustbox::sandbox::pool::ProxyPool;
+
 use crate::database::types::{
     ExecutionOutput, VERDICT_ACCEPTED, VERDICT_INTERNAL_ERROR, VERDICT_MEMORY_LIMIT,
     VERDICT_RUNTIME_ERROR, VERDICT_SIGNALED, VERDICT_TIME_LIMIT,
@@ -18,12 +20,14 @@ pub fn spawn_channel_workers(
     queue: Arc<JobQueue>,
     node_id: String,
     webhook_timeout_secs: u64,
+    pool: Option<Arc<ProxyPool>>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     (0..count)
         .map(|idx| {
             let db = db.clone();
             let queue = queue.clone();
             let node_id = node_id.clone();
+            let pool = pool.clone();
             tokio::spawn(async move {
                 info!(worker = idx, "channel worker started");
                 loop {
@@ -35,7 +39,7 @@ pub fn spawn_channel_workers(
                         }
                     };
                     info!(worker = idx, %job_id, "processing submission");
-                    process_job(db.as_ref(), job_id, &node_id, webhook_timeout_secs).await;
+                    process_job(db.as_ref(), job_id, &node_id, webhook_timeout_secs, pool.as_ref()).await;
                 }
             })
         })
@@ -92,6 +96,7 @@ pub fn spawn_pg_workers(
                                             sub.id,
                                             &node_id,
                                             webhook_timeout_secs,
+                                            None,
                                         )
                                         .await;
                                     }
@@ -132,7 +137,7 @@ async fn drain_pending(
                 let db = db.clone();
                 let node_id = node_id.clone();
                 tokio::spawn(async move {
-                    process_job(db.as_ref(), sub.id, &node_id, webhook_timeout_secs).await;
+                    process_job(db.as_ref(), sub.id, &node_id, webhook_timeout_secs, None).await;
                     drop(permit);
                 });
             }
@@ -149,7 +154,7 @@ async fn drain_pending(
     }
 }
 
-async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_timeout_secs: u64) {
+async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_timeout_secs: u64, pool: Option<&Arc<ProxyPool>>) {
     if let Err(e) = db.mark_running(job_id, node_id, "allocating").await {
         error!(%job_id, error = %e, "failed to mark running, aborting");
         return;
@@ -187,11 +192,10 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_tim
     };
     info!(%job_id, %language, code_hash, code_bytes = code.len(), "executing submission");
 
-    let result =
-        tokio::task::spawn_blocking(move || execute_in_sandbox(&language, &code, &stdin)).await;
+    let result = execute_in_sandbox(&language, &code, &stdin, pool).await;
 
     match result {
-        Ok(Ok(output)) => {
+        Ok(output) => {
             if let Err(e) = db.mark_completed(job_id, &output).await {
                 error!(%job_id, error = %e, "failed to store result, marking error");
                 let _ = db
@@ -201,13 +205,9 @@ async fn process_job(db: &dyn Database, job_id: Uuid, node_id: &str, webhook_tim
                 info!(%job_id, verdict = output.verdict, "submission completed");
             }
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             error!(%job_id, error = %e, "execution failed");
             let _ = db.mark_error(job_id, &sanitize_error(&e)).await;
-        }
-        Err(e) => {
-            error!(%job_id, error = %e, "worker task panicked");
-            let _ = db.mark_error(job_id, "internal execution error").await;
         }
     }
 
@@ -325,7 +325,7 @@ fn sanitize_error(raw: &str) -> String {
     }
 }
 
-fn execute_in_sandbox(language: &str, code: &str, stdin: &str) -> Result<ExecutionOutput, String> {
+async fn execute_in_sandbox(language: &str, code: &str, stdin: &str, pool: Option<&Arc<ProxyPool>>) -> Result<ExecutionOutput, String> {
     use rustbox::config::types::IsolateConfig;
     use rustbox::runtime::isolate::{ExecutionOverrides, Isolate};
 
@@ -352,8 +352,12 @@ fn execute_in_sandbox(language: &str, code: &str, stdin: &str) -> Result<Executi
         ..ExecutionOverrides::default()
     };
 
+    // Set the pool on the isolate so the supervisor uses warm slots.
+    isolate.set_pool(pool.cloned());
+
     let result = isolate
         .execute_code_string(language, code, &overrides)
+        .await
         .map_err(|e| format!("execution error: {e}"))?;
 
     let verdict = match result.status {
