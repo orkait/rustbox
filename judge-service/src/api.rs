@@ -283,6 +283,10 @@ async fn submit(
             .into_response();
     }
 
+    let wall_limit_secs = rustbox::config::types::IsolateConfig::with_language_defaults(&lang)
+        .ok()
+        .and_then(|c| c.wall_time_limit.map(|d| d.as_secs() as i64));
+
     let submission = Submission {
         id,
         user_id: None,
@@ -304,6 +308,7 @@ async fn submit(
         cpu_time: None,
         wall_time: None,
         memory_peak: None,
+        wall_time_limit_secs: wall_limit_secs,
         created_at: Utc::now(),
         started_at: None,
         completed_at: None,

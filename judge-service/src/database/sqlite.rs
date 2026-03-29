@@ -17,13 +17,12 @@ pub struct SqliteDatabase {
 
 impl SqliteDatabase {
     pub fn open(path: &str) -> anyhow::Result<Self> {
-        let manager = SqliteConnectionManager::file(path)
-            .with_init(|conn| {
-                conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-                conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
-                conn.busy_timeout(crate::constants::DB_BUSY_TIMEOUT)?;
-                Ok(())
-            });
+        let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+            conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+            conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
+            conn.busy_timeout(crate::constants::DB_BUSY_TIMEOUT)?;
+            Ok(())
+        });
         let pool = Pool::builder()
             .max_size(16)
             .build(manager)
@@ -57,6 +56,7 @@ impl SqliteDatabase {
                 cpu_time        REAL,
                 wall_time       REAL,
                 memory_peak     INTEGER,
+                wall_time_limit_secs INTEGER,
                 created_at      TEXT NOT NULL,
                 started_at      TEXT,
                 completed_at    TEXT
@@ -76,15 +76,15 @@ fn row_to_submission(row: &Row) -> rusqlite::Result<Submission> {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
     })?;
 
-    let created_at_str: String = row.get(20)?;
+    let created_at_str: String = row.get(21)?;
     let created_at = DateTime::parse_from_rfc3339(&created_at_str)
         .map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(20, rusqlite::types::Type::Text, Box::new(e))
+            rusqlite::Error::FromSqlConversionFailure(21, rusqlite::types::Type::Text, Box::new(e))
         })?
         .with_timezone(&Utc);
 
-    let started_at = parse_optional_datetime(row, 21)?;
-    let completed_at = parse_optional_datetime(row, 22)?;
+    let started_at = parse_optional_datetime(row, 22)?;
+    let completed_at = parse_optional_datetime(row, 23)?;
 
     Ok(Submission {
         id,
@@ -107,6 +107,7 @@ fn row_to_submission(row: &Row) -> rusqlite::Result<Submission> {
         cpu_time: row.get(17)?,
         wall_time: row.get(18)?,
         memory_peak: row.get(19)?,
+        wall_time_limit_secs: row.get(20)?,
         created_at,
         started_at,
         completed_at,
@@ -142,12 +143,12 @@ impl Database for SqliteDatabase {
                 id, user_id, ip_address, language, code, stdin, webhook_url, webhook_secret,
                 status, node_id, sandbox_id, verdict, exit_code, stdout, stderr,
                 signal, error_message, cpu_time, wall_time, memory_peak,
-                created_at, started_at, completed_at
+                wall_time_limit_secs, created_at, started_at, completed_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                 ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                 ?16, ?17, ?18, ?19, ?20,
-                ?21, ?22, ?23
+                ?21, ?22, ?23, ?24
             )
             "#,
             params![
@@ -171,6 +172,7 @@ impl Database for SqliteDatabase {
                 sub.cpu_time,
                 sub.wall_time,
                 sub.memory_peak,
+                sub.wall_time_limit_secs,
                 sub.created_at.to_rfc3339(),
                 sub.started_at.map(|t| t.to_rfc3339()),
                 sub.completed_at.map(|t| t.to_rfc3339()),
@@ -197,7 +199,7 @@ impl Database for SqliteDatabase {
                 id, user_id, ip_address, language, code, stdin, webhook_url, webhook_secret,
                 status, node_id, sandbox_id, verdict, exit_code, stdout, stderr,
                 signal, error_message, cpu_time, wall_time, memory_peak,
-                created_at, started_at, completed_at
+                wall_time_limit_secs, created_at, started_at, completed_at
             "#,
             params![node_id, Utc::now().to_rfc3339()],
             row_to_submission,
@@ -284,7 +286,7 @@ impl Database for SqliteDatabase {
                 id, user_id, ip_address, language, code, stdin, webhook_url, webhook_secret,
                 status, node_id, sandbox_id, verdict, exit_code, stdout, stderr,
                 signal, error_message, cpu_time, wall_time, memory_peak,
-                created_at, started_at, completed_at
+                wall_time_limit_secs, created_at, started_at, completed_at
             FROM submissions
             WHERE id = ?1
             "#,
@@ -299,9 +301,13 @@ impl Database for SqliteDatabase {
         }
     }
 
-    async fn reap_stale(&self, timeout: Duration) -> anyhow::Result<u64> {
+    async fn reap_stale(&self, _timeout: Duration) -> anyhow::Result<u64> {
         let conn = self.pool.get()?;
-        let cutoff = Utc::now() - chrono::Duration::from_std(timeout)?;
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        let fallback_cutoff = (now
+            - chrono::Duration::seconds(crate::constants::DEFAULT_REAPER_FALLBACK_SECS as i64))
+        .to_rfc3339();
         let rows_updated = conn.execute(
             r#"
             UPDATE submissions
@@ -309,9 +315,15 @@ impl Database for SqliteDatabase {
                 error_message = 'reaped: execution timed out',
                 completed_at = ?1
             WHERE status = 'running'
-              AND started_at < ?2
+              AND started_at IS NOT NULL
+              AND (
+                  (wall_time_limit_secs IS NOT NULL
+                   AND started_at < datetime(?1, '-' || (wall_time_limit_secs + 10) || ' seconds'))
+                  OR
+                  (wall_time_limit_secs IS NULL AND started_at < ?2)
+              )
             "#,
-            params![Utc::now().to_rfc3339(), cutoff.to_rfc3339()],
+            params![now_str, fallback_cutoff],
         )?;
         Ok(rows_updated as u64)
     }
