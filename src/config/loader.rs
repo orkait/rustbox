@@ -221,19 +221,15 @@ impl IsolateConfig {
                     config.environment.push((key.clone(), value.clone()));
                 }
 
-                eprintln!("Loaded config.json defaults for {}:", language);
-                eprintln!("  Memory: {} MB", l.memory_mb);
-                eprintln!("  CPU time: {} sec", l.cpu_time_sec);
-                eprintln!("  Wall time: {} sec", l.wall_time_sec);
-                eprintln!("  Max processes: {}", l.max_processes);
-            } else {
-                eprintln!(
-                    "Warning: Language '{}' not found in config.json, using defaults",
-                    language
+                log::debug!(
+                    "config.json: {} mem={}MB cpu={}s wall={}s procs={}",
+                    language, l.memory_mb, l.cpu_time_sec, l.wall_time_sec, l.max_processes
                 );
+            } else {
+                log::warn!("language '{}' not found in config.json, using defaults", language);
             }
         } else {
-            eprintln!("Warning: Could not load config.json, using hardcoded defaults");
+            log::warn!("could not load config.json, using hardcoded defaults");
         }
 
         Ok(config)
