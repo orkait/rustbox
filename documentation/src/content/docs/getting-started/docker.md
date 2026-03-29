@@ -1,40 +1,33 @@
 ---
 title: Docker Deployment
-description: Running rustbox in containers with minimal capabilities
+description: Ship rustbox in production without --privileged
 ---
 
-rustbox is designed to run inside Docker containers without `--privileged`. This page covers the minimal capability set, Docker Compose setup, health probes, and graceful shutdown.
-
-## Quick start
+Three commands. Pick your profile.
 
 ```bash
-# Judge profile - SQLite mode (single node, no external deps)
-docker compose up judge
-
-# Executor profile
-docker compose up executor
-
-# Judge with PostgreSQL (multi-node ready)
-docker compose up judge-pg
+docker compose up judge       # competitive programming (256MB, 7s)
+docker compose up executor    # LLM agents (2GB, 60s)
+docker compose up judge-pg    # judge + Postgres (multi-node)
 ```
 
-## Why not --privileged
+That's it. Capabilities, cgroups, health checks, graceful shutdown - all preconfigured.
 
-`--privileged` gives the container full host capabilities, disables Docker's seccomp profile, and grants access to all host devices. An escape from rustbox's sandbox inside a `--privileged` container gives full host access - defeating the purpose of 8 isolation layers.
+---
 
-The minimal capability set gives rustbox exactly what it needs for strict mode:
+## Build your own image
 
-| Capability | Used for |
-|------------|----------|
-| `SYS_ADMIN` | `clone` with namespace flags, `mount`, `chroot` |
-| `SETUID` / `SETGID` | Credential drop to sandbox UID (60000-60999) |
-| `NET_ADMIN` | Network namespace loopback setup |
-| `MKNOD` | Device nodes (`/dev/null`, `/dev/urandom`) in chroot |
-| `DAC_OVERRIDE` | Cgroup filesystem writes |
+Two Dockerfiles at the repo root:
 
-`seccomp=unconfined` is required because Docker's default seccomp profile blocks `clone` with namespace flags, `mount`, and `pivot_root`. These syscalls are needed during sandbox setup but are blocked by rustbox's own seccomp filter before executing untrusted code.
+```bash
+# Judge profile (default) - tight limits, all languages
+docker build -t rustbox .
 
-## docker run
+# Executor profile - relaxed limits, network tools included
+docker build -t rustbox-executor -f Dockerfile.executor .
+```
+
+Run it:
 
 ```bash
 docker run -p 4096:4096 \
@@ -42,152 +35,92 @@ docker run -p 4096:4096 \
   --cap-add NET_ADMIN --cap-add MKNOD --cap-add DAC_OVERRIDE \
   --security-opt seccomp=unconfined \
   --stop-timeout 45 \
-  rustbox judge-service
+  rustbox
 ```
 
-For single executions:
+One-off execution without the HTTP service:
 
 ```bash
-docker run \
+docker run --rm \
   --cap-add SYS_ADMIN --cap-add SETUID --cap-add SETGID \
   --cap-add NET_ADMIN --cap-add MKNOD --cap-add DAC_OVERRIDE \
   --security-opt seccomp=unconfined \
-  rustbox judge execute-code --strict --language python --code 'print(42)'
+  rustbox rustbox execute-code --language python --code 'print(42)'
 ```
 
-## Docker Compose
+## Why not --privileged
 
-The project includes `docker-compose.yml` at the repo root with three services. Two Dockerfiles are provided: `Dockerfile` (judge profile) and `Dockerfile.executor` (executor profile).
+`--privileged` gives full host access. If someone escapes rustbox's sandbox inside a privileged container, they own the host. That defeats the purpose of 8 isolation layers.
 
-**Judge (SQLite, default)** - single node, zero external dependencies:
+Instead, we use 6 specific capabilities:
+
+| Capability | Why |
+|---|---|
+| `SYS_ADMIN` | `unshare` for namespaces, `mount`, `chroot` |
+| `SETUID` / `SETGID` | Drop to sandbox UID (60000-60999) |
+| `NET_ADMIN` | Network namespace loopback |
+| `MKNOD` | `/dev/null`, `/dev/urandom` in chroot |
+| `DAC_OVERRIDE` | Write to cgroup filesystem |
+
+`seccomp=unconfined` disables Docker's seccomp so our own 52-rule filter handles it. Docker's default blocks `unshare` and `mount` which we need during setup - but rustbox's seccomp blocks them before untrusted code runs.
+
+## Health checks
 
 ```bash
-docker compose up judge
+# Is it alive?
+curl http://localhost:4096/api/health
+
+# Can it enforce isolation?
+curl http://localhost:4096/api/health/ready
 ```
 
-**Executor** - relaxed limits for trusted workloads:
+`/health` always returns 200 if the process runs. `/health/ready` returns 503 if isolation isn't available (missing capabilities or cgroups). Use `/health/ready` for load balancer checks.
 
-```bash
-docker compose up executor
-```
+The response tells you what mode you're in:
 
-**Judge + PostgreSQL** - multi-node ready, LISTEN/NOTIFY job dispatch:
+| `enforcement_mode` | What it means |
+|---|---|
+| `strict` | Full isolation. Production-ready. |
+| `degraded` | Partial. Usually means not running as root. |
+| `none` | Nothing enforced. Missing capabilities. Don't route traffic here. |
+
+## Graceful shutdown
+
+When Docker sends SIGTERM:
+
+1. Stops accepting HTTP connections
+2. Workers finish in-flight sandboxes (up to 35s drain timeout)
+3. Anything still running gets marked as error in the DB
+4. Process exits
+
+Set `--stop-timeout 45` (or `stop_grace_period: 45s` in Compose). Docker's default 10s will SIGKILL running sandboxes. 45s covers the max wall time (30s) plus cleanup.
+
+## Multi-node with Postgres
 
 ```bash
 docker compose up judge-pg
 ```
 
-All capabilities, security options, health checks, and stop grace periods are preconfigured.
+Postgres starts automatically. Multiple `judge-pg` instances can share one Postgres - job dispatch uses `FOR UPDATE SKIP LOCKED` so each node grabs unique jobs without conflicts.
 
-## Health probes
+Set a unique `RUSTBOX_NODE_ID` per instance so the reaper knows which node owns which jobs.
 
-Two endpoints for container orchestration:
+## Environment variables you'll actually change
 
-| Endpoint | Purpose | Failure means |
-|----------|---------|---------------|
-| `GET /api/health` | Liveness | Process crashed, restart the container |
-| `GET /api/health/ready` | Readiness | Cgroups/namespaces unavailable, don't route traffic |
+| Variable | Default | What |
+|---|---|---|
+| `RUSTBOX_API_KEY` | _(none)_ | Set this in production. Blocks unauthenticated requests. |
+| `RUSTBOX_WORKERS` | `4` | Match to CPU count. Each worker holds one sandbox. |
+| `RUSTBOX_DATABASE_URL` | `sqlite:///tmp/rustbox.db` | `postgresql://user:pass@host/db` for multi-node |
+| `RUSTBOX_PORT` | `4096` | Must match your port mapping |
+| `RUST_LOG` | `info` | `error` for production, `debug` for troubleshooting |
 
-### Liveness response (always 200)
+Full list in [Configuration](/getting-started/configuration/).
 
-```json
-{
-  "status": "ok",
-  "enforcement_mode": "strict",
-  "cgroup_backend": "cgroup_v2",
-  "namespace_support": true,
-  "workers": 2,
-  "queue_depth": 0,
-  "node_id": "rustbox-01"
-}
-```
+## When things go wrong
 
-### Readiness response
+**"enforcement_mode: none"** - You forgot the capabilities. Add all 6 `--cap-add` flags and `--security-opt seccomp=unconfined`.
 
-Returns `200` when enforcement is available (`strict` or `degraded`). Returns `503` when enforcement mode is `none` - meaning the container is missing required capabilities or cgroup access.
+**"enforcement_mode: degraded"** - Container isn't running as root. Don't add `USER` to your Dockerfile. rustbox needs root to set up namespaces, then drops to UID 60000+ before running untrusted code.
 
-```json
-{
-  "status": "not_ready",
-  "enforcement_mode": "none",
-  "error": "no cgroup or namespace support available"
-}
-```
-
-### Enforcement modes
-
-| Mode | Meaning | When it happens |
-|------|---------|-----------------|
-| `strict` | Full isolation: cgroups + namespaces + root | Correct capabilities, running as root |
-| `degraded` | Partial isolation: some controls missing | Has cgroups but not root, or has root but no cgroups |
-| `none` | No kernel enforcement available | Missing capabilities, no cgroup access |
-
-### Docker Compose healthcheck
-
-Already configured in `docker-compose.yml`:
-
-```yaml
-healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:4096/api/health/ready"]
-  interval: 10s
-  timeout: 5s
-  retries: 3
-  start_period: 5s
-```
-
-### Kubernetes probes
-
-```yaml
-livenessProbe:
-  httpGet:
-    path: /api/health
-    port: 4096
-  initialDelaySeconds: 5
-  periodSeconds: 10
-readinessProbe:
-  httpGet:
-    path: /api/health/ready
-    port: 4096
-  initialDelaySeconds: 5
-  periodSeconds: 10
-```
-
-## Graceful shutdown
-
-When Docker sends `SIGTERM` (on `docker stop` or rolling update):
-
-1. Server stops accepting new HTTP connections
-2. Job queue closes - workers finish in-flight executions
-3. Workers drain with a 35s timeout (covers max wall time of 30s + buffer)
-4. If drain times out, in-flight submissions are marked as error in the database
-5. Process exits cleanly
-
-Set `stop_grace_period` (Compose) or `--stop-timeout` (docker run) to at least 45s to give workers time to finish. The default Docker timeout of 10s will SIGKILL in-flight sandbox executions.
-
-:::note[Design Note]
-The 45s grace period comes from: max wall time (30s default) + in-flight sandbox cleanup + evidence collection + DB write buffer. If you increase wall time limits, increase the grace period to match.
-:::
-
-## Environment variables
-
-Full list in [Configuration](/getting-started/configuration/). The most relevant for Docker:
-
-| Variable | Default | Docker notes |
-|----------|---------|-------------|
-| `RUSTBOX_PORT` | `4096` | Must match the port mapping |
-| `RUSTBOX_WORKERS` | `2` | Scale to CPU count, each worker holds one sandbox |
-| `RUSTBOX_DATABASE_URL` | `sqlite:rustbox.db` | Use `postgresql://...` for multi-node |
-| `RUSTBOX_STALE_TIMEOUT_SECS` | `300` | Reaper catches submissions orphaned by crashes |
-| `RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS` | `false` | Set `true` if webhook target is another container |
-
-## Troubleshooting
-
-**"Cgroup unavailable inside container"** - You're missing capabilities. Add the 6 `--cap-add` flags listed above and `--security-opt seccomp=unconfined`.
-
-**Health endpoint shows `enforcement_mode: "degraded"`** - Usually means cgroups are accessible but the container isn't running as root. Check your Dockerfile doesn't have a `USER` directive, or add `user: root` to your Compose service.
-
-**Health endpoint shows `enforcement_mode: "none"`** - Neither cgroups nor namespaces are available. Verify all 6 capabilities are granted and seccomp is unconfined.
-
-**Submissions stuck as "running" after restart** - The reaper (runs every 5s) checks each job against its wall time limit + 10s grace. Jobs without a wall time limit fall back to 120s. No manual intervention needed.
-
-**Volume-mounted config.json ignored** - Check the container logs for "Loading world-writable config file" warnings. Docker volume mounts sometimes get 0777 permissions. The config is still loaded (with a warning), but if you don't see the warning, verify the mount path matches where rustbox looks for config (`./config.json` relative to the binary, or `/etc/rustbox/config.json`).
+**Jobs stuck as "running"** - The reaper checks every 5 seconds. Each job is reaped after its wall time limit + 10s grace. A 7-second judge job gets reaped at 17 seconds. A 60-second executor job at 70 seconds. No manual intervention needed.
