@@ -223,10 +223,17 @@ impl IsolateConfig {
 
                 log::debug!(
                     "config.json: {} mem={}MB cpu={}s wall={}s procs={}",
-                    language, l.memory_mb, l.cpu_time_sec, l.wall_time_sec, l.max_processes
+                    language,
+                    l.memory_mb,
+                    l.cpu_time_sec,
+                    l.wall_time_sec,
+                    l.max_processes
                 );
             } else {
-                log::warn!("language '{}' not found in config.json, using defaults", language);
+                log::warn!(
+                    "language '{}' not found in config.json, using defaults",
+                    language
+                );
             }
         } else {
             log::warn!("could not load config.json, using hardcoded defaults");
