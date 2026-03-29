@@ -1,6 +1,6 @@
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use reqwest::Client;
 use serde_json::Value;

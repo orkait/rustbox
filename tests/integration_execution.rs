@@ -9,6 +9,10 @@
 use rustbox::config::types::{ExecutionStatus, IsolateConfig};
 use rustbox::runtime::isolate::{ExecutionOverrides, Isolate};
 use std::sync::Once;
+use std::time::Duration;
+
+const TEST_SHORT_CPU_SECS: u64 = 1;
+const TEST_SHORT_WALL_SECS: u64 = 3;
 
 static INIT: Once = Once::new();
 
@@ -145,12 +149,12 @@ fn python_cpu_time_limit_enforced_permissive() {
     init_subsystems();
     let code = "while True: pass";
     let mut ov = no_overrides();
-    ov.max_cpu = Some(rustbox::config::constants::TEST_SHORT_CPU_SECS);
-    ov.max_wall_time = Some(rustbox::config::constants::TEST_SHORT_WALL_SECS);
+    ov.max_cpu = Some(TEST_SHORT_CPU_SECS);
+    ov.max_wall_time = Some(TEST_SHORT_WALL_SECS);
     let config = {
         let mut c = permissive_config("python", 107);
-        c.cpu_time_limit = Some(rustbox::config::constants::TEST_SHORT_CPU_LIMIT);
-        c.wall_time_limit = Some(rustbox::config::constants::TEST_SHORT_WALL_LIMIT);
+        c.cpu_time_limit = Some(Duration::from_secs(TEST_SHORT_CPU_SECS));
+        c.wall_time_limit = Some(Duration::from_secs(TEST_SHORT_WALL_SECS));
         c
     };
     let mut isolate = Isolate::new(config).expect("Isolate::new");
@@ -334,8 +338,8 @@ fn python_tle_is_classified_strict() {
     let code = "while True: pass";
     let config = {
         let mut c = strict_config("python", 503);
-        c.cpu_time_limit = Some(rustbox::config::constants::TEST_SHORT_CPU_LIMIT);
-        c.wall_time_limit = Some(rustbox::config::constants::TEST_SHORT_WALL_LIMIT);
+        c.cpu_time_limit = Some(Duration::from_secs(TEST_SHORT_CPU_SECS));
+        c.wall_time_limit = Some(Duration::from_secs(TEST_SHORT_WALL_SECS));
         c
     };
     let mut isolate = Isolate::new(config).expect("Isolate::new");

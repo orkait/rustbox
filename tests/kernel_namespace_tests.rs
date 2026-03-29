@@ -10,12 +10,8 @@ mod namespace_tests {
     }
 
     #[test]
-    fn test_namespace_isolation_builder() {
-        let ns = NamespaceIsolation::builder()
-            .with_pid()
-            .with_mount()
-            .with_network()
-            .build();
+    fn test_namespace_isolation_pid_mount_network() {
+        let ns = NamespaceIsolation::new(true, true, true, false, false, false);
 
         let enabled = ns.get_enabled_namespaces();
         assert!(enabled.contains(&"PID"));
@@ -26,7 +22,7 @@ mod namespace_tests {
 
     #[test]
     fn test_namespace_isolation_all_except_user() {
-        let ns = NamespaceIsolation::builder().with_all_except_user().build();
+        let ns = NamespaceIsolation::new(true, true, true, false, true, true);
 
         let enabled = ns.get_enabled_namespaces();
         assert!(enabled.contains(&"PID"));
@@ -39,7 +35,7 @@ mod namespace_tests {
 
     #[test]
     fn test_namespace_isolation_default() {
-        let ns = NamespaceIsolation::new_default();
+        let ns = NamespaceIsolation::new(true, true, true, false, true, true);
 
         let enabled = ns.get_enabled_namespaces();
         assert!(enabled.contains(&"PID"));
@@ -50,7 +46,7 @@ mod namespace_tests {
 
     #[test]
     fn test_namespace_isolation_is_enabled() {
-        let ns_enabled = NamespaceIsolation::builder().with_pid().build();
+        let ns_enabled = NamespaceIsolation::new(true, false, false, false, false, false);
         assert!(ns_enabled.is_isolation_enabled());
 
         let ns_disabled = NamespaceIsolation::new(false, false, false, false, false, false);
@@ -103,14 +99,9 @@ mod namespace_tests {
             return;
         }
 
-        let ns = NamespaceIsolation::builder()
-            .with_pid()
-            .with_mount()
-            .build();
+        let ns = NamespaceIsolation::new(true, true, false, false, false, false);
 
-        // This will fail without root, but we test the API
         let result = ns.apply_isolation();
-        // Either succeeds (if root) or fails with permission error
         if let Err(e) = result {
             assert!(e.to_string().contains("Failed to unshare namespaces"));
         }
@@ -123,9 +114,7 @@ mod namespace_tests {
             return;
         }
 
-        // This will fail without root, but we test the API
         let result = harden_mount_propagation();
-        // Either succeeds (if root) or fails with permission error
         if let Err(e) = result {
             assert!(e
                 .to_string()
@@ -134,24 +123,16 @@ mod namespace_tests {
     }
 
     #[test]
-    fn test_builder_chaining() {
-        let ns = NamespaceIsolation::builder()
-            .with_pid()
-            .with_mount()
-            .with_network()
-            .with_ipc()
-            .with_uts()
-            .build();
+    fn test_all_namespaces_enabled() {
+        let ns = NamespaceIsolation::new(true, true, true, false, true, true);
 
         assert_eq!(ns.get_enabled_namespaces().len(), 5);
     }
 
     #[test]
-    fn test_builder_default() {
-        let builder = NamespaceIsolation::builder();
-        let ns = builder.build();
+    fn test_no_namespaces_enabled() {
+        let ns = NamespaceIsolation::new(false, false, false, false, false, false);
 
-        // Default builder has no namespaces enabled
         assert_eq!(ns.get_enabled_namespaces().len(), 0);
         assert!(!ns.is_isolation_enabled());
     }

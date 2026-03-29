@@ -326,11 +326,8 @@ mod tests {
     #[test]
     fn pool_exhaustion_returns_error() {
         let mut guards = Vec::new();
-        loop {
-            match UidGuard::allocate() {
-                Ok(g) => guards.push(g),
-                Err(_) => break,
-            }
+        while let Ok(g) = UidGuard::allocate() {
+            guards.push(g);
         }
         assert!(UidGuard::allocate().is_err());
     }

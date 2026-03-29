@@ -639,14 +639,14 @@ mod typestate_tests {
                     std::process::exit(0);
                 }
                 Ok(ForkResult::Parent { child }) => match waitpid(child, None) {
-                    Ok(WaitStatus::Exited(_, 0)) => return,
+                    Ok(WaitStatus::Exited(_, 0)) => {}
                     Ok(WaitStatus::Exited(_, code)) => {
                         panic!("typestate happy path child exited with code {}", code)
                     }
                     Ok(status) => panic!("typestate happy path child: {:?}", status),
                     Err(e) => panic!("waitpid failed: {}", e),
                 },
-                Err(_) => return,
+                Err(_) => {}
             }
         } else {
             run_typestate_chain_happy_path();
@@ -788,14 +788,14 @@ mod typestate_tests {
                     std::process::exit(0);
                 }
                 Ok(ForkResult::Parent { child }) => match waitpid(child, None) {
-                    Ok(WaitStatus::Exited(_, 0)) => return,
+                    Ok(WaitStatus::Exited(_, 0)) => {}
                     Ok(WaitStatus::Exited(_, code)) => {
                         panic!("credential drop test child exited with code {}", code)
                     }
                     Ok(status) => panic!("credential drop test child: {:?}", status),
                     Err(e) => panic!("waitpid failed: {}", e),
                 },
-                Err(_) => return,
+                Err(_) => {}
             }
         } else {
             run_credential_drop_test();
