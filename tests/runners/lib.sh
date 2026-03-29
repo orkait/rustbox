@@ -262,6 +262,8 @@ run_manifest() {
         timeout_sec=$(get_test_field "$manifest" "$idx" "timeout_sec")
         expect_json=$(get_test_expect "$manifest" "$idx")
         description=$(get_test_field "$manifest" "$idx" "description")
+        local stdin_file_rel
+        stdin_file_rel=$(get_test_field "$manifest" "$idx" "stdin_file")
         [ -z "$timeout_sec" ] && timeout_sec=10
 
         _TOTAL=$((_TOTAL + 1))
@@ -270,8 +272,12 @@ run_manifest() {
         dim "  $progress $name"; [ -n "$description" ] && dim " - $description"; echo
 
         local code_file="${PAYLOAD_DIR}/${file}"
+        local stdin_data=""
+        if [ -n "$stdin_file_rel" ] && [ -f "${PAYLOAD_DIR}/${stdin_file_rel}" ]; then
+            stdin_data=$(cat "${PAYLOAD_DIR}/${stdin_file_rel}")
+        fi
         local resp
-        resp=$(submit_code "$language" "$code_file" "$timeout_sec")
+        resp=$(submit_code "$language" "$code_file" "$timeout_sec" "$stdin_data")
 
         if assert_result "$resp" "$expect_json" "$name"; then
             _PASS=$((_PASS + 1))
