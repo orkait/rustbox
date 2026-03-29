@@ -46,7 +46,11 @@ pub fn launch_with_supervisor(
 
     let mut child = unsafe {
         Command::new(&exe)
-            .arg("--internal-role=proxy")
+            .arg(format!(
+                "{}={}",
+                constants::INTERNAL_ROLE_ARG,
+                constants::INTERNAL_ROLE_PROXY
+            ))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -68,47 +72,44 @@ pub fn launch_with_supervisor(
     let mut evidence_collection_errors = Vec::new();
 
     if let Some(controller) = cgroup {
-        if let Err(e) = controller.attach_process(&req.instance_id, proxy_pid as u32) {
-            if req.profile.strict_mode {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(e);
-            }
-            evidence_collection_errors.push(format!("cgroup_attach: {e}"));
-        } else {
-            cgroup_enforced = true;
+        match controller.attach_process(&req.instance_id, proxy_pid as u32) {
+            Ok(()) => cgroup_enforced = true,
+            Err(e) => try_cgroup_op(
+                Err(e),
+                req.profile.strict_mode,
+                &mut child,
+                &mut evidence_collection_errors,
+                "cgroup_attach",
+            )?,
         }
 
         if let Some(limit) = req.profile.memory_limit {
-            if let Err(e) = controller.set_memory_limit(&req.instance_id, limit) {
-                if req.profile.strict_mode {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(e);
-                }
-                evidence_collection_errors.push(format!("cgroup_memory: {e}"));
-            }
+            try_cgroup_op(
+                controller.set_memory_limit(&req.instance_id, limit),
+                req.profile.strict_mode,
+                &mut child,
+                &mut evidence_collection_errors,
+                "cgroup_memory",
+            )?;
         }
         if let Some(limit) = req.profile.process_limit {
-            if let Err(e) = controller.set_process_limit(&req.instance_id, limit) {
-                if req.profile.strict_mode {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(e);
-                }
-                evidence_collection_errors.push(format!("cgroup_pids: {e}"));
-            }
+            try_cgroup_op(
+                controller.set_process_limit(&req.instance_id, limit),
+                req.profile.strict_mode,
+                &mut child,
+                &mut evidence_collection_errors,
+                "cgroup_pids",
+            )?;
         }
         if let Some(limit_ms) = req.profile.cpu_time_limit_ms {
             let usec = (limit_ms as u64) * constants::USEC_PER_MS;
-            if let Err(e) = controller.set_cpu_limit(&req.instance_id, usec) {
-                if req.profile.strict_mode {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(e);
-                }
-                evidence_collection_errors.push(format!("cgroup_cpu: {e}"));
-            }
+            try_cgroup_op(
+                controller.set_cpu_limit(&req.instance_id, usec),
+                req.profile.strict_mode,
+                &mut child,
+                &mut evidence_collection_errors,
+                "cgroup_cpu",
+            )?;
         }
     }
 
@@ -195,8 +196,8 @@ pub fn launch_with_supervisor(
         term_signal,
         timed_out,
         wall_time_ms,
-        stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
-        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+        stdout: vec_to_string_lossy(stdout_bytes),
+        stderr: vec_to_string_lossy(stderr_bytes),
         output_integrity,
         internal_error: None,
         reaped_descendants: 0,
@@ -249,6 +250,27 @@ pub fn launch_with_supervisor(
     })
 }
 
+fn try_cgroup_op(
+    result: Result<()>,
+    strict: bool,
+    child: &mut Child,
+    errors: &mut Vec<String>,
+    label: &str,
+) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) if strict => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(e)
+        }
+        Err(e) => {
+            errors.push(format!("{label}: {e}"));
+            Ok(())
+        }
+    }
+}
+
 fn wait_with_wall_timeout(
     child: &mut Child,
     proxy_pid: i32,
@@ -276,7 +298,7 @@ fn read_stream(pipe: Option<impl Read>, limit: usize) -> (Vec<u8>, OutputIntegri
     let Some(mut reader) = pipe else {
         return (Vec::new(), OutputIntegrity::WriteError);
     };
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(constants::DEFAULT_IO_BUFFER_SIZE);
     let mut tmp = [0u8; constants::READ_BUFFER_SIZE];
     let mut integrity = OutputIntegrity::Complete;
 
@@ -305,6 +327,10 @@ fn read_stream(pipe: Option<impl Read>, limit: usize) -> (Vec<u8>, OutputIntegri
         }
     }
     (buf, integrity)
+}
+
+fn vec_to_string_lossy(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 #[cfg(test)]

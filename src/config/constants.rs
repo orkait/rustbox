@@ -6,10 +6,12 @@ pub const NOBODY_UID: u32 = 65534;
 pub const NOBODY_GID: u32 = 65534;
 
 pub const EXIT_EXEC_FAILURE: i32 = 127;
+pub const EXIT_PROXY_SETUP_FAILURE: i32 = 126;
+
+pub const INTERNAL_ROLE_ARG: &str = "--internal-role";
+pub const INTERNAL_ROLE_PROXY: &str = "proxy";
 
 pub const READ_BUFFER_SIZE: usize = 4096;
-
-pub const CLONE_STACK_SIZE: usize = 2 * MB as usize;
 
 pub const MAX_POOL_SIZE: u32 = 4096;
 
@@ -30,7 +32,6 @@ pub const DEFAULT_WALL_TIME_LIMIT: Duration = Duration::from_secs(20);
 // --- Tier 1: Supervisor / process management constants ---
 
 pub const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(10);
-pub const SUPERVISOR_SETUP_BUDGET: Duration = Duration::from_secs(3);
 pub const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 // --- Tier 1: Cgroup retry constants ---
@@ -83,10 +84,6 @@ pub const PERM_UMASK_RESTRICTIVE: u32 = 0o077;
 pub const PERM_DIR_TEMP: u32 = 0o700;
 
 pub const DEFAULT_OUTPUT_COMBINED_LIMIT: usize = 10 * MB as usize;
-pub const DEFAULT_OUTPUT_STDOUT_LIMIT: usize = 8 * MB as usize;
-pub const DEFAULT_OUTPUT_STDERR_LIMIT: usize = 2 * MB as usize;
-pub const DEFAULT_OUTPUT_COLLECTION_TIMEOUT_MS: u64 = 5000;
-
 // --- Tier 1: Validator warning thresholds ---
 
 pub const VALIDATOR_MIN_MEMORY_WARN: u64 = MB;
@@ -175,15 +172,11 @@ mod tests {
         assert_eq!(DEFAULT_IO_BUFFER_SIZE, 8192);
         assert_eq!(DEFAULT_CPU_TIME_LIMIT, Duration::from_secs(10));
         assert_eq!(DEFAULT_WALL_TIME_LIMIT, Duration::from_secs(20));
-        assert_eq!(CLONE_STACK_SIZE, 2 * MB as usize);
         assert_eq!(MAX_POOL_SIZE, 4096);
         assert_eq!(MAX_CGROUP_INSTANCE_ID_LEN, 255);
         assert_eq!(CGROUP_RETRY_COUNT, 20);
         assert_eq!(CGROUP_RETRY_SLEEP, Duration::from_millis(25));
         assert_eq!(DEFAULT_OUTPUT_COMBINED_LIMIT, 10 * MB as usize);
-        assert_eq!(DEFAULT_OUTPUT_STDOUT_LIMIT, 8 * MB as usize);
-        assert_eq!(DEFAULT_OUTPUT_STDERR_LIMIT, 2 * MB as usize);
-        assert_eq!(DEFAULT_OUTPUT_COLLECTION_TIMEOUT_MS, 5000);
         assert_eq!(VALIDATOR_MIN_MEMORY_WARN, MB);
         assert_eq!(VALIDATOR_MAX_MEMORY_WARN, 8 * 1024 * MB);
         assert_eq!(VALIDATOR_MAX_TIME_WARN_SECS, 600);

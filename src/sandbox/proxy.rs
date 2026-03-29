@@ -121,7 +121,7 @@ pub fn run_proxy_role() -> Result<()> {
         Ok(code) => code,
         Err(err) => {
             let _ = writeln!(std::io::stderr(), "proxy setup failed: {err}");
-            126
+            constants::EXIT_PROXY_SETUP_FAILURE
         }
     };
     std::process::exit(outcome);

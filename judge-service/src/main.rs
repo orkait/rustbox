@@ -15,9 +15,10 @@ use judge_service::AppState;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    if let Some(role_arg) = args.iter().find(|a| a.starts_with("--internal-role=")) {
+    let role_prefix = format!("{}=", rustbox::config::constants::INTERNAL_ROLE_ARG);
+    if let Some(role_arg) = args.iter().find(|a| a.starts_with(&role_prefix)) {
         let role = role_arg.split('=').nth(1).unwrap_or("");
-        if role == "proxy" {
+        if role == rustbox::config::constants::INTERNAL_ROLE_PROXY {
             let _ = rustbox::observability::audit::init_security_logger(None);
             return rustbox::sandbox::proxy::run_proxy_role()
                 .map_err(|e| anyhow::anyhow!("proxy role failed: {e}"));

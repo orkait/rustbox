@@ -164,7 +164,7 @@ pub fn run(mode: CliMode) -> Result<()> {
 
     let cli = Cli::parse();
     if let Some(role) = cli.internal_role.as_deref() {
-        if role == "proxy" {
+        if role == crate::config::constants::INTERNAL_ROLE_PROXY {
             return crate::sandbox::proxy::run_proxy_role().map_err(Into::into);
         }
         return Err(anyhow::anyhow!("unsupported internal role: {}", role));
@@ -268,7 +268,7 @@ pub fn run(mode: CliMode) -> Result<()> {
             let json_result = serde_json::json!({
                 "status": "OK",
                 "pool_active": crate::safety::uid_pool::active_count(),
-                "pool_capacity": 1000,
+                "pool_capacity": crate::config::constants::DEFAULT_UID_POOL_SIZE,
             });
             println!("{}", serde_json::to_string_pretty(&json_result)?);
             Ok(())
