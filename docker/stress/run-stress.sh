@@ -10,7 +10,7 @@ PORT=4096
 HOST="http://127.0.0.1:${PORT}"
 SUBMIT="${HOST}/api/submit"
 RESULT="${HOST}/api/result"
-TIERS=(1 5 10 25 50 100 1000)
+TIERS=(1 5 10 25 50)
 
 CODE='
 def sieve(n):

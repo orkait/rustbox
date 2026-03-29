@@ -11,7 +11,7 @@ SUBMIT="${HOST}/api/submit"
 RESULT="${HOST}/api/result"
 
 # Allow override via env: TIERS="1 10 50" docker run ...
-IFS=' ' read -ra TIERS <<< "${TIERS:-1 10 50 100}"
+IFS=' ' read -ra TIERS <<< "${TIERS:-1 10 50}"
 
 POLL_INTERVAL=0.3
 POLL_TIMEOUT=600
