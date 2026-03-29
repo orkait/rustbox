@@ -11,19 +11,7 @@ HOST="http://127.0.0.1:${PORT}"
 SUBMIT="${HOST}/api/submit"
 RESULT="${HOST}/api/result"
 TIERS=(1 5 10 25 50)
-
-CODE='
-def sieve(n):
-    is_prime = bytearray(b"\x01") * (n + 1)
-    is_prime[0] = is_prime[1] = 0
-    for i in range(2, int(n**0.5) + 1):
-        if is_prime[i]:
-            is_prime[i*i::i] = bytearray(len(is_prime[i*i::i]))
-    return sum(is_prime)
-
-print(sieve(500000))
-'
-
+PAYLOAD_FILE="${PAYLOAD_FILE:-/opt/rustbox-tests/payloads/correctness/sieve_500k.py}"
 EXPECTED="41538"
 POLL_INTERVAL=0.05
 POLL_TIMEOUT=300
@@ -37,9 +25,13 @@ log()   { echo "$(date +%H:%M:%S) $*"; }
 
 PAYLOAD=""
 build_payload() {
+    if [ ! -f "$PAYLOAD_FILE" ]; then
+        echo "FATAL: payload file not found: $PAYLOAD_FILE"; exit 1
+    fi
     PAYLOAD=$(python3 -c "
 import json
-print(json.dumps({'language':'python','code':$(printf '%s' "$CODE" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}))
+code = open('$PAYLOAD_FILE').read()
+print(json.dumps({'language':'python','code':code}))
 ")
 }
 

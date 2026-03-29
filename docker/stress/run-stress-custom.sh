@@ -26,23 +26,20 @@ dim()    { printf "\033[2m%s\033[0m" "$*"; }
 bold()   { printf "\033[1m%s\033[0m" "$*"; }
 log()    { echo "$(date +%H:%M:%S) $*"; }
 
+SIEVE_TEMPLATE="/opt/rustbox-tests/payloads/correctness/sieve_500k.py"
+WARMUP_PAYLOAD_FILE="/opt/rustbox-tests/payloads/correctness/sieve_500k.py"
+
 build_random_payload() {
     local n=$((490000 + RANDOM % 20001))
-    echo "$n"  # return N to caller via stdout line 1
+    echo "$n"
     python3 -c "
 import json
-code = '''
-def sieve(n):
-    is_prime = bytearray(b\"\\x01\") * (n + 1)
-    is_prime[0] = is_prime[1] = 0
-    for i in range(2, int(n**0.5) + 1):
-        if is_prime[i]:
-            is_prime[i*i::i] = bytearray(len(is_prime[i*i::i]))
-    return sum(is_prime)
-
-N = ${n}
-print(f\"{N}:{sieve(N)}\")
-'''
+# Read sieve function from canonical payload, replace hardcoded N
+base = open('$SIEVE_TEMPLATE').read()
+# Strip the last line (print(sieve(500000))) and add dynamic N
+lines = base.strip().split('\n')
+func_lines = [l for l in lines if not l.startswith('print(')]
+code = '\n'.join(func_lines) + '\nN = $n\nprint(f\"{N}:{sieve(N)}\")'
 print(json.dumps({'language': 'python', 'code': code}))
 "
 }
@@ -50,17 +47,7 @@ print(json.dumps({'language': 'python', 'code': code}))
 build_warmup_payload() {
     python3 -c "
 import json
-code = '''
-def sieve(n):
-    is_prime = bytearray(b\"\\x01\") * (n + 1)
-    is_prime[0] = is_prime[1] = 0
-    for i in range(2, int(n**0.5) + 1):
-        if is_prime[i]:
-            is_prime[i*i::i] = bytearray(len(is_prime[i*i::i]))
-    return sum(is_prime)
-
-print(sieve(500000))
-'''
+code = open('$WARMUP_PAYLOAD_FILE').read()
 print(json.dumps({'language': 'python', 'code': code}))
 "
 }
