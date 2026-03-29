@@ -1,0 +1,94 @@
+{
+  "name": "Recovery Validation",
+  "description": "Verify service recovers cleanly after adversarial inputs",
+  "tests": [
+    {
+      "name": "baseline_hello",
+      "file": "correctness/hello.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "AC", "stdout_contains": "hello world" },
+      "description": "baseline correctness before attacks"
+    },
+    {
+      "name": "attack_fork_bomb",
+      "file": "adversarial/fork_bomb.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict_any": ["RE", "TLE", "MLE", "SIG"] },
+      "description": "fork bomb attack"
+    },
+    {
+      "name": "recover_after_fork_bomb",
+      "file": "correctness/sieve_500k.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict": "AC", "stdout_contains": "41538" },
+      "description": "correctness must hold after fork bomb"
+    },
+    {
+      "name": "attack_memory_bomb",
+      "file": "adversarial/memory_bomb.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict_any": ["MLE", "TLE"] },
+      "description": "memory bomb attack"
+    },
+    {
+      "name": "recover_after_memory_bomb",
+      "file": "correctness/hello.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "AC", "stdout_contains": "hello world" },
+      "description": "correctness must hold after memory bomb"
+    },
+    {
+      "name": "attack_cpu_spin",
+      "file": "adversarial/cpu_spin.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict": "TLE" },
+      "description": "CPU spin attack"
+    },
+    {
+      "name": "recover_after_cpu_spin",
+      "file": "correctness/sieve_500k.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict": "AC", "stdout_contains": "41538" },
+      "description": "correctness must hold after CPU spin"
+    },
+    {
+      "name": "attack_fd_exhaustion",
+      "file": "adversarial/fd_exhaustion.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "fd exhaustion attack"
+    },
+    {
+      "name": "recover_after_fd_exhaustion",
+      "file": "correctness/hello.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "AC", "stdout_contains": "hello world" },
+      "description": "correctness must hold after fd exhaustion"
+    },
+    {
+      "name": "attack_inode_bomb",
+      "file": "adversarial/inode_bomb.py",
+      "language": "python",
+      "timeout_sec": 10,
+      "expect": { "verdict": "RE" },
+      "description": "inode bomb attack"
+    },
+    {
+      "name": "final_correctness",
+      "file": "correctness/sieve_500k.py",
+      "language": "python",
+      "timeout_sec": 15,
+      "expect": { "verdict": "AC", "stdout_contains": "41538" },
+      "description": "system still correct after all attacks"
+    }
+  ]
+}

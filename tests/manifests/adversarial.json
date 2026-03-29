@@ -47,7 +47,7 @@
       "file": "adversarial/read_etc_passwd.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "chroot must hide /etc/passwd"
     },
     {
@@ -55,7 +55,7 @@
       "file": "adversarial/read_etc_shadow.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "chroot must hide /etc/shadow"
     },
     {
@@ -63,7 +63,7 @@
       "file": "adversarial/write_to_bin.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "filesystem must be read-only"
     },
     {
@@ -71,7 +71,7 @@
       "file": "adversarial/escape_chroot.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "chdir('..') must not escape chroot"
     },
     {
@@ -79,7 +79,7 @@
       "file": "adversarial/read_proc_cpuinfo.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "/proc/cpuinfo must not be visible (subset=pid)"
     },
     {
@@ -87,7 +87,7 @@
       "file": "adversarial/read_proc_meminfo.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "/proc/meminfo must not be visible"
     },
     {
@@ -95,7 +95,7 @@
       "file": "adversarial/read_sys_hardware.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "/sys must be empty tmpfs"
     },
     {
@@ -103,31 +103,31 @@
       "file": "adversarial/clone_newuser.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
-      "description": "seccomp must block CLONE_NEWUSER"
+      "expect": { "verdict": "RE" },
+      "description": "seccomp must block CLONE_NEWUSER (SIGSYS)"
     },
     {
       "name": "mount_attempt",
       "file": "adversarial/mount_attempt.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
-      "description": "seccomp must block mount()"
+      "expect": { "verdict": "RE" },
+      "description": "seccomp must block mount() (SIGSYS)"
     },
     {
       "name": "ptrace_attempt",
       "file": "adversarial/ptrace_attempt.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
-      "description": "seccomp must block ptrace()"
+      "expect": { "verdict": "RE" },
+      "description": "seccomp must block ptrace() (SIGSYS)"
     },
     {
       "name": "fd_exhaustion",
       "file": "adversarial/fd_exhaustion.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "RLIMIT_NOFILE must cap open files"
     },
     {
@@ -135,15 +135,15 @@
       "file": "adversarial/file_size_bomb.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
-      "description": "RLIMIT_FSIZE must cap file writes"
+      "expect": { "verdict_any": ["RE", "SIG"] },
+      "description": "RLIMIT_FSIZE must cap file writes (SIGXFSZ or OSError)"
     },
     {
       "name": "inode_bomb",
       "file": "adversarial/inode_bomb.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "tmpfs inode limit must cap file creation"
     },
     {
@@ -151,7 +151,7 @@
       "file": "adversarial/tcp_connect.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "network namespace must block TCP"
     },
     {
@@ -159,7 +159,7 @@
       "file": "adversarial/dns_lookup.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "network namespace must block DNS"
     },
     {
@@ -167,7 +167,7 @@
       "file": "adversarial/setuid_root.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "setuid(0) must fail after credential drop"
     },
     {
@@ -175,7 +175,7 @@
       "file": "adversarial/setgid_root.py",
       "language": "python",
       "timeout_sec": 10,
-      "expect": { "verdict_not": "AC" },
+      "expect": { "verdict": "RE" },
       "description": "setgid(0) must fail after credential drop"
     }
   ]
