@@ -17,7 +17,7 @@ description: Submit source code for sandboxed execution
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `language` | string | yes | `python`, `py`, `cpp`, `c++`, `cxx`, `java` |
+| `language` | string | yes | `python` `py` `c` `cpp` `c++` `cxx` `cc` `java` `javascript` `js` `typescript` `ts` `go` `rust` `rs` |
 | `code` | string | yes | Source code (max 64KB) |
 | `stdin` | string | no | Input data (max 256KB) |
 | `webhook_url` | string | no | HTTPS URL for result delivery |
@@ -81,4 +81,5 @@ Idempotency keys are essential for judge systems. Network retries shouldn't re-e
 |--------|---------|
 | 400 | Invalid language, code too large, missing webhook_secret |
 | 401 | Bad or missing API key |
+| 429 | Rate limit exceeded |
 | 503 | Queue full - bounded capacity, deliberate backpressure |

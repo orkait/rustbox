@@ -29,6 +29,7 @@ Constant-time comparison is used. Missing or wrong keys return `401`.
 | `GET` | `/api/result/{id}` | Poll execution result |
 | `GET` | `/api/languages` | List supported languages |
 | `GET` | `/api/health` | Service health + queue depth |
+| `GET` | `/api/health/ready` | Readiness probe (returns 503 if no isolation) |
 
 ## Three ways to get results
 

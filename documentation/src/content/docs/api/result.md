@@ -39,11 +39,10 @@ pending → running → completed
 |------|------|--------------|
 | `AC` | Accepted | Clean exit, code 0 |
 | `RE` | Runtime Error | Non-zero exit or crash |
-| `TLE` | Time Limit | CPU or wall time exceeded |
+| `TLE` | Time Limit | Wall time exceeded (or SIGXCPU received) |
 | `MLE` | Memory Limit | OOM killed by cgroup |
 | `SIG` | Signaled | Killed by signal (not attributed to judge) |
 | `IE` | Internal Error | Sandbox infrastructure failed |
-| `SV` | Security Violation | Sandbox escape attempt detected |
 
 :::note[Design Note]
 We separate `SIG` from `RE` because a signal kill isn't always a runtime error - it could be the judge's timeout mechanism, an OOM kill, or the process hitting a seccomp rule. Collapsing these into one verdict loses information. The verdict provenance (available in CLI output) tells you exactly which kernel subsystem caused the termination and what evidence backs the classification.

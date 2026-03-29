@@ -57,10 +57,10 @@ def verify_webhook(body: bytes, headers: dict, secret: str) -> bool:
 - **Secret is mandatory** when URL is provided. We don't deliver unsigned webhooks.
 - **HTTPS required** in production. Set `RUSTBOX_ALLOW_LOCALHOST_WEBHOOKS=true` for local dev.
 - **Non-blocking delivery.** Webhook failures don't affect the submission result.
-- **No retries.** Single attempt with 10s timeout. Poll as fallback.
+- **3 attempts.** Immediate, then 1s delay, then 5s delay. Server errors (5xx) trigger retry; client errors (4xx) do not. Poll as fallback if all attempts fail.
 
 :::note[Design Note]
-We chose Standard Webhooks over custom signing because it's an industry standard with verification libraries in every language. Per-submission secrets (sent by the client) rather than server-side global secrets let each integration use its own secret without server configuration. No retries because exponential backoff adds queue complexity, and the polling fallback already exists.
+We chose Standard Webhooks over custom signing because it's an industry standard with verification libraries in every language. Per-submission secrets (sent by the client) rather than server-side global secrets let each integration use its own secret without server configuration. Simple retry (3 attempts, fixed delays) because exponential backoff adds queue complexity. The polling fallback covers persistent delivery failures.
 :::
 
 ## SSRF protection
