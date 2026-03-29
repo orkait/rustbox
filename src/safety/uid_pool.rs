@@ -74,8 +74,79 @@ fn pool_config() -> &'static PoolConfig {
 const MAX_POOL_WORDS: usize = 64;
 
 static POOL: [AtomicU64; MAX_POOL_WORDS] = {
-    const ZERO: AtomicU64 = AtomicU64::new(0);
-    [ZERO; MAX_POOL_WORDS]
+    // AtomicU64::new(0) is const but clippy flags it as interior-mutable const.
+    // Using a macro avoids the named constant while keeping array init clean.
+    macro_rules! zero {
+        () => {
+            AtomicU64::new(0)
+        };
+    }
+    [
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+        zero!(),
+    ]
 };
 
 fn bitmap_try_claim(slot: u32) -> bool {
@@ -200,8 +271,8 @@ pub fn active_count() -> u32 {
 
     // In-process count from bitmap (fast, always available)
     let mut local_count = 0u32;
-    for word_idx in 0..cfg.words {
-        local_count += POOL[word_idx].load(Ordering::Relaxed).count_ones();
+    for word in POOL.iter().take(cfg.words) {
+        local_count += word.load(Ordering::Relaxed).count_ones();
     }
 
     // Cross-process count from flock probing (includes other processes)

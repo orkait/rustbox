@@ -102,7 +102,7 @@ pub fn launch_with_supervisor(
             )?;
         }
         if let Some(limit_ms) = req.profile.cpu_time_limit_ms {
-            let usec = (limit_ms as u64) * constants::USEC_PER_MS;
+            let usec = limit_ms * constants::USEC_PER_MS;
             try_cgroup_op(
                 controller.set_cpu_limit(&req.instance_id, usec),
                 req.profile.strict_mode,
@@ -146,7 +146,7 @@ pub fn launch_with_supervisor(
     let wall_limit = req
         .profile
         .wall_time_limit_ms
-        .map(|ms| Duration::from_millis(ms as u64))
+        .map(Duration::from_millis)
         .unwrap_or(constants::DEFAULT_SUPERVISOR_WALL_FALLBACK);
 
     let (exit_status, timed_out) = wait_with_wall_timeout(&mut child, proxy_pid, wall_limit);
@@ -376,5 +376,84 @@ mod tests {
         let result = status.to_execution_result();
         assert_eq!(result.status, ExecutionStatus::Signaled);
         assert_eq!(result.signal, Some(11));
+    }
+
+    #[test]
+    fn read_stream_captures_small_output() {
+        let data = b"hello world";
+        let cursor = std::io::Cursor::new(data.to_vec());
+        let (bytes, integrity) = super::read_stream(Some(cursor), 1024);
+        assert_eq!(bytes, b"hello world");
+        assert_eq!(integrity, OutputIntegrity::Complete);
+    }
+
+    #[test]
+    fn read_stream_truncates_at_limit() {
+        let data = b"abcdefghij";
+        let cursor = std::io::Cursor::new(data.to_vec());
+        let (bytes, integrity) = super::read_stream(Some(cursor), 5);
+        assert_eq!(bytes.len(), 5);
+        assert_eq!(integrity, OutputIntegrity::TruncatedByJudgeLimit);
+    }
+
+    #[test]
+    fn read_stream_none_pipe_returns_error() {
+        let (bytes, integrity) = super::read_stream(None::<std::io::Cursor<Vec<u8>>>, 1024);
+        assert!(bytes.is_empty());
+        assert_eq!(integrity, OutputIntegrity::WriteError);
+    }
+
+    #[test]
+    fn read_stream_empty_input() {
+        let cursor = std::io::Cursor::new(Vec::<u8>::new());
+        let (bytes, integrity) = super::read_stream(Some(cursor), 1024);
+        assert!(bytes.is_empty());
+        assert_eq!(integrity, OutputIntegrity::Complete);
+    }
+
+    #[test]
+    fn read_stream_exact_limit() {
+        let data = vec![0x41u8; 100];
+        let cursor = std::io::Cursor::new(data.clone());
+        let (bytes, integrity) = super::read_stream(Some(cursor), 100);
+        assert_eq!(bytes.len(), 100);
+        assert_eq!(integrity, OutputIntegrity::Complete);
+    }
+
+    #[test]
+    fn vec_to_string_lossy_valid_utf8() {
+        let s = super::vec_to_string_lossy(b"hello".to_vec());
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn vec_to_string_lossy_invalid_utf8() {
+        let s = super::vec_to_string_lossy(vec![0xFF, 0xFE, 0x41]);
+        assert!(s.contains('\u{FFFD}'));
+        assert!(s.contains('A'));
+    }
+
+    #[test]
+    fn try_cgroup_op_ok_is_noop() {
+        use std::process::Command;
+        let mut child = Command::new("/bin/true").spawn().unwrap();
+        let _ = child.wait();
+        let mut errors = Vec::new();
+        let result = super::try_cgroup_op(Ok(()), true, &mut child, &mut errors, "test");
+        assert!(result.is_ok());
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn try_cgroup_op_err_permissive_pushes_warning() {
+        use std::process::Command;
+        let mut child = Command::new("/bin/true").spawn().unwrap();
+        let _ = child.wait();
+        let mut errors = Vec::new();
+        let err = crate::config::types::IsolateError::Cgroup("test fail".into());
+        let result = super::try_cgroup_op(Err(err), false, &mut child, &mut errors, "cg_test");
+        assert!(result.is_ok());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("cg_test"));
     }
 }

@@ -406,7 +406,8 @@ impl Sandbox<RootTransitioned> {
     ) -> Result<Sandbox<HygieneApplied>> {
         #[cfg(unix)]
         {
-            let rlimits: &[(&str, libc::__rlimit_resource_t, Option<(u64, u64)>)] = &[
+            type RlimitEntry<'a> = (&'a str, libc::__rlimit_resource_t, Option<(u64, u64)>);
+            let rlimits: &[RlimitEntry<'_>] = &[
                 (
                     "RLIMIT_AS",
                     libc::RLIMIT_AS,
