@@ -101,18 +101,6 @@ pub const DEFAULT_UID_POOL_SIZE: u32 = 1000;
 pub const DEFAULT_SIGTERM_GRACE: Duration = Duration::from_millis(200);
 pub const DEFAULT_SUPERVISOR_WALL_FALLBACK: Duration = DEFAULT_WALL_TIME_LIMIT;
 
-pub const BENCH_COLD_P50_MS: u64 = 100;
-pub const BENCH_COLD_P95_MS: u64 = 200;
-pub const BENCH_WARM_P50_MS: u64 = 150;
-pub const BENCH_WARM_P95_MS: u64 = 300;
-pub const BENCH_FULL_P50_MS: u64 = 250;
-pub const BENCH_FULL_P95_MS: u64 = 500;
-
-pub const TEST_SHORT_CPU_LIMIT: Duration = Duration::from_secs(1);
-pub const TEST_SHORT_WALL_LIMIT: Duration = Duration::from_secs(3);
-pub const TEST_SHORT_CPU_SECS: u64 = 1;
-pub const TEST_SHORT_WALL_SECS: u64 = 3;
-
 // Syscall numbers not yet in the libc crate (kernel 5.10+)
 pub const SYS_PROCESS_MADVISE: i64 = 440;
 pub const SYS_PROCESS_MRELEASE: i64 = 448;

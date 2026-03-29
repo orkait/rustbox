@@ -162,7 +162,7 @@ pub fn is_pool_uid(uid: u32) -> bool {
     (cfg.base_uid..cfg.base_uid + cfg.pool_size).contains(&uid)
 }
 
-pub fn allocate() -> Result<(u32, OwnedFd)> {
+fn allocate() -> Result<(u32, OwnedFd)> {
     let cfg = pool_config();
     ensure_pool_dir(cfg)?;
 
@@ -192,11 +192,6 @@ pub fn allocate() -> Result<(u32, OwnedFd)> {
         "UID pool exhausted: all {} sandbox slots are in use",
         cfg.pool_size
     )))
-}
-
-pub fn release(_uid: u32) {
-    // Closing the OwnedFd releases the flock automatically.
-    // Bitmap is cleared by UidGuard::drop.
 }
 
 #[must_use]
@@ -333,11 +328,5 @@ mod tests {
             }
         }
         assert!(UidGuard::allocate().is_err());
-    }
-
-    #[test]
-    fn release_ignores_non_pool_uids() {
-        release(0);
-        release(constants::NOBODY_UID);
     }
 }

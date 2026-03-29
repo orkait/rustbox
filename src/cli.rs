@@ -45,10 +45,6 @@ impl CliMode {
 struct Cli {
     #[arg(long, hide = true)]
     internal_role: Option<String>,
-    #[arg(long, hide = true)]
-    launch_fd: Option<i32>,
-    #[arg(long, hide = true)]
-    status_fd: Option<i32>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -169,13 +165,7 @@ pub fn run(mode: CliMode) -> Result<()> {
     let cli = Cli::parse();
     if let Some(role) = cli.internal_role.as_deref() {
         if role == "proxy" {
-            let launch_fd = cli.launch_fd.ok_or_else(|| {
-                anyhow::anyhow!("--launch-fd is required for --internal-role=proxy")
-            })?;
-            let status_fd = cli.status_fd.ok_or_else(|| {
-                anyhow::anyhow!("--status-fd is required for --internal-role=proxy")
-            })?;
-            return crate::sandbox::proxy::run_proxy_role(launch_fd, status_fd).map_err(Into::into);
+            return crate::sandbox::proxy::run_proxy_role().map_err(Into::into);
         }
         return Err(anyhow::anyhow!("unsupported internal role: {}", role));
     }

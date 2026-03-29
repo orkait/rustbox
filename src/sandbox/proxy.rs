@@ -115,7 +115,7 @@ fn run_proxy(req: &SandboxLaunchRequest) -> Result<i32> {
     }
 }
 
-pub fn run_proxy_role(_launch_fd: i32, _status_fd: i32) -> Result<()> {
+pub fn run_proxy_role() -> Result<()> {
     let outcome = match read_json_from_fd::<SandboxLaunchRequest>(0).and_then(|req| run_proxy(&req))
     {
         Ok(code) => code,

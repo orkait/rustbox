@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
         let role = role_arg.split('=').nth(1).unwrap_or("");
         if role == "proxy" {
             let _ = rustbox::observability::audit::init_security_logger(None);
-            return rustbox::sandbox::proxy::run_proxy_role(0, 1)
+            return rustbox::sandbox::proxy::run_proxy_role()
                 .map_err(|e| anyhow::anyhow!("proxy role failed: {e}"));
         }
     }
