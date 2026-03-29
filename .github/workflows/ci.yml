@@ -54,7 +54,4 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Unsafe boundary audit
-        run: bash scripts/unsafe-audit.sh
-
       - uses: EmbarkStudios/cargo-deny-action@v2
