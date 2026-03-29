@@ -305,6 +305,7 @@ impl Database for SqliteDatabase {
         let conn = self.pool.get()?;
         let now = Utc::now();
         let now_str = now.to_rfc3339();
+        let grace = crate::constants::REAPER_GRACE_SECS;
         let fallback_cutoff = (now
             - chrono::Duration::seconds(crate::constants::DEFAULT_REAPER_FALLBACK_SECS as i64))
         .to_rfc3339();
@@ -318,12 +319,12 @@ impl Database for SqliteDatabase {
               AND started_at IS NOT NULL
               AND (
                   (wall_time_limit_secs IS NOT NULL
-                   AND started_at < datetime(?1, '-' || (wall_time_limit_secs + 10) || ' seconds'))
+                   AND started_at < datetime(?1, '-' || (wall_time_limit_secs + ?3) || ' seconds'))
                   OR
                   (wall_time_limit_secs IS NULL AND started_at < ?2)
               )
             "#,
-            params![now_str, fallback_cutoff],
+            params![now_str, fallback_cutoff, grace],
         )?;
         Ok(rows_updated as u64)
     }

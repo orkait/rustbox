@@ -336,6 +336,7 @@ impl Database for PgDatabase {
 
     async fn reap_stale(&self, _timeout: Duration) -> anyhow::Result<u64> {
         let fallback = crate::constants::DEFAULT_REAPER_FALLBACK_SECS as f64;
+        let grace = crate::constants::REAPER_GRACE_SECS;
         let result = sqlx::query(
             r#"
             UPDATE submissions
@@ -347,7 +348,7 @@ impl Database for PgDatabase {
                AND started_at IS NOT NULL
                AND (
                    (wall_time_limit_secs IS NOT NULL
-                    AND started_at < NOW() - ((wall_time_limit_secs + 10) || ' seconds')::INTERVAL)
+                    AND started_at < NOW() - ((wall_time_limit_secs + $2) || ' seconds')::INTERVAL)
                    OR
                    (wall_time_limit_secs IS NULL
                     AND started_at < NOW() - ($1 || ' seconds')::INTERVAL)
@@ -355,6 +356,7 @@ impl Database for PgDatabase {
             "#,
         )
         .bind(fallback)
+        .bind(grace)
         .execute(&self.pool)
         .await?;
 

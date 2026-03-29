@@ -7,6 +7,7 @@ pub const DEFAULT_WORKERS: usize = 2;
 pub const DEFAULT_QUEUE_SIZE: usize = 100;
 pub const DEFAULT_REAPER_INTERVAL_SECS: u64 = 5;
 pub const DEFAULT_REAPER_FALLBACK_SECS: u64 = 120;
+pub const REAPER_GRACE_SECS: i64 = 10;
 pub const DEFAULT_STALE_TIMEOUT_SECS: u64 = 300;
 pub const DEFAULT_MAX_CODE_BYTES: usize = 64 * KB as usize;
 pub const DEFAULT_MAX_STDIN_BYTES: usize = 256 * KB as usize;
